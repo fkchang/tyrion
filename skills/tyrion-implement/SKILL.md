@@ -10,20 +10,31 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 ## Invocation
 
 ```
-/tyrion-implement [slug] [--tdd=strict|loose|off] [--review] [--no-prepush]
+/tyrion-implement [slug] [--spike | --tdd=strict|loose|off] [--review] [--no-prepush]
 ```
 
-- `slug` — specific story to claim; omit to resume in-progress or claim next pending
-- `--tdd=strict` — subagent MUST write failing test first (red → green) before implementing
-- `--tdd=loose` — subagent SHOULD write a test (encouraged, not blocking) **[DEFAULT]**
-- `--tdd=off` — no test requirement (spike/prototype mode)
-- `--review` — pause at each step boundary for user ok/steer/redo before continuing
-- `--no-prepush` — skip the /pre-push quality gate (Step 8); use only for throwaway spikes
+### Modes
 
-**TDD mode resolution** (first match wins):
-1. `--tdd=` flag on this invocation
-2. `TYRION_TDD` env var (`strict|loose|off`)
-3. Default: `loose`
+| Mode | Flag | TDD | Pre-push | When to use |
+|---|---|---|---|---|
+| **Spike** | `--spike` | off | skipped | Exploring — no test infra expected, discovery-first |
+| **Build** | *(default)* | loose | required | Building to keep — tests encouraged, quality gate active |
+| **Strict** | `--tdd=strict` | strict | required | Production-grade — failing test must come first |
+
+`--spike` is shorthand for `--tdd=off --no-prepush`. Use it when you're in SDRD discovery mode and haven't decided whether to keep the work yet.
+
+**To promote a spike to a keeper:** re-run `/tyrion-implement <slug>` (no `--spike`) after the story is done. It will apply the quality gate retroactively.
+
+**Fine-grained overrides** (when the named modes aren't quite right):
+- `--tdd=loose` — tests encouraged but not blocking (Build default)
+- `--no-prepush` — skip pre-push only (keep TDD)
+- `--review` — pause at each step boundary for user steering
+
+**Mode resolution** (first match wins):
+1. `--spike` flag → TDD off + no pre-push
+2. `--tdd=` flag on this invocation
+3. `TYRION_TDD` env var (`strict|loose|off`)
+4. Default: Build mode (TDD loose + pre-push required)
 
 ---
 
@@ -39,6 +50,14 @@ tyrion epic show     # read the epic intent + context_md if present
 ```
 
 Read all output carefully before proceeding. The ABOUT.md and epic context define the frame — implementation decisions should stay consistent with them.
+
+**Announce the active mode now** — one line, prominently, before anything else:
+
+- Spike mode: `🔬 SPIKE MODE — TDD off, pre-push skipped. Discovery-first. Run /tyrion-implement <slug> (no --spike) when ready to apply quality gates.`
+- Build mode: `🏗 BUILD MODE — TDD loose, pre-push required. Tests encouraged. Quality gate active before close.`
+- Strict mode: `✅ STRICT MODE — TDD strict, pre-push required. Failing test must come first per criterion.`
+
+This keeps both the user and the agent aligned on what gates are active for this run.
 
 If `--review` mode: pause here and report what you found. Wait for user ok before Step 2.
 
@@ -93,8 +112,6 @@ Do not proceed to implementation until context and reality are aligned.
 ```bash
 tyrion show <slug>   # read full story: intent, criteria, notes
 ```
-
-**Report the active TDD mode now**, e.g.: `TDD mode: loose (default) — tests encouraged, not required.`
 
 **If the story has no criteria yet** (TODO markers left by `/tyrion-shape`):
 
@@ -247,15 +264,21 @@ If `--review` mode: present the runbook. User can run it now to verify, or skip 
 
 ### 8. REVIEW (quality gate)
 
-Run `/pre-push`. It covers tests + quality (DHH) + docs + ai-slop via its template-method config.
+**Spike mode (`--spike`):** Skip pre-push. Instead, print:
+
+```
+🔬 SPIKE — quality gate skipped. To promote this story to production-grade:
+  /tyrion-implement <slug> --tdd=loose   (apply pre-push + encourage tests)
+  /tyrion-implement <slug> --tdd=strict  (apply pre-push + require failing test first)
+```
+
+**Build or Strict mode:** Run `/pre-push`. It covers tests + quality (DHH) + docs + ai-slop.
 
 ```
 /pre-push
 ```
 
-If `/pre-push` finds blocking issues: fix them, re-run, do not close until it passes.
-
-Skip this step only if `--no-prepush` was set at invocation (genuine throwaway spikes only).
+If `/pre-push` finds blocking issues: fix them, re-run, do not close until it passes. Do not rationalize past a required step failure — use `--spike` if this is genuinely a throwaway with no test infra, or fix the underlying issue.
 
 If `--review` mode: share the /pre-push output. Wait for user ok before Step 9.
 
