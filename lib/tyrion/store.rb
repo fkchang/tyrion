@@ -1,0 +1,476 @@
+# frozen_string_literal: true
+
+require 'sqlite3'
+require 'securerandom'
+require 'fileutils'
+require 'time'
+require 'digest'
+
+module Tyrion
+  # Store — SQLite-backed resumability ledger.
+  # Mirrors conventions from lib/cultiv_cabinet/utf/sqlite_store.rb:
+  #   frozen heredoc DDL, with_db block, WAL+FK, UUID ids, iso8601(6) timestamps.
+  class Store
+    DB_PATH = File.expand_path('~/cultiv-os/cabinet/tyrion/tyrion.db')
+
+    ALLOWED_FILTER_COLS = %w[project_id epic_id status slug].freeze
+
+    DDL = <<~SQL.freeze
+      CREATE TABLE IF NOT EXISTS projects (
+        id                     TEXT PRIMARY KEY,
+        slug                   TEXT UNIQUE NOT NULL,
+        name                   TEXT NOT NULL,
+        about_md               TEXT,
+        primary_repo_identity  TEXT,
+        status                 TEXT NOT NULL DEFAULT 'active'
+                                 CHECK(status IN ('active','paused','done','abandoned')),
+        created_at             TEXT NOT NULL,
+        updated_at             TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_projects_repo ON projects(primary_repo_identity);
+
+      CREATE TABLE IF NOT EXISTS epics (
+        id                   TEXT PRIMARY KEY,
+        project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        slug                 TEXT NOT NULL,
+        name                 TEXT NOT NULL,
+        intent               TEXT,
+        context_md           TEXT,
+        status               TEXT NOT NULL DEFAULT 'active'
+                               CHECK(status IN ('active','paused','done','abandoned')),
+        feature_source_path  TEXT,
+        feature_source_hash  TEXT,
+        context_source_hash  TEXT,
+        created_at           TEXT NOT NULL,
+        updated_at           TEXT NOT NULL,
+        UNIQUE(project_id, slug)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_epics_project_status ON epics(project_id, status);
+
+      CREATE TABLE IF NOT EXISTS stories (
+        id               TEXT PRIMARY KEY,
+        epic_id          TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+        sequence         INTEGER NOT NULL,
+        slug             TEXT NOT NULL,
+        title            TEXT NOT NULL,
+        intent           TEXT,
+        current_context  TEXT,
+        next_action      TEXT,
+        status           TEXT NOT NULL DEFAULT 'pending'
+                           CHECK(status IN ('pending','in_progress','blocked','done','abandoned')),
+        started_at       TEXT,
+        completed_at     TEXT,
+        last_note_at     TEXT,
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL,
+        UNIQUE(epic_id, slug),
+        UNIQUE(epic_id, sequence)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_stories_epic_status ON stories(epic_id, status);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_one_in_progress_story_per_epic
+        ON stories(epic_id)
+        WHERE status = 'in_progress';
+
+      CREATE TABLE IF NOT EXISTS criteria (
+        id            TEXT PRIMARY KEY,
+        story_id      TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        position      INTEGER NOT NULL,
+        keyword       TEXT NOT NULL
+                        CHECK(keyword IN ('Given','When','Then','And','But','*')),
+        semantic_kind TEXT NOT NULL
+                        CHECK(semantic_kind IN ('given','when','then')),
+        text          TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending','met','not_applicable')),
+        evidence      TEXT,
+        checked_at    TEXT,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        UNIQUE(story_id, position)
+      );
+
+      CREATE TABLE IF NOT EXISTS story_notes (
+        id          TEXT PRIMARY KEY,
+        story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL
+                      CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery')),
+        body        TEXT NOT NULL,
+        metadata    TEXT,
+        created_at  TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
+    SQL
+
+    def initialize(db_path: DB_PATH)
+      @db_path = db_path
+      FileUtils.mkdir_p(File.dirname(@db_path))
+      setup_db
+    end
+
+    # ── Projects ───────────────────────────────────────────────────────────
+
+    def create_project(slug:, name:, about_md: nil, repo_identity: nil)
+      t = now
+      id = uuid
+      with_db do |db|
+        db.execute(
+          'INSERT INTO projects (id, slug, name, about_md, primary_repo_identity, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, slug, name, about_md, repo_identity, 'active', t, t]
+        )
+        db.get_first_row('SELECT * FROM projects WHERE id = ?', [id])
+      end
+    end
+
+    def update_project(id, attrs)
+      set_clauses = attrs.keys.map { |k| "#{k} = ?" }
+      set_clauses << 'updated_at = ?'
+      binds = attrs.values + [now, id]
+      with_db do |db|
+        db.execute("UPDATE projects SET #{set_clauses.join(', ')} WHERE id = ?", binds)
+        db.get_first_row('SELECT * FROM projects WHERE id = ?', [id])
+      end
+    end
+
+    def find_project_by_slug(slug)
+      with_db { |db| db.get_first_row('SELECT * FROM projects WHERE slug = ?', [slug]) }
+    end
+
+    def find_project_by_repo(repo_identity)
+      with_db { |db| db.get_first_row('SELECT * FROM projects WHERE primary_repo_identity = ?', [repo_identity]) }
+    end
+
+    def list_projects
+      with_db { |db| db.execute('SELECT * FROM projects ORDER BY updated_at DESC') }
+    end
+
+    # ── Epics ──────────────────────────────────────────────────────────────
+
+    def create_epic(project_id:, slug:, name:, intent: nil, context_md: nil,
+                    feature_source_path: nil, feature_source_hash: nil, context_source_hash: nil)
+      t = now
+      id = uuid
+      with_db do |db|
+        db.execute(
+          'INSERT INTO epics (id, project_id, slug, name, intent, context_md, status, feature_source_path, feature_source_hash, context_source_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, project_id, slug, name, intent, context_md, 'active', feature_source_path, feature_source_hash, context_source_hash, t, t]
+        )
+        db.get_first_row('SELECT * FROM epics WHERE id = ?', [id])
+      end
+    end
+
+    def update_epic(id, attrs)
+      set_clauses = attrs.keys.map { |k| "#{k} = ?" }
+      set_clauses << 'updated_at = ?'
+      binds = attrs.values + [now, id]
+      with_db do |db|
+        db.execute("UPDATE epics SET #{set_clauses.join(', ')} WHERE id = ?", binds)
+        db.get_first_row('SELECT * FROM epics WHERE id = ?', [id])
+      end
+    end
+
+    def find_epic(project_id, epic_slug)
+      with_db { |db| db.get_first_row('SELECT * FROM epics WHERE project_id = ? AND slug = ?', [project_id, epic_slug]) }
+    end
+
+    def list_epics(project_id)
+      with_db { |db| db.execute('SELECT * FROM epics WHERE project_id = ? ORDER BY created_at', [project_id]) }
+    end
+
+    # ── Stories ────────────────────────────────────────────────────────────
+
+    def create_story(epic_id:, slug:, title:, sequence: nil, intent: nil)
+      t = now
+      id = uuid
+      with_db do |db|
+        seq = sequence || (db.get_first_value('SELECT COALESCE(MAX(sequence), 0) + 1 FROM stories WHERE epic_id = ?', [epic_id]))
+        db.execute(
+          'INSERT INTO stories (id, epic_id, sequence, slug, title, intent, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, epic_id, seq, slug, title, intent, 'pending', t, t]
+        )
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [id])
+      end
+    end
+
+    def find_story(epic_id, story_slug)
+      with_db { |db| db.get_first_row('SELECT * FROM stories WHERE epic_id = ? AND slug = ?', [epic_id, story_slug]) }
+    end
+
+    def find_story_by_id(story_id)
+      with_db { |db| db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id]) }
+    end
+
+    def stories_for_epic(epic_id)
+      with_db { |db| db.execute('SELECT * FROM stories WHERE epic_id = ? ORDER BY sequence', [epic_id]) }
+    end
+
+    def in_progress_story(epic_id)
+      with_db { |db| db.get_first_row("SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress'", [epic_id]) }
+    end
+
+    # Transactional claim — refuses if any story in epic is already in_progress.
+    def start_story(story_id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+          raise "Story not found: #{story_id}" unless story
+          raise "Story is not pending (status: #{story['status']})" unless story['status'] == 'pending'
+
+          t = now
+          db.execute(
+            'UPDATE stories SET status=?, started_at=?, last_note_at=?, updated_at=? WHERE id=?',
+            ['in_progress', t, t, t, story_id]
+          )
+        end
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    rescue SQLite3::ConstraintException
+      raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
+    end
+
+    # Transactional claim of lowest-sequence pending story.
+    def claim_next_story(epic_id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          next_story = db.get_first_row(
+            "SELECT * FROM stories WHERE epic_id = ? AND status = 'pending' ORDER BY sequence LIMIT 1",
+            [epic_id]
+          )
+          raise "No pending stories in this epic" unless next_story
+
+          t = now
+          db.execute(
+            'UPDATE stories SET status=?, started_at=?, last_note_at=?, updated_at=? WHERE id=?',
+            ['in_progress', t, t, t, next_story['id']]
+          )
+          db.get_first_row('SELECT * FROM stories WHERE id = ?', [next_story['id']])
+        end
+      end
+    rescue SQLite3::ConstraintException
+      raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
+    end
+
+    def update_story(story_id, attrs)
+      t = now
+      set_clauses = attrs.keys.map { |k| "#{k} = ?" }
+      set_clauses << 'updated_at = ?'
+      binds = attrs.values + [t, story_id]
+      with_db do |db|
+        db.execute("UPDATE stories SET #{set_clauses.join(', ')} WHERE id = ?", binds)
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    end
+
+    def add_note(story_id, kind, body, metadata: nil)
+      t = now
+      id = uuid
+      with_db do |db|
+        db.execute(
+          'INSERT INTO story_notes (id, story_id, kind, body, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [id, story_id, kind, body, metadata, t]
+        )
+        db.execute('UPDATE stories SET last_note_at=?, updated_at=? WHERE id=?', [t, t, story_id])
+        db.get_first_row('SELECT * FROM story_notes WHERE id = ?', [id])
+      end
+    end
+
+    def notes_for_story(story_id, limit: 10)
+      with_db do |db|
+        db.execute(
+          'SELECT * FROM story_notes WHERE story_id = ? ORDER BY created_at DESC LIMIT ?',
+          [story_id, limit]
+        )
+      end
+    end
+
+    def update_context(story_id, text)
+      t = now
+      with_db do |db|
+        db.execute('UPDATE stories SET current_context=?, updated_at=? WHERE id=?', [text, t, story_id])
+      end
+    end
+
+    def update_next_action(story_id, text)
+      t = now
+      with_db do |db|
+        db.execute('UPDATE stories SET next_action=?, updated_at=? WHERE id=?', [text, t, story_id])
+      end
+    end
+
+    def complete_story(story_id, summary, force: false)
+      with_db do |db|
+        unless force
+          pending_count = db.get_first_value(
+            "SELECT COUNT(*) FROM criteria WHERE story_id = ? AND status = 'pending'",
+            [story_id]
+          ).to_i
+          raise "#{pending_count} criteria still pending. Use --force to override." if pending_count > 0
+        end
+        t = now
+        db.execute(
+          'UPDATE stories SET status=?, completed_at=?, updated_at=? WHERE id=?',
+          ['done', t, t, story_id]
+        )
+        db.execute(
+          "INSERT INTO story_notes (id, story_id, kind, body, created_at) VALUES (?, ?, 'handoff', ?, ?)",
+          [uuid, story_id, summary, t]
+        )
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    end
+
+    def unstart_story(story_id)
+      t = now
+      with_db do |db|
+        db.execute('UPDATE stories SET status=?, updated_at=? WHERE id=?', ['pending', t, story_id])
+        db.execute(
+          "INSERT INTO story_notes (id, story_id, kind, body, created_at) VALUES (?, ?, 'recovery', ?, ?)",
+          [uuid, story_id, 'Story reset to pending via tyrion unstart', t]
+        )
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    end
+
+    def backfill_story(story_id, status, summary)
+      t = now
+      with_db do |db|
+        db.execute(
+          'UPDATE stories SET status=?, completed_at=?, started_at=COALESCE(started_at,?), updated_at=? WHERE id=?',
+          [status, t, t, t, story_id]
+        )
+        db.execute(
+          "INSERT INTO story_notes (id, story_id, kind, body, created_at) VALUES (?, ?, 'handoff', ?, ?)",
+          [uuid, story_id, summary, t]
+        )
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    end
+
+    # ── Criteria ───────────────────────────────────────────────────────────
+
+    def add_criteria(story_id, clauses)
+      with_db do |db|
+        max_pos = db.get_first_value('SELECT COALESCE(MAX(position), 0) FROM criteria WHERE story_id = ?', [story_id]).to_i
+        added = []
+        clauses.each_with_index do |clause, i|
+          pos = max_pos + i + 1
+          id = uuid
+          t = now
+          db.execute(
+            'INSERT INTO criteria (id, story_id, position, keyword, semantic_kind, text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, story_id, pos, clause[:keyword], clause[:semantic_kind], clause[:text], 'pending', t, t]
+          )
+          added << db.get_first_row('SELECT * FROM criteria WHERE id = ?', [id])
+        end
+        added
+      end
+    end
+
+    def criteria_for_story(story_id)
+      with_db { |db| db.execute('SELECT * FROM criteria WHERE story_id = ? ORDER BY position', [story_id]) }
+    end
+
+    def check_criterion(story_id, position, evidence)
+      t = now
+      with_db do |db|
+        criterion = db.get_first_row('SELECT * FROM criteria WHERE story_id = ? AND position = ?', [story_id, position.to_i])
+        raise "Criterion #{position} not found" unless criterion
+
+        db.execute(
+          'UPDATE criteria SET status=?, evidence=?, checked_at=?, updated_at=? WHERE story_id=? AND position=?',
+          ['met', evidence, t, t, story_id, position.to_i]
+        )
+        db.get_first_row('SELECT * FROM criteria WHERE story_id = ? AND position = ?', [story_id, position.to_i])
+      end
+    end
+
+    def uncheck_criterion(story_id, position)
+      t = now
+      with_db do |db|
+        db.execute(
+          'UPDATE criteria SET status=?, evidence=NULL, checked_at=NULL, updated_at=? WHERE story_id=? AND position=?',
+          ['pending', t, story_id, position.to_i]
+        )
+      end
+    end
+
+    # ── Import helpers ─────────────────────────────────────────────────────
+
+    def upsert_project(slug:, name:, repo_identity: nil, about_md: nil)
+      existing = find_project_by_slug(slug)
+      if existing
+        attrs = {}
+        attrs['name'] = name if name != existing['name']
+        attrs['about_md'] = about_md if about_md && about_md != existing['about_md']
+        attrs['primary_repo_identity'] = repo_identity if repo_identity && repo_identity != existing['primary_repo_identity']
+        update_project(existing['id'], attrs) unless attrs.empty?
+        find_project_by_slug(slug)
+      else
+        create_project(slug: slug, name: name, about_md: about_md, repo_identity: repo_identity)
+      end
+    end
+
+    def upsert_epic(project_id:, slug:, name:, intent: nil, context_md: nil,
+                    feature_source_path: nil, feature_source_hash: nil)
+      existing = find_epic(project_id, slug)
+      if existing
+        attrs = {}
+        attrs['intent']               = intent if intent
+        attrs['context_md']           = context_md if context_md
+        attrs['feature_source_path']  = feature_source_path if feature_source_path
+        attrs['feature_source_hash']  = feature_source_hash if feature_source_hash
+        update_epic(existing['id'], attrs) unless attrs.empty?
+        find_epic(project_id, slug)
+      else
+        create_epic(project_id: project_id, slug: slug, name: name, intent: intent,
+                    context_md: context_md, feature_source_path: feature_source_path,
+                    feature_source_hash: feature_source_hash)
+      end
+    end
+
+    def upsert_story(epic_id:, slug:, title:, sequence: nil, intent: nil)
+      existing = find_story(epic_id, slug)
+      if existing
+        update_story(existing['id'], 'title' => title, 'intent' => intent) if title != existing['title'] || intent
+        find_story(epic_id, slug)
+      else
+        create_story(epic_id: epic_id, slug: slug, title: title, sequence: sequence, intent: intent)
+      end
+    end
+
+    # File hash for idempotent import
+    def self.file_hash(path)
+      Digest::SHA256.file(path).hexdigest
+    end
+
+    private
+
+    def with_db
+      db = SQLite3::Database.new(@db_path)
+      db.results_as_hash = true
+      db.execute('PRAGMA journal_mode=WAL')
+      db.execute('PRAGMA foreign_keys=ON')
+      db.execute('PRAGMA busy_timeout=5000')
+      db.execute('PRAGMA synchronous=NORMAL')
+      yield db
+    ensure
+      db&.close
+    end
+
+    def setup_db
+      with_db do |db|
+        DDL.split(';').each do |stmt|
+          s = stmt.strip
+          db.execute(s) unless s.empty?
+        end
+      end
+    end
+
+    def now  = Time.now.utc.iso8601(6)
+    def uuid = SecureRandom.uuid
+  end
+end

@@ -1,0 +1,25 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# tyrion — resumability ledger for coding agents
+#
+# Answers one question brutally well: what exact story was I implementing,
+# what is done, what did I learn, and what should the next agent do first?
+#
+# Usage:
+#   tyrion init                    Register this repo as a tyrion worktree
+#   tyrion status                  Plan view: project + epic + stories + git state
+#   tyrion start <slug>            Claim a story (transactional)
+#   tyrion resume [slug]           Restore agent context (read-only)
+#   tyrion note <slug> <kind> "…"  Append note
+#   tyrion context <slug> "…"      Update current context
+#   tyrion next <slug> "…"         Update next action
+#   tyrion check <slug> <n> "…"    Mark criterion met
+#   tyrion done <slug> "…"         Complete story
+#   tyrion help                    Full usage
+
+$LOAD_PATH.unshift(File.join(__dir__, '..', 'lib'))
+
+require 'tyrion'
+
+Tyrion::Commands.run(ARGV)
