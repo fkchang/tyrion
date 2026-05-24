@@ -135,17 +135,27 @@ Each criterion must contain a *verifiable assertion* — something a human or sc
 
 A criterion is sharp if you can write the UAT runbook step for it (Step 7.5) before writing a single line of code. If you cannot, it is not sharp enough.
 
-**HARD STOP: if any criterion is vague, do not touch code. Rewrite in the source first:**
+**HARD STOP — criterion sharpness is a requirements decision, not a mechanical fix:**
+
+If any criterion is vague, **do not edit any file and do not write any code.** Instead:
+
+1. List each vague criterion verbatim
+2. Propose a sharp rewrite for each one
+3. Wait for the user to confirm, modify, or reject each proposed rewrite
+
+Only after the user approves the sharp criteria:
 
 ```bash
-# 1. Edit the .feature file — fix the vague Then lines to be sharp
+# Edit the .feature file with the approved sharp versions
 $EDITOR features/<epic-slug>.feature
 
-# 2. Re-import to update the DB (idempotent if hash changed)
-tyrion import features/<epic-slug>.feature
+# Re-import to update the DB (use --force if hash already matches)
+tyrion import features/<epic-slug>.feature [--confirm-abandon] [--force]
 ```
 
 The `.feature` file is the source of truth. Rewriting criterion text only in evidence (while leaving the vague text in the DB) is **not acceptable** — future agents will see the vague version and the problem repeats.
+
+**This gate applies in all modes, including auto.** Getting the criterion wrong means all downstream evidence, UAT runbook, and closure are built on the wrong definition of done. Autonomy mode does not override this stop.
 
 Then record the plan:
 
