@@ -235,15 +235,25 @@ Then either resolve it or stop. Do not thrash.
 
 ### 7. CONTINUOUS CAPTURE (hard rule)
 
-**Any Write, Edit, or Bash tool call made while the story is in_progress — for any reason, planned or ad-hoc, in-scope or off-scope, user-requested or agent-initiated — MUST be followed immediately by:**
+**The FIRST thing you do at the start of every turn while a story is in_progress — before clarifying questions, before tool calls, before any response — is check: did the user just request something new or different?**
+
+If yes:
+
+```bash
+tyrion note <slug> progress "user requested: <exact request verbatim>"
+```
+
+Write that note before anything else. Then ask your clarifying question. Then implement. The note captures the request *as it arrived*. If the session crashes between the request and the clarification, the ledger still shows what was asked.
+
+**Also applies to code changes:**
+
+Any Write, Edit, or Bash tool call made while the story is in_progress — for any reason, planned or ad-hoc, in-scope or off-scope — MUST be followed immediately by:
 
 ```bash
 tyrion note <slug> progress "<what changed, why, which files>"
 ```
 
-Before responding each turn, confirm: "did anything change since my last tyrion note? if yes, note it now."
-
-This rule closes the beads-style drift where interactive follow-ons (run the server, add an index route, restart a process) escape the ledger. The story is in_progress until `tyrion done` — everything that happens during that time belongs in the ledger.
+This rule closes the beads-style drift where interactive follow-ons (run the server, add an index route, restart a process, user asks for a new feature mid-flight) escape the ledger. The story is in_progress until `tyrion done` — everything that happens during that time belongs in the ledger.
 
 ---
 
