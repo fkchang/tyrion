@@ -56,7 +56,15 @@ Feature: Discovery Layer
 
   Scenario: tyrion-spike-done
     # Intent: Close the active spike by capturing key finding (one paragraph max), confidence (high|medium|low), and recommendation; transitions discovery from active_spike to findings_ready
-    # TODO: criteria — fill during /tyrion-implement step 4
+    Given an active_spike discovery exists for the active project
+    When tyrion spike done is run with stdin providing finding text, 'high' for confidence, and recommendation text
+    Then the discovery status is updated to 'findings_ready', finding/confidence/recommendation fields match inputs, and stdout prints [findings_ready] disc-NNN
+    Given no active_spike discovery exists for the active project
+    When tyrion spike done is run
+    Then the command exits with an error message indicating no active spike and no discovery row is modified
+    Given an active_spike exists and the user enters an invalid confidence value on first prompt
+    When tyrion spike done re-prompts for confidence until a valid value (high/medium/low) is entered
+    Then the command completes normally with the valid confidence value stored and stdout prints [findings_ready] disc-NNN
 
   Scenario: tyrion-spike-promote
     # Intent: Convert a findings_ready discovery to a linked story with LLM-assisted draft acceptance criteria; establishes born_from_discovery traceability field; optionally prompts for story title

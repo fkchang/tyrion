@@ -480,6 +480,23 @@ module Tyrion
       end
     end
 
+    def close_spike(id, finding:, confidence:, recommendation:)
+      with_db do |db|
+        db.transaction(:immediate) do
+          disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+          raise "Discovery not found: #{id}" unless disc
+          raise "Discovery is not an active spike (status: #{disc['status']})" unless disc['status'] == 'active_spike'
+
+          t = now
+          db.execute(
+            "UPDATE discoveries SET status='findings_ready', finding=?, confidence=?, recommendation=?, updated_at=? WHERE id=?",
+            [finding, confidence, recommendation, t, id]
+          )
+          db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+        end
+      end
+    end
+
     # ── Import helpers ─────────────────────────────────────────────────────
 
     def upsert_project(slug:, name:, repo_identity: nil, about_md: nil)

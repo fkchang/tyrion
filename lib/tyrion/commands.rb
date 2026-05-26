@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'time'
+require_relative 'importer'
 
 module Tyrion
   # Commands — all CLI command implementations.
@@ -312,7 +313,6 @@ module Tyrion
 
     def self.cmd_import(args, store)
       die "Usage: tyrion import <file.feature> [--confirm-abandon]" if args.empty?
-      require_relative 'importer'
       Importer.run(args, store)
     end
 
@@ -579,9 +579,10 @@ module Tyrion
       sub = args.shift
       case sub
       when 'start' then cmd_spike_start(args, store)
+      when 'done'  then cmd_spike_done(args, store)
       else
         $stderr.puts "Unknown spike subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion spike start \"your question\""
+        $stderr.puts "Usage: tyrion spike start \"your question\"\n       tyrion spike done"
         exit 1
       end
     end
@@ -609,6 +610,28 @@ module Tyrion
         git_context:   Repo.git_context_json
       )
       output.puts "[active_spike] #{disc['id']}"
+    end
+
+    def self.cmd_spike_done(args, store, input: $stdin, output: $stdout)
+      project, = resolve_project_epic(store, require_epic: false)
+
+      spike = store.active_spike_for(project['id'])
+      die "No active spike. Start one: tyrion spike start \"your question\"" unless spike
+
+      finding        = prompt(input, output, "Key finding (one paragraph max): ")
+      confidence     = prompt_confidence(input, output)
+      recommendation = prompt(input, output, "Recommendation: ")
+
+      disc = store.close_spike(spike['id'], finding: presence(finding), confidence: confidence, recommendation: presence(recommendation))
+      output.puts "[findings_ready] #{disc['id']}"
+    end
+
+    def self.prompt_confidence(input, output)
+      loop do
+        value = prompt(input, output, "Confidence [high/medium/low]: ").downcase
+        return value if %w[high medium low].include?(value)
+        output.puts "Please enter high, medium, or low."
+      end
     end
 
     # ── resume ─────────────────────────────────────────────────────────────
@@ -809,7 +832,7 @@ module Tyrion
       story = store.find_story(epic['id'], slug)
       die "Story not found: #{slug}" unless story
 
-      store.complete_story(story['id'], summary, force: !!force)
+      store.complete_story(story['id'], summary, force: force)
       puts "#{Output.green('Done:')} #{slug} — #{story['title']}"
     rescue RuntimeError => e
       die e.message
