@@ -82,9 +82,24 @@ module Tyrion
       `git -C #{path.shellescape} rev-parse --short HEAD 2>/dev/null`.strip
     end
 
+    TOUCHED_FILES_LIMIT = 10
+
+    def self.touched_files(path = nil)
+      path ||= worktree_root
+      output = `git -C #{path.shellescape} status --porcelain 2>/dev/null`
+      return [] unless $?.success?
+
+      output.lines.map { |l| l[3..].to_s.strip }.reject(&:empty?).uniq.first(TOUCHED_FILES_LIMIT)
+    end
+
     def self.git_context(path = nil)
       path ||= worktree_root
-      { branch: git_branch(path), dirty_files: dirty_count(path), last_commit: last_commit(path) }
+      {
+        branch:        git_branch(path),
+        dirty_files:   dirty_count(path),
+        last_commit:   last_commit(path),
+        touched_files: touched_files(path)
+      }
     end
 
     def self.git_context_json(path = nil) = git_context(path).to_json

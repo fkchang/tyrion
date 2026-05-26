@@ -25,6 +25,7 @@ module Tyrion
       when 'claim-next'   then cmd_claim_next(args, store)
       when 'pocket'       then cmd_pocket(args, store)
       when 'mark'         then cmd_mark(args, store)
+      when 'discover'     then cmd_discover(args, store)
       when 'resume'       then cmd_resume(args, store)
       when 'note'         then cmd_note(args, store)
       when 'context'      then cmd_context(args, store)
@@ -538,6 +539,33 @@ module Tyrion
         git_context: Repo.git_context_json
       )
       puts "[mark] #{disc['id']}"
+    end
+
+    # ── discover ──────────────────────────────────────────────────────────
+
+    def self.cmd_discover(args, store, input: $stdin, output: $stdout)
+      project, = resolve_project_epic(store, require_epic: false)
+
+      question = prompt(input, output, "What were you trying to do? ")
+      finding  = prompt(input, output, "What did you find? ")
+
+      disc = store.create_discovery(
+        project_id:  project['id'],
+        status:      'findings_ready',
+        question:    question,
+        finding:     finding,
+        git_context: Repo.git_context_json
+      )
+      output.puts "[findings_ready] #{disc['id']}"
+
+      response = prompt(input, output, "Spec this out now? [y/later/no] ").downcase
+      output.puts "tyrion spike promote #{disc['id']}" if response == 'y'
+    end
+
+    def self.prompt(input, output, label)
+      output.print(label)
+      output.flush
+      input.gets.to_s.strip
     end
 
     # ── resume ─────────────────────────────────────────────────────────────

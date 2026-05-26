@@ -32,7 +32,15 @@ Feature: Discovery Layer
 
   Scenario: tyrion-discover
     # Intent: ~30-second organic capture prompting "What were you trying to do?" + "What did you find?"; auto-captures git context and recently-touched files; creates discovery in findings_ready immediately; asks "Spec this out now?"
-    # TODO: criteria — fill during /tyrion-implement step 4
+    Given the tyrion ledger has an active project
+    When tyrion discover is run with stdin providing "testing authentication flow" then "JWT expiry not refreshed on activity"
+    Then a discovery is created with status='findings_ready', question='testing authentication flow', finding='JWT expiry not refreshed on activity', git_context containing branch, dirty_files (integer), last_commit (SHA), and touched_files (array of recently-touched file paths), and stdout contains [findings_ready] disc-NNN
+    Given tyrion discover created a discovery and prompted "Spec this out now? [y/later/no]"
+    When the user responds y
+    Then stdout includes "tyrion spike promote disc-NNN" as the next-step suggestion
+    Given tyrion discover created a discovery and prompted "Spec this out now? [y/later/no]"
+    When the user responds later or no
+    Then the command exits after printing [findings_ready] disc-NNN with no promote suggestion in stdout
 
   Scenario: tyrion-spike-start
     # Intent: Frame a known unknown with question, optional hypothesis, and exit criteria ("what does success produce?"); creates discovery in active_spike; enforces one active spike per project
