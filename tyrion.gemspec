@@ -14,4 +14,5 @@ Gem::Specification.new do |s|
   s.executables = ['tyrion']
   s.required_ruby_version = '>= 3.0'
   s.add_runtime_dependency 'sqlite3'
+  s.add_runtime_dependency 'ostruct'
 end
