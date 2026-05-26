@@ -83,7 +83,21 @@ Feature: Discovery Layer
 
   Scenario: tyrion-discovery-list
     # Intent: List discoveries filtered by status (active|ready|promoted|deferred|all) and show full detail for a single discovery by id
-    # TODO: criteria — fill during /tyrion-implement step 4
+    Given discoveries exist with statuses mark, active_spike, and findings_ready for the active project
+    When tyrion discovery list --status ready is run
+    Then stdout contains the findings_ready discovery id and question; mark and active_spike discoveries are absent; exits 0
+    Given discoveries exist with statuses mark, active_spike, and findings_ready
+    When tyrion discovery list is run with no --status flag
+    Then stdout contains all three discovery ids; exits 0
+    Given a findings_ready discovery disc-NNN exists with question, finding, confidence, recommendation set
+    When tyrion discovery show disc-NNN is run
+    Then stdout contains the id, status findings_ready, question, finding, confidence, and recommendation; exits 0
+    Given disc-999 does not exist in the DB
+    When tyrion discovery show disc-999 is run
+    Then exits 1, stderr contains disc-999 and not found
+    Given no special setup
+    When tyrion discovery list --status bogus is run
+    Then exits 1, stderr contains bogus and lists the valid aliases active, ready, promoted, deferred, all
 
   Scenario: tyrion-orient-ext
     # Intent: Extend tyrion status/orient to show a DISCOVERIES section: active spikes, findings_ready items with "→ promote?" prompt, and count of unformalized marks from this session

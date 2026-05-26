@@ -9,6 +9,14 @@ module Tyrion
   module Commands
     STALE_HOURS = 4
 
+    DISCOVERY_ALIASES = {
+      'active'   => 'active_spike',
+      'ready'    => 'findings_ready',
+      'promoted' => 'promoted_to_story',
+      'deferred' => 'deferred',
+      'all'      => nil
+    }.freeze
+
     def self.run(argv)
       args  = argv.dup
       store = Store.new
@@ -27,6 +35,7 @@ module Tyrion
       when 'pocket'       then cmd_pocket(args, store)
       when 'mark'         then cmd_mark(args, store)
       when 'discover'     then cmd_discover(args, store)
+      when 'discovery'    then cmd_discovery(args, store)
       when 'spike'        then cmd_spike(args, store)
       when 'resume'       then cmd_resume(args, store)
       when 'note'         then cmd_note(args, store)
@@ -573,6 +582,55 @@ module Tyrion
       str && !str.empty? ? str : nil
     end
 
+    # ── discovery ─────────────────────────────────────────────────────────
+
+    def self.cmd_discovery(args, store)
+      sub = args.shift
+      case sub
+      when 'list' then cmd_discovery_list(args, store)
+      when 'show' then cmd_discovery_show(args, store)
+      else
+        die "Usage: tyrion discovery [list|show]"
+      end
+    end
+
+    def self.cmd_discovery_list(args, store)
+      status_filter = resolve_discovery_status(args)
+      project       = resolve_project(store)
+      discs         = store.list_discoveries(project_id: project['id'], status: status_filter)
+
+      return puts "(no discoveries)" if discs.empty?
+
+      discs.each { |d| puts "#{d['id']}  [#{d['status']}]  #{d['question']}" }
+    end
+
+    def self.resolve_discovery_status(args)
+      return nil unless (idx = args.index('--status'))
+
+      alias_str = args[idx + 1]
+      valid     = DISCOVERY_ALIASES.keys.join(', ')
+      die "Missing alias after --status. Valid: #{valid}" if alias_str.nil?
+      die "Unknown status alias '#{alias_str}'. Valid: #{valid}" unless DISCOVERY_ALIASES.key?(alias_str)
+
+      DISCOVERY_ALIASES.fetch(alias_str)
+    end
+
+    def self.cmd_discovery_show(args, store)
+      disc_id = args.shift
+      die "Usage: tyrion discovery show <disc-id>" unless disc_id
+
+      disc = store.find_discovery(disc_id)
+      die "Discovery #{disc_id} not found" unless disc
+
+      puts "#{disc['id']}  [#{disc['status']}]"
+      puts "Question:       #{disc['question'] || '—'}"
+      puts "Finding:        #{disc['finding'] || '—'}"
+      puts "Confidence:     #{disc['confidence'] || '—'}"
+      puts "Recommendation: #{disc['recommendation'] || '—'}"
+      puts "Hypothesis:     #{disc['hypothesis'] || '—'}" if disc['hypothesis']
+      puts "Exit criteria:  #{disc['exit_criteria'] || '—'}" if disc['exit_criteria']
+    end
+
     # ── spike ─────────────────────────────────────────────────────────────
 
     def self.cmd_spike(args, store)
@@ -957,6 +1015,15 @@ module Tyrion
           tyrion done <slug> "summary" [--force]   Complete story
           tyrion unstart <slug>                    Reset to pending (crash recovery)
           tyrion backfill <slug> done "summary"    Mark pre-Tyrion work done
+
+        Discovery (SDRD spike loop):
+          tyrion mark "description"                Bookmark — instant breadcrumb with git context
+          tyrion discover                          Organic capture — question + finding → findings_ready
+          tyrion spike start "question"            Frame a known unknown → active_spike
+          tyrion spike done                        Close spike with finding + confidence + recommendation
+          tyrion spike promote <disc-id>           Promote findings_ready → linked story
+          tyrion discovery list [--status <alias>] List discoveries (aliases: active|ready|promoted|deferred|all)
+          tyrion discovery show <disc-id>          Show full discovery detail
       USAGE
     end
 
