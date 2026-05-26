@@ -125,6 +125,10 @@ module Tyrion
       );
 
       CREATE INDEX IF NOT EXISTS idx_discoveries_project_status ON discoveries(project_id, status);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_spike_per_project
+        ON discoveries(project_id)
+        WHERE status = 'active_spike';
     SQL
 
     def initialize(db_path: DB_PATH)
@@ -464,6 +468,15 @@ module Tyrion
             [project_id]
           )
         end
+      end
+    end
+
+    def active_spike_for(project_id)
+      with_db do |db|
+        db.get_first_row(
+          "SELECT * FROM discoveries WHERE project_id = ? AND status = 'active_spike' LIMIT 1",
+          [project_id]
+        )
       end
     end
 

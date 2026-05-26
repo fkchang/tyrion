@@ -26,6 +26,7 @@ module Tyrion
       when 'pocket'       then cmd_pocket(args, store)
       when 'mark'         then cmd_mark(args, store)
       when 'discover'     then cmd_discover(args, store)
+      when 'spike'        then cmd_spike(args, store)
       when 'resume'       then cmd_resume(args, store)
       when 'note'         then cmd_note(args, store)
       when 'context'      then cmd_context(args, store)
@@ -566,6 +567,48 @@ module Tyrion
       output.print(label)
       output.flush
       input.gets.to_s.strip
+    end
+
+    def self.presence(str)
+      str && !str.empty? ? str : nil
+    end
+
+    # ── spike ─────────────────────────────────────────────────────────────
+
+    def self.cmd_spike(args, store)
+      sub = args.shift
+      case sub
+      when 'start' then cmd_spike_start(args, store)
+      else
+        $stderr.puts "Unknown spike subcommand: #{sub}"
+        $stderr.puts "Usage: tyrion spike start \"your question\""
+        exit 1
+      end
+    end
+
+    def self.cmd_spike_start(args, store, input: $stdin, output: $stdout)
+      question = args.first&.strip
+      die "Usage: tyrion spike start \"your question\"" if question.nil? || question.empty?
+
+      project, = resolve_project_epic(store, require_epic: false)
+
+      if (existing = store.active_spike_for(project['id']))
+        die "Active spike already exists: #{existing['id']} — \"#{existing['question']}\"\n" \
+            "Close it first: tyrion spike done"
+      end
+
+      hypothesis    = prompt(input, output, "Hypothesis (optional, Enter to skip): ")
+      exit_criteria = prompt(input, output, "Exit criteria — what does success produce? (optional, Enter to skip): ")
+
+      disc = store.create_discovery(
+        project_id:    project['id'],
+        status:        'active_spike',
+        question:      question,
+        hypothesis:    presence(hypothesis),
+        exit_criteria: presence(exit_criteria),
+        git_context:   Repo.git_context_json
+      )
+      output.puts "[active_spike] #{disc['id']}"
     end
 
     # ── resume ─────────────────────────────────────────────────────────────

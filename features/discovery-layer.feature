@@ -44,7 +44,15 @@ Feature: Discovery Layer
 
   Scenario: tyrion-spike-start
     # Intent: Frame a known unknown with question, optional hypothesis, and exit criteria ("what does success produce?"); creates discovery in active_spike; enforces one active spike per project
-    # TODO: criteria — fill during /tyrion-implement step 4
+    Given the tyrion ledger has an active project with no existing active_spike discovery
+    When tyrion spike start "Can concurrent writes cause scan duplication?" is run with stdin providing hypothesis and exit_criteria
+    Then a discovery is created with status='active_spike', question matching the argument, hypothesis and exit_criteria matching stdin inputs, git_context captured, and stdout prints [active_spike] disc-NNN
+    Given a discovery with status='active_spike' already exists for the active project
+    When tyrion spike start "another question" is run
+    Then the command exits with an error message containing both the existing spike's disc-NNN id and its question text, and no new discovery row is created
+    Given the tyrion ledger has an active project with no existing active_spike discovery
+    When tyrion spike start "question" is run and the user presses Enter on both hypothesis and exit_criteria prompts
+    Then a discovery is created with status='active_spike', question='question', hypothesis=nil, exit_criteria=nil, and stdout prints [active_spike] disc-NNN
 
   Scenario: tyrion-spike-done
     # Intent: Close the active spike by capturing key finding (one paragraph max), confidence (high|medium|low), and recommendation; transitions discovery from active_spike to findings_ready
