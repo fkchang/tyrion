@@ -1,13 +1,13 @@
 ---
 name: tyrion-shape
-description: Use when converting messy human inputs (PRDs, scored scenario tables, brainstorm transcripts, voice notes) into canonical Tyrion draft files. Triggered by "/tyrion-shape", "shape this", "ingest these docs", "brainstorm an epic", "what's this project about", or when starting a project without a .feature file. Two modes: --from <docs> for ingestion, no args for interactive. Always writes drafts to disk — never writes the DB directly.
+description: Use when converting messy human inputs (PRDs, scored scenario tables, brainstorm transcripts, voice notes) into canonical Tyrion draft files. Triggered by "/tyrion-shape", "shape this", "ingest these docs", "brainstorm an epic", "what's this project about", or when starting a project without a .feature file. Two modes: --from <docs> for ingestion, no args for interactive. Writes drafts, shows for review, imports on approval — no manual shell commands needed.
 ---
 
 # /tyrion-shape
 
-Bridge skill: convert human inputs to Tyrion draft files. The user reviews drafts, then runs `tyrion import`.
+Bridge skill: convert human inputs to Tyrion draft files. Writes drafts to disk, shows them for review, then imports on approval — no manual shell commands needed.
 
-**This skill never writes to the DB directly.** Drafts go to disk so the user can edit them. `tyrion import` and `tyrion project sync` are the commit boundary.
+**This skill never writes to the DB without approval.** Drafts go to disk first so the user can review or edit. On approval, the skill runs `tyrion import` itself — you never need to.
 
 ## Invocation
 
@@ -97,17 +97,24 @@ Feature: <epic name>
 
 **If ABOUT.md already exists**, show a brief diff of what changed — don't silently overwrite.
 
-### Step 5: Print handoff
+### Step 5: Show draft and import on approval
 
-```
-Files written:
-  .tyrion/projects/<slug>/ABOUT.md
-  features/<slug>.feature
-  features/<slug>.context.md
+Display the full `.feature` file content inline so the user can review it.
 
-Review the drafts. Edit as needed. Then:
-  tyrion import features/<slug>.feature
-```
+Ask: **"Does this look right? (yes / edit: <what to change> / abort)"**
+
+- **yes** — run:
+  ```bash
+  tyrion import features/<slug>.feature [--confirm-abandon if in-progress story exists]
+  tyrion status
+  ```
+  Then print: "Epic imported. Run `/tyrion-implement` to start building."
+
+- **edit: <feedback>** — apply the requested changes to the draft file, show updated content, ask again.
+
+- **abort** — leave the draft files on disk unchanged. Print their paths so the user can edit manually and run `tyrion import` themselves if they change their mind.
+
+Never import without a "yes". Never require the user to run import manually when the answer is yes.
 
 ---
 
@@ -143,18 +150,15 @@ For each shaping decision:
 
 Never modify the DB.
 
-### Step 4: Print handoff
+### Step 4: Show draft and import on approval
 
-```
-Files written:
-  <list of files changed>
+Display the changed files inline.
 
-If you modified a .feature:
-  tyrion import features/<slug>.feature
+Ask: **"Does this look right? (yes / edit: <what to change> / abort)"**
 
-If you only modified ABOUT.md:
-  tyrion project sync
-```
+- **yes** — if a `.feature` was modified, run `tyrion import features/<slug>.feature [--confirm-abandon]` + `tyrion status`. If only ABOUT.md was modified, run `tyrion project sync`. Print "Done. Run `/tyrion-implement` to start building."
+- **edit: <feedback>** — apply changes, show updated content, ask again.
+- **abort** — leave files on disk, print paths for manual editing.
 
 ---
 
@@ -181,7 +185,7 @@ Re-running shape with the same `--from` docs and the same project/epic is safe. 
 
 ## What shape does NOT do
 
-- Does not run `tyrion import` — the user reviews drafts first
-- Does not write to the DB
+- Does not import without user approval ("yes")
+- Does not write to the DB before approval
 - Does not mark any story as done or in-progress
 - Does not fill in TODO criteria — that is step 4 of `/tyrion-implement`

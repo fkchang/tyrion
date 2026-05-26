@@ -1,0 +1,50 @@
+Feature: Discovery Layer
+  Add a discovery/spike layer above the existing epic/story structure.
+  Answers "What did I learn, and what should I build from it?" — filling
+  the gap where the current impl layer assumes you already know what to
+  build. Maps to SDRD's spike → finding → implement loop. Two entry
+  modes: intentional spike (known unknown) and organic capture (unknown
+  unknown). Both converge at findings_ready, then promote to linked stories.
+
+  Scenario: discoveries-schema
+    # Intent: Create the discoveries table in SQLite with full state machine support (mark|capturing|active_spike|findings_ready|promoted_to_story|deferred|invalidated) and all required columns
+    Given a fresh Tyrion::Store.new(db_path: tmp_path)
+    When create_discovery(project_id: id, status: 'mark', question: 'test q') is called
+    Then returns hash with non-nil UUID id, status == 'mark', created_at and updated_at present
+    Given a discovery created with all optional fields (hypothesis, exit_criteria, finding, confidence, recommendation, git_context, epic_id)
+    When store.find_discovery(id) is called
+    Then returned hash contains all 14 columns with values matching what was written
+    Given discoveries in states mark, active_spike, and findings_ready exist in the store
+    When store.list_discoveries(project_id:, status: 'active_spike') is called
+    Then only the active_spike discovery is returned; unfiltered list_discoveries returns all 3
+    Given test/test_store.rb extended with discovery CRUD tests covering create, find, and list_discoveries
+    When ruby -Ilib test/test_store.rb is run
+    Then 0 failures, 0 errors; test count visibly higher than the previous 24 runs
+
+  Scenario: tyrion-mark
+    # Intent: Zero-friction 5-second in-flow bookmark — auto-captures git context and timestamp, creates a [mark] breadcrumb in discoveries table, no interaction beyond the description
+    # TODO: criteria — fill during /tyrion-implement step 4
+
+  Scenario: tyrion-discover
+    # Intent: ~30-second organic capture prompting "What were you trying to do?" + "What did you find?"; auto-captures git context and recently-touched files; creates discovery in findings_ready immediately; asks "Spec this out now?"
+    # TODO: criteria — fill during /tyrion-implement step 4
+
+  Scenario: tyrion-spike-start
+    # Intent: Frame a known unknown with question, optional hypothesis, and exit criteria ("what does success produce?"); creates discovery in active_spike; enforces one active spike per project
+    # TODO: criteria — fill during /tyrion-implement step 4
+
+  Scenario: tyrion-spike-done
+    # Intent: Close the active spike by capturing key finding (one paragraph max), confidence (high|medium|low), and recommendation; transitions discovery from active_spike to findings_ready
+    # TODO: criteria — fill during /tyrion-implement step 4
+
+  Scenario: tyrion-spike-promote
+    # Intent: Convert a findings_ready discovery to a linked story with LLM-assisted draft acceptance criteria; establishes born_from_discovery traceability field; optionally prompts for story title
+    # TODO: criteria — fill during /tyrion-implement step 4
+
+  Scenario: tyrion-discovery-list
+    # Intent: List discoveries filtered by status (active|ready|promoted|deferred|all) and show full detail for a single discovery by id
+    # TODO: criteria — fill during /tyrion-implement step 4
+
+  Scenario: tyrion-orient-ext
+    # Intent: Extend tyrion status/orient to show a DISCOVERIES section: active spikes, findings_ready items with "→ promote?" prompt, and count of unformalized marks from this session
+    # TODO: criteria — fill during /tyrion-implement step 4

@@ -104,6 +104,27 @@ module Tyrion
       );
 
       CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS discoveries (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        epic_id         TEXT REFERENCES epics(id) ON DELETE SET NULL,
+        story_id        TEXT REFERENCES stories(id) ON DELETE SET NULL,
+        status          TEXT NOT NULL
+                          CHECK(status IN ('mark','capturing','active_spike','findings_ready','promoted_to_story','deferred','invalidated')),
+        question        TEXT,
+        hypothesis      TEXT,
+        exit_criteria   TEXT,
+        finding         TEXT,
+        confidence      TEXT
+                          CHECK(confidence IN ('high','medium','low')),
+        recommendation  TEXT,
+        git_context     TEXT,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_discoveries_project_status ON discoveries(project_id, status);
     SQL
 
     def initialize(db_path: DB_PATH)
@@ -401,6 +422,42 @@ module Tyrion
           'UPDATE criteria SET status=?, evidence=NULL, checked_at=NULL, updated_at=? WHERE story_id=? AND position=?',
           ['pending', t, story_id, position.to_i]
         )
+      end
+    end
+
+    # ── Discoveries ────────────────────────────────────────────────────────
+
+    def create_discovery(project_id:, status:, epic_id: nil, story_id: nil,
+                         question: nil, hypothesis: nil, exit_criteria: nil,
+                         finding: nil, confidence: nil, recommendation: nil, git_context: nil)
+      t = now
+      id = uuid
+      with_db do |db|
+        db.execute(
+          'INSERT INTO discoveries (id, project_id, epic_id, story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, project_id, epic_id, story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, t, t]
+        )
+        db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+      end
+    end
+
+    def find_discovery(id)
+      with_db { |db| db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id]) }
+    end
+
+    def list_discoveries(project_id:, status: nil)
+      with_db do |db|
+        if status
+          db.execute(
+            'SELECT * FROM discoveries WHERE project_id = ? AND status = ? ORDER BY created_at',
+            [project_id, status]
+          )
+        else
+          db.execute(
+            'SELECT * FROM discoveries WHERE project_id = ? ORDER BY created_at',
+            [project_id]
+          )
+        end
       end
     end
 

@@ -237,4 +237,83 @@ class TestStore < Minitest::Test
     @store.delete_pending_criteria(story['id'])
     assert_equal 3, @store.criteria_for_story(story['id']).length
   end
+
+  # ── Discoveries ───────────────────────────────────────────────────────────
+
+  def default_project
+    make_project
+  end
+
+  def make_discovery(project_id:, status: 'mark', question: 'test question', **opts)
+    @store.create_discovery(project_id: project_id, status: status, question: question, **opts)
+  end
+
+  def test_create_discovery_returns_hash_with_id_and_status
+    disc = make_discovery(project_id: default_project['id'])
+    assert_kind_of Hash, disc
+    refute_nil disc['id']
+    assert_equal 'mark', disc['status']
+    refute_nil disc['created_at']
+  end
+
+  def test_create_discovery_all_optional_fields_roundtrip
+    proj  = default_project
+    epic  = make_epic(project_id: proj['id'])
+    story = make_story(epic_id: epic['id'])
+
+    disc = @store.create_discovery(
+      project_id:     proj['id'],
+      epic_id:        epic['id'],
+      story_id:       story['id'],
+      status:         'active_spike',
+      question:       'Will it blend?',
+      hypothesis:     'Yes, it will blend.',
+      exit_criteria:  'Blending observed once.',
+      finding:        'It blended.',
+      confidence:     'high',
+      recommendation: 'Ship it.',
+      git_context:    'abc1234'
+    )
+
+    found = @store.find_discovery(disc['id'])
+    refute_nil found
+    assert_equal disc['id'],        found['id']
+    assert_equal proj['id'],        found['project_id']
+    assert_equal epic['id'],        found['epic_id']
+    assert_equal story['id'],       found['story_id']
+    assert_equal 'active_spike',    found['status']
+    assert_equal 'Will it blend?',  found['question']
+    assert_equal 'Yes, it will blend.', found['hypothesis']
+    assert_equal 'Blending observed once.', found['exit_criteria']
+    assert_equal 'It blended.',     found['finding']
+    assert_equal 'high',            found['confidence']
+    assert_equal 'Ship it.',        found['recommendation']
+    assert_equal 'abc1234',         found['git_context']
+    refute_nil found['created_at']
+    refute_nil found['updated_at']
+  end
+
+  def test_list_discoveries_returns_all_for_project
+    pid = default_project['id']
+    make_discovery(project_id: pid, status: 'mark',         question: 'q1')
+    make_discovery(project_id: pid, status: 'active_spike', question: 'q2')
+    make_discovery(project_id: pid, status: 'deferred',     question: 'q3')
+    results = @store.list_discoveries(project_id: pid)
+    assert_equal 3, results.length
+  end
+
+  def test_list_discoveries_filters_by_status
+    pid = default_project['id']
+    make_discovery(project_id: pid, status: 'mark',         question: 'q1')
+    make_discovery(project_id: pid, status: 'active_spike', question: 'q2')
+    make_discovery(project_id: pid, status: 'deferred',     question: 'q3')
+    results = @store.list_discoveries(project_id: pid, status: 'active_spike')
+    assert_equal 1, results.length
+    assert_equal 'active_spike', results[0]['status']
+  end
+
+  def test_list_discoveries_returns_empty_for_unknown_project
+    results = @store.list_discoveries(project_id: 'nonexistent-id-00000')
+    assert_equal [], results
+  end
 end
