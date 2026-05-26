@@ -16,8 +16,9 @@ module Tyrion
 
     def self.run(args, store)
       confirm_abandon = args.delete('--confirm-abandon')
+      force           = args.delete('--force')
       path = args.first
-      die "Usage: tyrion import <file.feature> [--confirm-abandon]" unless path
+      die "Usage: tyrion import <file.feature> [--confirm-abandon] [--force]" unless path
       die "File not found: #{path}" unless File.exist?(path)
 
       project_slug = Repo.active_project
@@ -33,7 +34,7 @@ module Tyrion
       file_hash = Digest::SHA256.file(path).hexdigest
 
       existing = store.find_epic(project['id'], epic_slug)
-      if existing && existing['feature_source_hash'] == file_hash
+      if existing && existing['feature_source_hash'] == file_hash && !force
         puts "Epic '#{epic_slug}' is already up to date (hash unchanged). Nothing to do."
         return
       end
@@ -69,7 +70,7 @@ module Tyrion
         next if scenario[:criteria].empty?
 
         existing_criteria = store.criteria_for_story(story['id'])
-        next if existing_criteria.any?
+        store.delete_pending_criteria(story['id']) if existing_criteria.any?
 
         store.add_criteria(story['id'], scenario[:criteria])
         puts "  Story: #{story['slug']} (#{scenario[:criteria].length} criteria)"

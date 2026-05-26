@@ -388,6 +388,12 @@ module Tyrion
       end
     end
 
+    def delete_pending_criteria(story_id)
+      with_db do |db|
+        db.execute("DELETE FROM criteria WHERE story_id = ? AND status = 'pending'", [story_id])
+      end
+    end
+
     def uncheck_criterion(story_id, position)
       t = now
       with_db do |db|

@@ -23,6 +23,7 @@ module Tyrion
       when 'show'         then cmd_show(args, store)
       when 'start'        then cmd_start(args, store)
       when 'claim-next'   then cmd_claim_next(args, store)
+      when 'pocket'       then cmd_pocket(args, store)
       when 'resume'       then cmd_resume(args, store)
       when 'note'         then cmd_note(args, store)
       when 'context'      then cmd_context(args, store)
@@ -498,6 +499,29 @@ module Tyrion
       puts "Status: #{Output.yellow('in_progress')}"
     rescue RuntimeError => e
       die e.message
+    end
+
+    # ── pocket ─────────────────────────────────────────────────────────────
+
+    def self.cmd_pocket(args, store)
+      _project, epic = resolve_project_epic(store)
+
+      story = store.in_progress_story(epic['id'])
+      story ||= store.stories_for_epic(epic['id']).find { |s| s['status'] == 'pending' }
+
+      unless story
+        puts "No active or pending story."
+        return
+      end
+
+      criteria = store.criteria_for_story(story['id'])
+      unchecked = criteria.select { |c| c['status'] != 'met' }
+
+      puts "epic: #{epic['slug']}"
+      puts "story: #{story['slug']}"
+      unchecked.each do |c|
+        puts "[ ] #{c['keyword']} #{c['text']}"
+      end
     end
 
     # ── resume ─────────────────────────────────────────────────────────────
