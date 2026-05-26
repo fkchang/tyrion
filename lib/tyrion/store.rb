@@ -431,13 +431,19 @@ module Tyrion
                          question: nil, hypothesis: nil, exit_criteria: nil,
                          finding: nil, confidence: nil, recommendation: nil, git_context: nil)
       t = now
-      id = uuid
       with_db do |db|
-        db.execute(
-          'INSERT INTO discoveries (id, project_id, epic_id, story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, project_id, epic_id, story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, t, t]
-        )
-        db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+        db.transaction(:immediate) do
+          seq = db.get_first_value(
+            'SELECT COALESCE(MAX(CAST(SUBSTR(id, 6) AS INTEGER)), 0) + 1 FROM discoveries WHERE project_id = ? AND id LIKE ?',
+            [project_id, 'disc-%']
+          )
+          id = format('disc-%03d', seq)
+          db.execute(
+            'INSERT INTO discoveries (id, project_id, epic_id, story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, project_id, epic_id, story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, t, t]
+          )
+          db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+        end
       end
     end
 

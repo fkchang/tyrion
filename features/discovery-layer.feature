@@ -10,7 +10,7 @@ Feature: Discovery Layer
     # Intent: Create the discoveries table in SQLite with full state machine support (mark|capturing|active_spike|findings_ready|promoted_to_story|deferred|invalidated) and all required columns
     Given a fresh Tyrion::Store.new(db_path: tmp_path)
     When create_discovery(project_id: id, status: 'mark', question: 'test q') is called
-    Then returns hash with non-nil UUID id, status == 'mark', created_at and updated_at present
+    Then returns hash with non-nil disc-NNN id, status == 'mark', created_at and updated_at present
     Given a discovery created with all optional fields (hypothesis, exit_criteria, finding, confidence, recommendation, git_context, epic_id)
     When store.find_discovery(id) is called
     Then returned hash contains all 14 columns with values matching what was written
@@ -23,7 +23,12 @@ Feature: Discovery Layer
 
   Scenario: tyrion-mark
     # Intent: Zero-friction 5-second in-flow bookmark — auto-captures git context and timestamp, creates a [mark] breadcrumb in discoveries table, no interaction beyond the description
-    # TODO: criteria — fill during /tyrion-implement step 4
+    Given the tyrion ledger has an active project
+    When tyrion mark "brief description" is run
+    Then the command prints a single line [mark] disc-NNN to stdout and exits 0, and store.find_discovery(id) returns status='mark', question='brief description', git_context containing branch, dirty_files (integer), last_commit (SHA)
+    Given no active project is set in the tyrion ledger
+    When tyrion mark "anything" is run
+    Then the command prints an error message to stdout and exits without creating any discovery row
 
   Scenario: tyrion-discover
     # Intent: ~30-second organic capture prompting "What were you trying to do?" + "What did you find?"; auto-captures git context and recently-touched files; creates discovery in findings_ready immediately; asks "Spec this out now?"

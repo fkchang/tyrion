@@ -67,6 +67,9 @@ If `--review` mode: pause here and report what you found. Wait for user ok befor
 
 ```bash
 # If user supplied a slug:
+tyrion show <slug>       # find which epic owns this story
+# If that epic is not the active one:
+tyrion epic activate <epic-slug>   # activate it — never ask the user to do this manually
 tyrion start <slug>      # transactional; refuses if any in-epic story already in_progress
 
 # Else if tyrion status shows an in_progress story:
@@ -75,6 +78,8 @@ tyrion start <slug>      # transactional; refuses if any in-epic story already i
 # Else:
 tyrion claim-next        # transactional claim of lowest-sequence pending story
 ```
+
+**Auto-activate the right epic.** If the requested slug lives in a different epic than the currently active one, activate that epic before claiming. Never tell the user to run `tyrion epic activate` manually — that is the skill's job.
 
 **Remember the slug for the rest of this session.** Every subsequent command uses it.
 

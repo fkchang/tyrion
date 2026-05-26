@@ -24,6 +24,7 @@ module Tyrion
       when 'start'        then cmd_start(args, store)
       when 'claim-next'   then cmd_claim_next(args, store)
       when 'pocket'       then cmd_pocket(args, store)
+      when 'mark'         then cmd_mark(args, store)
       when 'resume'       then cmd_resume(args, store)
       when 'note'         then cmd_note(args, store)
       when 'context'      then cmd_context(args, store)
@@ -522,6 +523,21 @@ module Tyrion
       unchecked.each do |c|
         puts "[ ] #{c['keyword']} #{c['text']}"
       end
+    end
+
+    # ── mark ──────────────────────────────────────────────────────────────
+
+    def self.cmd_mark(args, store)
+      return puts "No active project." unless Repo.active_project
+
+      project, = resolve_project_epic(store, require_epic: false)
+      disc = store.create_discovery(
+        project_id:  project['id'],
+        status:      'mark',
+        question:    args.first,
+        git_context: Repo.git_context_json
+      )
+      puts "[mark] #{disc['id']}"
     end
 
     # ── resume ─────────────────────────────────────────────────────────────

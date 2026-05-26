@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'fileutils'
+require 'json'
 require 'shellwords'
 
 module Tyrion
@@ -75,6 +76,18 @@ module Tyrion
       path ||= worktree_root
       `git -C #{path.shellescape} status --porcelain 2>/dev/null`.lines.count
     end
+
+    def self.last_commit(path = nil)
+      path ||= worktree_root
+      `git -C #{path.shellescape} rev-parse --short HEAD 2>/dev/null`.strip
+    end
+
+    def self.git_context(path = nil)
+      path ||= worktree_root
+      { branch: git_branch(path), dirty_files: dirty_count(path), last_commit: last_commit(path) }
+    end
+
+    def self.git_context_json(path = nil) = git_context(path).to_json
 
     def self.gitignore_has_tyrion?(root = nil)
       root ||= worktree_root
