@@ -68,7 +68,18 @@ Feature: Discovery Layer
 
   Scenario: tyrion-spike-promote
     # Intent: Convert a findings_ready discovery to a linked story with LLM-assisted draft acceptance criteria; establishes born_from_discovery traceability field; optionally prompts for story title
-    # TODO: criteria — fill during /tyrion-implement step 4
+    Given a findings_ready discovery disc-NNN exists with question='Q?', recommendation='Use mutex'
+    When tyrion spike promote disc-NNN is run with stdin providing title 'Concurrent Write Safety'
+    Then stdout prints '[promoted] <story-slug> <- disc-NNN'; stdout includes 'tyrion criteria add <story-slug>' with at least one of the discovery's finding or recommendation text pre-filled; store.find_discovery shows status='promoted_to_story'; created story has born_from_discovery='disc-NNN', title='Concurrent Write Safety', intent containing 'Use mutex'
+    Given a findings_ready discovery with question='What causes the duplication?'
+    When tyrion spike promote disc-NNN is run with stdin providing an empty line
+    Then created story title equals the discovery question 'What causes the duplication?' and stdout prints '[promoted] <slug> <- disc-NNN'
+    Given a discovery exists with status='active_spike'
+    When tyrion spike promote <disc-id> is run
+    Then exits 1, stderr contains the disc-id and 'findings_ready', no story added to the active epic
+    Given disc-999 does not exist in the DB
+    When tyrion spike promote disc-999 is run
+    Then exits 1, stderr contains 'disc-999' and 'not found', no story created
 
   Scenario: tyrion-discovery-list
     # Intent: List discoveries filtered by status (active|ready|promoted|deferred|all) and show full detail for a single discovery by id

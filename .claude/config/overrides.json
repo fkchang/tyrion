@@ -1,0 +1,9 @@
+{
+  "pre-push": {
+    "test": {
+      "command": "ruby -Ilib -e 'Dir[\"test/test_*.rb\"].each { |f| require File.expand_path(f) }; require \"minitest/autorun\"'",
+      "name": "Tests (Minitest)",
+      "required": true
+    }
+  }
+}

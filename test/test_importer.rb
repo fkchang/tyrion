@@ -30,22 +30,16 @@ class TestImporter < Minitest::Test
     @feature_path = File.join(@tmpdir, 'sample-epic.feature')
     File.write(@feature_path, FEATURE_CONTENT)
 
-    # Stub Repo singletons — save originals for teardown
-    @orig_worktree_root  = Tyrion::Repo.method(:worktree_root)
-    @orig_active_project = Tyrion::Repo.method(:active_project)
-    @orig_active_epic    = Tyrion::Repo.method(:active_epic)
-
-    tmpdir = @tmpdir
-    Tyrion::Repo.define_singleton_method(:worktree_root)  { |*| tmpdir }
+    Tyrion::Repo.define_singleton_method(:worktree_root)  { |*| @tmpdir }
     Tyrion::Repo.define_singleton_method(:active_project) { |*| 'test-proj' }
     Tyrion::Repo.define_singleton_method(:active_epic)    { |*| 'sample-epic' }
   end
 
   def teardown
     FileUtils.rm_rf(@tmpdir)
-    Tyrion::Repo.define_singleton_method(:worktree_root,  @orig_worktree_root)
-    Tyrion::Repo.define_singleton_method(:active_project, @orig_active_project)
-    Tyrion::Repo.define_singleton_method(:active_epic,    @orig_active_epic)
+    %i[worktree_root active_project active_epic].each do |m|
+      Tyrion::Repo.singleton_class.remove_method(m)
+    end
   end
 
   # ── helpers ──────────────────────────────────────────────────────────────

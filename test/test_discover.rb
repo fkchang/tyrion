@@ -19,16 +19,7 @@ class TestDiscover < Minitest::Test
     File.write(File.join(@tmpdir, '.tyrion', 'marker'), '')
     File.write(File.join(@tmpdir, '.tyrion', 'active-project'), "myproj\n")
 
-    @orig_worktree_root  = Tyrion::Repo.method(:worktree_root)
-    @orig_active_project = Tyrion::Repo.method(:active_project)
-    @orig_active_epic    = Tyrion::Repo.method(:active_epic)
-    @orig_git_branch     = Tyrion::Repo.method(:git_branch)
-    @orig_dirty_count    = Tyrion::Repo.method(:dirty_count)
-    @orig_last_commit    = Tyrion::Repo.method(:last_commit)
-    @orig_touched_files  = Tyrion::Repo.method(:touched_files)
-
-    repo_root = @tmpdir
-    Tyrion::Repo.define_singleton_method(:worktree_root)  { |*| repo_root }
+    Tyrion::Repo.define_singleton_method(:worktree_root)  { |*| @tmpdir }
     Tyrion::Repo.define_singleton_method(:active_project) { |*| 'myproj' }
     Tyrion::Repo.define_singleton_method(:active_epic)    { |*| nil }
     Tyrion::Repo.define_singleton_method(:git_branch)     { |*| 'feature/auth-flow' }
@@ -39,13 +30,9 @@ class TestDiscover < Minitest::Test
 
   def teardown
     FileUtils.rm_rf(@tmpdir)
-    Tyrion::Repo.define_singleton_method(:worktree_root,  @orig_worktree_root)
-    Tyrion::Repo.define_singleton_method(:active_project, @orig_active_project)
-    Tyrion::Repo.define_singleton_method(:active_epic,    @orig_active_epic)
-    Tyrion::Repo.define_singleton_method(:git_branch,     @orig_git_branch)
-    Tyrion::Repo.define_singleton_method(:dirty_count,    @orig_dirty_count)
-    Tyrion::Repo.define_singleton_method(:last_commit,    @orig_last_commit)
-    Tyrion::Repo.define_singleton_method(:touched_files,  @orig_touched_files)
+    %i[worktree_root active_project active_epic git_branch dirty_count last_commit touched_files].each do |m|
+      Tyrion::Repo.singleton_class.remove_method(m)
+    end
   end
 
   def test_discover_happy_path_criterion_1
@@ -54,22 +41,21 @@ class TestDiscover < Minitest::Test
     Tyrion::Commands.cmd_discover([], @store, input: input, output: output)
     out = output.string
 
-    # stdout contains [findings_ready] disc-NNN
     assert_match(/\[findings_ready\] disc-\d+/, out)
 
     disc_id = out.match(/\[findings_ready\] (disc-\d+)/)[1]
     disc = @store.find_discovery(disc_id)
-    refute_nil disc, "find_discovery(#{disc_id}) should not be nil"
+    refute_nil disc
 
-    assert_equal 'findings_ready',                      disc['status'],   "status mismatch"
-    assert_equal 'testing authentication flow',         disc['question'], "question mismatch"
-    assert_equal 'JWT expiry not refreshed on activity', disc['finding'], "finding mismatch"
+    assert_equal 'findings_ready',                       disc['status']
+    assert_equal 'testing authentication flow',          disc['question']
+    assert_equal 'JWT expiry not refreshed on activity', disc['finding']
 
     git_ctx = JSON.parse(disc['git_context'])
-    assert_equal 'feature/auth-flow',                             git_ctx['branch'],        "branch mismatch"
-    assert_equal 2,                                               git_ctx['dirty_files'],   "dirty_files mismatch"
-    assert_equal 'deadbeef',                                      git_ctx['last_commit'],   "last_commit mismatch"
-    assert_equal ['lib/tyrion/commands.rb', 'lib/tyrion/repo.rb'], git_ctx['touched_files'], "touched_files mismatch"
+    assert_equal 'feature/auth-flow',                              git_ctx['branch']
+    assert_equal 2,                                                git_ctx['dirty_files']
+    assert_equal 'deadbeef',                                       git_ctx['last_commit']
+    assert_equal ['lib/tyrion/commands.rb', 'lib/tyrion/repo.rb'], git_ctx['touched_files']
   end
 
   def test_discover_no_active_project_exits

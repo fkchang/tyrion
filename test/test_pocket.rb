@@ -29,21 +29,16 @@ class TestPocket < Minitest::Test
     File.write(File.join(@tmpdir, '.tyrion', 'active-epic'), "auth-epic\n")
     File.write(File.join(@tmpdir, '.tyrion', 'marker'), '')
 
-    # Stub Repo to return our tmpdir paths
-    @original_worktree_root = Tyrion::Repo.method(:worktree_root)
-    @original_active_project = Tyrion::Repo.method(:active_project)
-    @original_active_epic    = Tyrion::Repo.method(:active_epic)
-    repo_root = @tmpdir
-    Tyrion::Repo.define_singleton_method(:worktree_root)  { |*| repo_root }
+    Tyrion::Repo.define_singleton_method(:worktree_root)  { |*| @tmpdir }
     Tyrion::Repo.define_singleton_method(:active_project) { |*| 'myproj' }
     Tyrion::Repo.define_singleton_method(:active_epic)    { |*| 'auth-epic' }
   end
 
   def teardown
     FileUtils.rm_rf(@tmpdir)
-    Tyrion::Repo.define_singleton_method(:worktree_root,  @original_worktree_root)
-    Tyrion::Repo.define_singleton_method(:active_project, @original_active_project)
-    Tyrion::Repo.define_singleton_method(:active_epic,    @original_active_epic)
+    %i[worktree_root active_project active_epic].each do |m|
+      Tyrion::Repo.singleton_class.remove_method(m)
+    end
   end
 
   def capture_pocket

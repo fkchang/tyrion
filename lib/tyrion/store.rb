@@ -50,21 +50,22 @@ module Tyrion
       CREATE INDEX IF NOT EXISTS idx_epics_project_status ON epics(project_id, status);
 
       CREATE TABLE IF NOT EXISTS stories (
-        id               TEXT PRIMARY KEY,
-        epic_id          TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
-        sequence         INTEGER NOT NULL,
-        slug             TEXT NOT NULL,
-        title            TEXT NOT NULL,
-        intent           TEXT,
-        current_context  TEXT,
-        next_action      TEXT,
-        status           TEXT NOT NULL DEFAULT 'pending'
-                           CHECK(status IN ('pending','in_progress','blocked','done','abandoned')),
-        started_at       TEXT,
-        completed_at     TEXT,
-        last_note_at     TEXT,
-        created_at       TEXT NOT NULL,
-        updated_at       TEXT NOT NULL,
+        id                   TEXT PRIMARY KEY,
+        epic_id              TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+        sequence             INTEGER NOT NULL,
+        slug                 TEXT NOT NULL,
+        title                TEXT NOT NULL,
+        intent               TEXT,
+        current_context      TEXT,
+        next_action          TEXT,
+        status               TEXT NOT NULL DEFAULT 'pending'
+                               CHECK(status IN ('pending','in_progress','blocked','done','abandoned')),
+        started_at           TEXT,
+        completed_at         TEXT,
+        last_note_at         TEXT,
+        born_from_discovery  TEXT REFERENCES discoveries(id) ON DELETE SET NULL,
+        created_at           TEXT NOT NULL,
+        updated_at           TEXT NOT NULL,
         UNIQUE(epic_id, slug),
         UNIQUE(epic_id, sequence)
       );
@@ -208,14 +209,14 @@ module Tyrion
 
     # ── Stories ────────────────────────────────────────────────────────────
 
-    def create_story(epic_id:, slug:, title:, sequence: nil, intent: nil)
+    def create_story(epic_id:, slug:, title:, sequence: nil, intent: nil, born_from_discovery: nil)
       t = now
       id = uuid
       with_db do |db|
         seq = sequence || (db.get_first_value('SELECT COALESCE(MAX(sequence), 0) + 1 FROM stories WHERE epic_id = ?', [epic_id]))
         db.execute(
-          'INSERT INTO stories (id, epic_id, sequence, slug, title, intent, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, epic_id, seq, slug, title, intent, 'pending', t, t]
+          'INSERT INTO stories (id, epic_id, sequence, slug, title, intent, status, born_from_discovery, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [id, epic_id, seq, slug, title, intent, 'pending', born_from_discovery, t, t]
         )
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [id])
       end
@@ -497,6 +498,30 @@ module Tyrion
       end
     end
 
+    def promote_discovery_to_story(disc_id, epic_id:, slug:, title:, intent:)
+      with_db do |db|
+        db.transaction(:immediate) do
+          disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [disc_id])
+          raise "Discovery not found: #{disc_id}" unless disc
+          raise "Discovery is not findings_ready (status: #{disc['status']})" unless disc['status'] == 'findings_ready'
+
+          t       = now
+          story_id = uuid
+          seq     = db.get_first_value('SELECT COALESCE(MAX(sequence), 0) + 1 FROM stories WHERE epic_id = ?', [epic_id])
+
+          db.execute(
+            'INSERT INTO stories (id, epic_id, sequence, slug, title, intent, status, born_from_discovery, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [story_id, epic_id, seq, slug, title, intent, 'pending', disc_id, t, t]
+          )
+          db.execute(
+            "UPDATE discoveries SET status='promoted_to_story', story_id=?, updated_at=? WHERE id=?",
+            [story_id, t, disc_id]
+          )
+          db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+        end
+      end
+    end
+
     # ── Import helpers ─────────────────────────────────────────────────────
 
     def upsert_project(slug:, name:, repo_identity: nil, about_md: nil)
@@ -560,12 +585,20 @@ module Tyrion
       db&.close
     end
 
+    MIGRATIONS = [
+      ['add_born_from_discovery_to_stories', lambda { |db|
+        cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
+        db.execute('ALTER TABLE stories ADD COLUMN born_from_discovery TEXT REFERENCES discoveries(id) ON DELETE SET NULL') unless cols.include?('born_from_discovery')
+      }]
+    ].freeze
+
     def setup_db
       with_db do |db|
         DDL.split(';').each do |stmt|
           s = stmt.strip
           db.execute(s) unless s.empty?
         end
+        MIGRATIONS.each { |_name, fn| fn.call(db) }
       end
     end
 

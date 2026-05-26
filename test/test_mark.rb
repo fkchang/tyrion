@@ -18,30 +18,20 @@ class TestMark < Minitest::Test
     File.write(File.join(@tmpdir, '.tyrion', 'marker'), '')
     File.write(File.join(@tmpdir, '.tyrion', 'active-project'), "myproj\n")
 
-    @orig_worktree_root  = Tyrion::Repo.method(:worktree_root)
-    @orig_active_project = Tyrion::Repo.method(:active_project)
-    @orig_active_epic    = Tyrion::Repo.method(:active_epic)
-    @orig_git_branch     = Tyrion::Repo.method(:git_branch)
-    @orig_dirty_count    = Tyrion::Repo.method(:dirty_count)
-    @orig_last_commit    = Tyrion::Repo.method(:last_commit)
-
-    repo_root = @tmpdir
-    Tyrion::Repo.define_singleton_method(:worktree_root)  { |*| repo_root }
+    Tyrion::Repo.define_singleton_method(:worktree_root)  { |*| @tmpdir }
     Tyrion::Repo.define_singleton_method(:active_project) { |*| 'myproj' }
     Tyrion::Repo.define_singleton_method(:active_epic)    { |*| nil }
     Tyrion::Repo.define_singleton_method(:git_branch)     { |*| 'feature/test-branch' }
     Tyrion::Repo.define_singleton_method(:dirty_count)    { |*| 3 }
     Tyrion::Repo.define_singleton_method(:last_commit)    { |*| 'abc1234' }
+    Tyrion::Repo.define_singleton_method(:touched_files)  { |*| [] }
   end
 
   def teardown
     FileUtils.rm_rf(@tmpdir)
-    Tyrion::Repo.define_singleton_method(:worktree_root,  @orig_worktree_root)
-    Tyrion::Repo.define_singleton_method(:active_project, @orig_active_project)
-    Tyrion::Repo.define_singleton_method(:active_epic,    @orig_active_epic)
-    Tyrion::Repo.define_singleton_method(:git_branch,     @orig_git_branch)
-    Tyrion::Repo.define_singleton_method(:dirty_count,    @orig_dirty_count)
-    Tyrion::Repo.define_singleton_method(:last_commit,    @orig_last_commit)
+    %i[worktree_root active_project active_epic git_branch dirty_count last_commit touched_files].each do |m|
+      Tyrion::Repo.singleton_class.remove_method(m)
+    end
   end
 
   def test_mark_happy_path_stdout_and_store

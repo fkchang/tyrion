@@ -578,11 +578,12 @@ module Tyrion
     def self.cmd_spike(args, store)
       sub = args.shift
       case sub
-      when 'start' then cmd_spike_start(args, store)
-      when 'done'  then cmd_spike_done(args, store)
+      when 'start'   then cmd_spike_start(args, store)
+      when 'done'    then cmd_spike_done(args, store)
+      when 'promote' then cmd_spike_promote(args, store)
       else
         $stderr.puts "Unknown spike subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion spike start \"your question\"\n       tyrion spike done"
+        $stderr.puts "Usage: tyrion spike start \"your question\"\n       tyrion spike done\n       tyrion spike promote <disc-id>"
         exit 1
       end
     end
@@ -624,6 +625,45 @@ module Tyrion
 
       disc = store.close_spike(spike['id'], finding: presence(finding), confidence: confidence, recommendation: presence(recommendation))
       output.puts "[findings_ready] #{disc['id']}"
+    end
+
+    def self.cmd_spike_promote(args, store, input: $stdin, output: $stdout)
+      disc_id = args.shift
+      die "Usage: tyrion spike promote <disc-id>" unless disc_id
+
+      disc = store.find_discovery(disc_id)
+      die "Discovery #{disc_id} not found" unless disc
+      die "Discovery #{disc_id} is not findings_ready (status: #{disc['status']})" unless disc['status'] == 'findings_ready'
+
+      title = presence(prompt(input, output, "Story title [#{disc['question']}]: ")) || disc['question']
+      slug  = slugify(title)
+
+      _project, epic = resolve_project_epic(store)
+
+      story = store.promote_discovery_to_story(
+        disc_id,
+        epic_id: epic['id'],
+        slug:    slug,
+        title:   title,
+        intent:  disc['recommendation']
+      )
+
+      output.puts "[promoted] #{story['slug']} <- #{disc_id}"
+      print_suggested_criteria(output, story, disc)
+    end
+
+    def self.slugify(title)
+      title.downcase.gsub(/[^a-z0-9]+/, '-').delete_prefix('-').delete_suffix('-')
+    end
+
+    def self.print_suggested_criteria(output, story, disc)
+      finding_text = disc['finding'] ? "Spike finding: #{disc['finding']}" : "Per recommendation: #{disc['recommendation']}"
+      output.puts ""
+      output.puts "Suggested criteria (run to add):"
+      output.puts "  tyrion criteria add #{story['slug']} \\"
+      output.puts "    --given \"#{finding_text}\" \\"
+      output.puts "    --when \"<describe the action>\" \\"
+      output.puts "    --then \"<describe the outcome>\""
     end
 
     def self.prompt_confidence(input, output)
