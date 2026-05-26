@@ -10,10 +10,8 @@ class TestPocket < Minitest::Test
     @tmpdir = Dir.mktmpdir('tyrion-pocket-test-')
     @db_path = File.join(@tmpdir, 'test.db')
 
-    # Point Store at the temp DB
     @store = Tyrion::Store.new(db_path: @db_path)
 
-    # Create project, epic, and story fixtures
     @project = @store.create_project(slug: 'myproj', name: 'My Project')
     @epic    = @store.create_epic(project_id: @project['id'], slug: 'auth-epic', name: 'Auth Epic')
     @story   = @store.create_story(epic_id: @epic['id'], slug: 'login-story', title: 'Login Story')
@@ -24,7 +22,6 @@ class TestPocket < Minitest::Test
       { keyword: 'Then',  semantic_kind: 'then',  text: 'the user sees the dashboard' }
     ])
     @store.check_criterion(@story['id'], 1, 'user exists in DB')
-    # criterion 2 remains pending (unchecked)
 
     # Set up active-project and active-epic files in tmpdir so resolve_project_epic works
     FileUtils.mkdir_p(File.join(@tmpdir, '.tyrion'))
