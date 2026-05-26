@@ -11,7 +11,7 @@ module Tyrion
   # Mirrors conventions from lib/cultiv_cabinet/utf/sqlite_store.rb:
   #   frozen heredoc DDL, with_db block, WAL+FK, UUID ids, iso8601(6) timestamps.
   class Store
-    DB_PATH = File.expand_path('~/cultiv-os/cabinet/tyrion/tyrion.db')
+    DB_PATH = ENV.fetch('TYRION_DB_PATH', File.expand_path('~/cultiv-os/cabinet/tyrion/tyrion.db'))
 
     ALLOWED_FILTER_COLS = %w[project_id epic_id status slug].freeze
 

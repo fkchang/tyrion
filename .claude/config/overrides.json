@@ -1,8 +1,8 @@
 {
   "pre-push": {
     "test": {
-      "command": "ruby -Ilib -e 'Dir[\"test/test_*.rb\"].each { |f| require File.expand_path(f) }; require \"minitest/autorun\"'",
-      "name": "Tests (Minitest)",
+      "command": "ruby -Ilib -e 'Dir[\"test/test_*.rb\"].each { |f| require File.expand_path(f) }; require \"minitest/autorun\"' && bundle exec rspec",
+      "name": "Tests (Minitest + RSpec)",
       "required": true
     }
   }
