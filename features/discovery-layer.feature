@@ -101,4 +101,18 @@ Feature: Discovery Layer
 
   Scenario: tyrion-orient-ext
     # Intent: Extend tyrion status/orient to show a DISCOVERIES section: active spikes, findings_ready items with "→ promote?" prompt, and count of unformalized marks from this session
-    # TODO: criteria — fill during /tyrion-implement step 4
+    Given an active_spike discovery exists for the active project with question='Can cache be shared?'
+    When tyrion status is run
+    Then stdout contains a DISCOVERIES section header and the spike disc-id and question 'Can cache be shared?'
+    Given a findings_ready discovery disc-NNN exists for the active project
+    When tyrion status is run
+    Then the DISCOVERIES section contains disc-NNN and 'tyrion spike promote disc-NNN'
+    Given 2 mark-status discoveries exist for the active project
+    When tyrion status is run
+    Then stdout contains the exact substring '2 unformalized mark'
+    Given no discoveries exist for the active project
+    When tyrion status is run
+    Then stdout does not contain the string 'DISCOVERIES'
+    Given active_spike disc-001 with question='Q1?', findings_ready disc-002, and 2 mark discoveries exist for the active project
+    When tyrion status is run
+    Then DISCOVERIES section contains disc-001 and 'Q1?', contains disc-002 and 'tyrion spike promote disc-002', and contains '2 unformalized mark'; exits 0

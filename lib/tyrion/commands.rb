@@ -4,8 +4,6 @@ require 'time'
 require_relative 'importer'
 
 module Tyrion
-  # Commands — all CLI command implementations.
-  # Each cmd_* method takes an args array and a Store instance.
   module Commands
     STALE_HOURS = 4
 
@@ -404,6 +402,24 @@ module Tyrion
       end
 
       puts
+
+      # ── discoveries ──────────────────────────────────────────────────────
+      active_spikes    = store.list_discoveries(project_id: project['id'], status: 'active_spike')
+      findings_ready   = store.list_discoveries(project_id: project['id'], status: 'findings_ready')
+      marks            = store.list_discoveries(project_id: project['id'], status: 'mark')
+
+      unless active_spikes.empty? && findings_ready.empty? && marks.empty?
+        puts "  DISCOVERIES"
+        active_spikes.each do |d|
+          puts "  ● #{d['id']}  #{d['question']}"
+        end
+        findings_ready.each do |d|
+          puts "  → #{d['id']}  #{d['question']}  (tyrion spike promote #{d['id']})"
+        end
+        puts "  #{marks.size} unformalized mark(s)" if marks.any?
+        puts
+      end
+
       root   = Repo.worktree_root
       branch = Repo.git_branch
       dirty  = Repo.dirty_count
