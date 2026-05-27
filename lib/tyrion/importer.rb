@@ -99,10 +99,10 @@ module Tyrion
         end
 
         if stripped.start_with?('Scenario:', 'Scenario Outline:')
-          scenarios << current_scenario if current_scenario
+          scenarios << finalize_scenario(current_scenario) if current_scenario
           title = stripped.sub(/^Scenario(?: Outline)?:\s*/, '').strip
           slug  = title.downcase.gsub(/[^a-z0-9]+/, '-').gsub(/^-|-$/, '')
-          current_scenario = { title: title, slug: slug, intent: nil, criteria: [] }
+          current_scenario = { title: title, slug: slug, intent: nil, narrative: [], criteria: [] }
           last_semantic_kind = nil
           next
         end
@@ -120,6 +120,11 @@ module Tyrion
         next if stripped.start_with?('#') || stripped.empty?
         next unless current_scenario
 
+        if stripped.match?(/\A(As an? |In order to |I want |I would like )/i)
+          current_scenario[:narrative] << stripped
+          next
+        end
+
         keyword, text = split_step(stripped)
         next unless keyword
 
@@ -133,13 +138,21 @@ module Tyrion
         }
       end
 
-      scenarios << current_scenario if current_scenario
+      scenarios << finalize_scenario(current_scenario) if current_scenario
 
       {
         feature_name:        feature_name,
         feature_description: feature_description,
         scenarios:           scenarios
       }
+    end
+
+    def self.finalize_scenario(scenario)
+      return unless scenario
+      if scenario[:intent].nil? && scenario[:narrative].any?
+        scenario[:intent] = scenario[:narrative].join(' ')
+      end
+      scenario
     end
 
     STEP_KEYWORDS = %w[Given When Then And But *].freeze

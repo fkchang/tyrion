@@ -89,6 +89,23 @@ disc_id = out[/\[mark\] (disc-\d+)/, 1]
 expect(store.find_discovery(disc_id)['question']).to eq 'desc'
 ```
 
+### Gherkin narrative format
+
+Every scenario should include the standard "As a / In order to / I want" narrative between the `Scenario:` line and the first `Given`. This tells the implementing agent WHO the user is, WHY this story exists, and WHAT capability they need:
+
+```gherkin
+Scenario: user-login
+  As a registered user with valid credentials
+  In order to access the system without re-entering my password each request
+  I want to exchange my credentials for a JWT
+
+  Given a registered user with valid credentials
+  When they POST /auth/login
+  Then they receive a JWT and a 200 response
+```
+
+The importer parses these lines and stores them as the story's `intent` field. A `# Intent:` comment takes priority if both are present (for backward compatibility). The intent surfaces in `tyrion show` and `tyrion resume`, giving implementing agents the WHY without reading the full feature file.
+
 ### Workflow: feature file → DB
 
 1. Write/edit `features/<epic-slug>.feature` (Gherkin)

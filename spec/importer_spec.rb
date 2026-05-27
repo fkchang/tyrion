@@ -14,12 +14,41 @@ FEATURE_CONTENT = <<~FEATURE
       Then an outcome is observed
 FEATURE
 
+NARRATIVE_FEATURE_CONTENT = <<~FEATURE
+  Feature: Narrative Epic
+    Epic with Gherkin narrative format.
+
+    Scenario: story-with-narrative
+      As a developer using AI coding agents
+      In order to track exploratory work without losing context
+      I want to capture spikes and promote them to stories
+
+      Given a precondition
+      When an action occurs
+      Then an outcome is observed
+
+    Scenario: story-intent-wins
+      # Intent: explicit intent takes priority over narrative
+      As a developer
+      In order to do something
+      I want something else
+
+      Given a precondition
+      When an action occurs
+      Then an outcome is observed
+FEATURE
+
 RSpec.describe Tyrion::Importer do
   let(:ctx)          { tyrion_worktree(project_slug: 'test-proj', project_name: 'Test Project') }
   let(:store)        { ctx.store }
   let(:feature_path) do
     path = File.join(ctx.tmpdir, 'sample-epic.feature')
     File.write(path, FEATURE_CONTENT)
+    path
+  end
+  let(:narrative_feature_path) do
+    path = File.join(ctx.tmpdir, 'narrative-epic.feature')
+    File.write(path, NARRATIVE_FEATURE_CONTENT)
     path
   end
 
@@ -97,6 +126,44 @@ RSpec.describe Tyrion::Importer do
         run_import
         criteria = store.criteria_for_story(first_story['id'])
         expect(criteria.length).to eq 3
+      end
+    end
+
+    # ── Gherkin narrative format (As a / In order to / I want) ─────────────
+
+    context 'narrative format — As a / In order to / I want' do
+      def run_narrative_import
+        capture_io { Tyrion::Importer.run([narrative_feature_path], store) }
+      end
+
+      def narrative_story(slug)
+        epic = store.find_epic(ctx.project['id'], 'narrative-epic')
+        store.stories_for_epic(epic['id']).find { |s| s['slug'] == slug }
+      end
+
+      it 'sets intent from narrative lines when no # Intent: comment is present' do
+        run_narrative_import
+        story = narrative_story('story-with-narrative')
+        expect(story['intent']).to include('In order to track exploratory work without losing context')
+      end
+
+      it 'includes all three narrative clauses in the intent' do
+        run_narrative_import
+        story = narrative_story('story-with-narrative')
+        expect(story['intent']).to include('As a developer using AI coding agents')
+        expect(story['intent']).to include('I want to capture spikes and promote them to stories')
+      end
+
+      it 'does not count narrative lines as criteria' do
+        run_narrative_import
+        story = narrative_story('story-with-narrative')
+        expect(store.criteria_for_story(story['id']).length).to eq 3
+      end
+
+      it '# Intent: takes priority over narrative lines' do
+        run_narrative_import
+        story = narrative_story('story-intent-wins')
+        expect(story['intent']).to eq 'explicit intent takes priority over narrative'
       end
     end
 

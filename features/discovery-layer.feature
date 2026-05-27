@@ -7,7 +7,10 @@ Feature: Discovery Layer
   unknown). Both converge at findings_ready, then promote to linked stories.
 
   Scenario: discoveries-schema
-    # Intent: Create the discoveries table in SQLite with full state machine support (mark|capturing|active_spike|findings_ready|promoted_to_story|deferred|invalidated) and all required columns
+    As a Tyrion developer
+    In order to persist spike and mark discoveries across agent sessions
+    I want a discoveries table in SQLite with full state machine support
+
     Given a fresh Tyrion::Store.new(db_path: tmp_path)
     When create_discovery(project_id: id, status: 'mark', question: 'test q') is called
     Then returns hash with non-nil disc-NNN id, status == 'mark', created_at and updated_at present
@@ -22,7 +25,10 @@ Feature: Discovery Layer
     Then 0 failures, 0 errors; test count visibly higher than the previous 24 runs
 
   Scenario: tyrion-mark
-    # Intent: Zero-friction 5-second in-flow bookmark — auto-captures git context and timestamp, creates a [mark] breadcrumb in discoveries table, no interaction beyond the description
+    As a developer mid-flow who notices something worth remembering
+    In order to capture the thought without breaking stride
+    I want to bookmark it instantly with a single command and no prompts
+
     Given the tyrion ledger has an active project
     When tyrion mark "brief description" is run
     Then the command prints a single line [mark] disc-NNN to stdout and exits 0, and store.find_discovery(id) returns status='mark', question='brief description', git_context containing branch, dirty_files (integer), last_commit (SHA)
@@ -31,7 +37,10 @@ Feature: Discovery Layer
     Then the command prints an error message to stdout and exits without creating any discovery row
 
   Scenario: tyrion-discover
-    # Intent: ~30-second organic capture prompting "What were you trying to do?" + "What did you find?"; auto-captures git context and recently-touched files; creates discovery in findings_ready immediately; asks "Spec this out now?"
+    As a developer who just stumbled on an unexpected finding
+    In order to record what I was trying to do and what I actually discovered
+    I want a 30-second capture flow that creates a findings_ready discovery with git context
+
     Given the tyrion ledger has an active project
     When tyrion discover is run with stdin providing "testing authentication flow" then "JWT expiry not refreshed on activity"
     Then a discovery is created with status='findings_ready', question='testing authentication flow', finding='JWT expiry not refreshed on activity', git_context containing branch, dirty_files (integer), last_commit (SHA), and touched_files (array of recently-touched file paths), and stdout contains [findings_ready] disc-NNN
@@ -43,7 +52,10 @@ Feature: Discovery Layer
     Then the command exits after printing [findings_ready] disc-NNN with no promote suggestion in stdout
 
   Scenario: tyrion-spike-start
-    # Intent: Frame a known unknown with question, optional hypothesis, and exit criteria ("what does success produce?"); creates discovery in active_spike; enforces one active spike per project
+    As a developer facing a known unknown before committing to an approach
+    In order to frame and track my investigation with a clear question and exit criteria
+    I want to create an active_spike discovery that enforces one investigation at a time
+
     Given the tyrion ledger has an active project with no existing active_spike discovery
     When tyrion spike start "Can concurrent writes cause scan duplication?" is run with stdin providing hypothesis and exit_criteria
     Then a discovery is created with status='active_spike', question matching the argument, hypothesis and exit_criteria matching stdin inputs, git_context captured, and stdout prints [active_spike] disc-NNN
@@ -55,7 +67,10 @@ Feature: Discovery Layer
     Then a discovery is created with status='active_spike', question='question', hypothesis=nil, exit_criteria=nil, and stdout prints [active_spike] disc-NNN
 
   Scenario: tyrion-spike-done
-    # Intent: Close the active spike by capturing key finding (one paragraph max), confidence (high|medium|low), and recommendation; transitions discovery from active_spike to findings_ready
+    As a developer who has completed a spike investigation
+    In order to record my findings with an appropriate confidence level and actionable recommendation
+    I want to close the active spike and transition it to findings_ready
+
     Given an active_spike discovery exists for the active project
     When tyrion spike done is run with stdin providing finding text, 'high' for confidence, and recommendation text
     Then the discovery status is updated to 'findings_ready', finding/confidence/recommendation fields match inputs, and stdout prints [findings_ready] disc-NNN
@@ -67,7 +82,10 @@ Feature: Discovery Layer
     Then the command completes normally with the valid confidence value stored and stdout prints [findings_ready] disc-NNN
 
   Scenario: tyrion-spike-promote
-    # Intent: Convert a findings_ready discovery to a linked story with LLM-assisted draft acceptance criteria; establishes born_from_discovery traceability field; optionally prompts for story title
+    As a developer with a findings_ready discovery worth building
+    In order to turn a learning into tracked implementation work with full lineage
+    I want to promote the discovery to a linked story with born_from_discovery traceability
+
     Given a findings_ready discovery disc-NNN exists with question='Q?', recommendation='Use mutex'
     When tyrion spike promote disc-NNN is run with stdin providing title 'Concurrent Write Safety'
     Then stdout prints '[promoted] <story-slug> <- disc-NNN'; stdout includes 'tyrion criteria add <story-slug>' with at least one of the discovery's finding or recommendation text pre-filled; store.find_discovery shows status='promoted_to_story'; created story has born_from_discovery='disc-NNN', title='Concurrent Write Safety', intent containing 'Use mutex'
@@ -82,7 +100,10 @@ Feature: Discovery Layer
     Then exits 1, stderr contains 'disc-999' and 'not found', no story created
 
   Scenario: tyrion-discovery-list
-    # Intent: List discoveries filtered by status (active|ready|promoted|deferred|all) and show full detail for a single discovery by id
+    As a developer reviewing my reconnaissance backlog
+    In order to decide what to investigate next, promote to a story, or defer
+    I want to list and filter discoveries by status and inspect individual discoveries in full detail
+
     Given discoveries exist with statuses mark, active_spike, and findings_ready for the active project
     When tyrion discovery list --status ready is run
     Then stdout contains the findings_ready discovery id and question; mark and active_spike discoveries are absent; exits 0
@@ -100,7 +121,10 @@ Feature: Discovery Layer
     Then exits 1, stderr contains bogus and lists the valid aliases active, ready, promoted, deferred, all
 
   Scenario: tyrion-orient-ext
-    # Intent: Extend tyrion status/orient to show a DISCOVERIES section: active spikes, findings_ready items with "→ promote?" prompt, and count of unformalized marks from this session
+    As a developer running tyrion status to orient to the current project
+    In order to see active spikes and findings alongside story progress in one view
+    I want the status output to include a DISCOVERIES section with actionable prompts
+
     Given an active_spike discovery exists for the active project with question='Can cache be shared?'
     When tyrion status is run
     Then stdout contains a DISCOVERIES section header and the spike disc-id and question 'Can cache be shared?'
