@@ -1,0 +1,111 @@
+# frozen_string_literal: true
+
+require 'spec_helper'
+
+RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
+  let(:ctx) do
+    tyrion_worktree(
+      project_slug:  'oriproj',
+      project_name:  'Orient Project',
+      epic_slug:     'ori-epic',
+      epic_name:     'Orient Epic',
+      git_branch:    'main',
+      dirty_count:   0,
+      last_commit:   'deadbeef',
+      touched_files: []
+    )
+  end
+  let(:store)   { ctx.store }
+  let(:project) { ctx.project }
+
+  # criterion 1 — active_spike discovery appears in DISCOVERIES section
+  context 'criterion 1 — active_spike discovery shows in DISCOVERIES section' do
+    it 'includes DISCOVERIES heading, discovery id, and question text' do
+      disc = store.create_discovery(
+        project_id: project['id'],
+        status:     'active_spike',
+        question:   'Can cache be shared?'
+      )
+
+      out, = capture_io { Tyrion::Commands.cmd_status([], store) }
+
+      expect(out).to include('DISCOVERIES')
+      expect(out).to include(disc['id'])
+      expect(out).to include('Can cache be shared?')
+    end
+  end
+
+  # criterion 2 — findings_ready discovery shows promote hint
+  context 'criterion 2 — findings_ready discovery shows tyrion spike promote hint' do
+    it 'includes the discovery id and the promote command hint' do
+      disc = store.create_discovery(
+        project_id: project['id'],
+        status:     'findings_ready',
+        question:   'Is Redis faster than memcached?'
+      )
+
+      out, = capture_io { Tyrion::Commands.cmd_status([], store) }
+
+      expect(out).to include(disc['id'])
+      expect(out).to include("tyrion spike promote #{disc['id']}")
+    end
+  end
+
+  # criterion 3 — mark discoveries show aggregate count substring
+  context 'criterion 3 — mark discoveries show aggregate count in status output' do
+    it 'includes "2 unformalized mark" when two mark discoveries exist' do
+      2.times do |i|
+        store.create_discovery(
+          project_id: project['id'],
+          status:     'mark',
+          question:   "Mark note #{i}"
+        )
+      end
+
+      out, = capture_io { Tyrion::Commands.cmd_status([], store) }
+
+      expect(out).to include('2 unformalized mark')
+    end
+  end
+
+  # criterion 4 — no discoveries means no DISCOVERIES section
+  context 'criterion 4 — no discoveries means DISCOVERIES section is absent' do
+    it 'does not include DISCOVERIES when project has no discoveries' do
+      out, = capture_io { Tyrion::Commands.cmd_status([], store) }
+
+      expect(out).not_to include('DISCOVERIES')
+    end
+  end
+
+  # criterion 5 — mixed discovery types all appear correctly
+  context 'criterion 5 — mixed discovery types all render in status output' do
+    it 'shows all discovery ids, questions, promote hint, and mark count' do
+      spike_disc = store.create_discovery(
+        project_id: project['id'],
+        status:     'active_spike',
+        question:   'Q1?'
+      )
+      findings_disc = store.create_discovery(
+        project_id: project['id'],
+        status:     'findings_ready',
+        question:   'Q2?'
+      )
+      2.times do |i|
+        store.create_discovery(
+          project_id: project['id'],
+          status:     'mark',
+          question:   "Mark #{i}"
+        )
+      end
+
+      out, = capture_io { Tyrion::Commands.cmd_status([], store) }
+
+      expect(out).to include('DISCOVERIES')
+      expect(out).to include(spike_disc['id'])
+      expect(out).to include('Q1?')
+      expect(out).to include(findings_disc['id'])
+      expect(out).to include("tyrion spike promote #{findings_disc['id']}")
+      expect(out).to include('2 unformalized mark')
+    end
+  end
+end
