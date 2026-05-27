@@ -173,13 +173,201 @@ tyrion spike promote <disc-id>   Promote finding → story
 
 Tyrion is built on one principle: **if the tool requires discipline to use, it's already lost**.
 
-Most project tracking fails not because developers don't care — but because the tool is in the way when it matters most. Every `tyrion note`, every `tyrion context`, every `tyrion next` you have to remember to run is a place where the ledger goes stale.
+The CLI is complete and scriptable — every command does one thing precisely. But remembering to run `tyrion note`, `tyrion context`, and `tyrion next` at the right moment is exactly the kind of discipline that evaporates at 2am mid-sprint. Every forgotten step is the ledger going stale.
 
-The answer is the companion **Claude Code skills** — `/tyrion-implement`, `/tyrion-shape`, `/tyrion-new`. These aren't wrappers around the CLI; they're the intelligence layer that runs it for you. `/tyrion-implement` orchestrates an entire story: it claims the work, spawns focused subagents per criterion, logs evidence automatically, checks criteria as they're met, updates context and next-action after every step, and runs the quality gate before closing. You don't have to remember the protocol — the skill enforces it.
+The answer is the **Claude Code skills** layer. Seven skills that orchestrate the CLI so you don't have to. The CLI is the engine. The skills are the driver. Every rough edge that surfaces in real use gets folded back in — Tyrion gets easier over time, which is the opposite of how most tools work.
 
-The CLI is the engine. The skills are the driver.
+---
 
-Every rough edge that surfaces — an extra command that could be eliminated, a step that could be inferred — gets folded back into the skills. That's the loop: friction is found in real use, then removed. Tyrion gets easier the more you use it, which is the opposite of how most tools work.
+## The skills
+
+Seven skills, one coherent workflow. Each one calls the CLI commands you'd otherwise forget.
+
+### The natural sequence
+
+```
+/tyrion-orient     → start of any session — where are we?
+/tyrion-new        → bootstrap a project from scratch
+/tyrion-shape      → turn documents into stories
+/tyrion-import     → load a reviewed feature file into the DB
+/tyrion-add-story  → add one story mid-epic
+/tyrion-implement  → implement a story, start to finish
+/tyrion-checkpoint → save state before /compact or session end
+```
+
+---
+
+### `/tyrion-orient` — session start
+
+```
+/tyrion-orient
+```
+
+Read-only. No mutations. Answers "where are we?" at the top of any session.
+
+```bash
+tyrion init          # ensure this repo is registered
+tyrion status        # plan view: project + epic + stories + git state
+tyrion resume        # if a story is in_progress: context dump, next action, recent notes
+```
+
+---
+
+### `/tyrion-new` — bootstrap a project in one shot
+
+```
+/tyrion-new
+```
+
+Answer seven questions (project slug, name, description, epic slug, name, intent, first stories). The skill handles the rest:
+
+```bash
+tyrion init
+tyrion status
+tyrion project new <slug> "Name"
+tyrion project activate <slug>
+# writes .tyrion/projects/<slug>/ABOUT.md
+# writes features/<epic-slug>.feature with first stories
+tyrion import features/<epic-slug>.feature
+tyrion epic activate <epic-slug>
+tyrion status                          # verify: project + epic + stories live
+```
+
+One conversation → registered project, imported stories, ready to implement.
+
+---
+
+### `/tyrion-shape` — turn documents into stories
+
+```
+/tyrion-shape --from PRD.md research-notes.md
+```
+
+Feed it any documents — PRDs, brainstorm transcripts, meeting notes, scored scenario tables. The skill reads them, extracts project ABOUT material, epic intent, and stories with criteria, writes drafts for human review, then imports on approval.
+
+```bash
+tyrion init
+tyrion status
+# reads all --from docs
+# writes .tyrion/projects/<slug>/ABOUT.md  (shows diff if it already exists)
+# writes features/<epic-slug>.feature
+# shows full draft inline → awaits "yes / edit: <feedback> / abort"
+tyrion import features/<epic-slug>.feature   # only runs on "yes"
+tyrion status
+```
+
+Vague scenarios get `# TODO: criteria` markers — sharpened interactively during `/tyrion-implement` step 4, when the implementation context makes the right criteria obvious.
+
+---
+
+### `/tyrion-import` — deterministic loader
+
+```
+/tyrion-import
+```
+
+The focused version of shape's import step — for when you've already reviewed or edited the `.feature` file manually.
+
+```bash
+tyrion init
+tyrion import features/<epic-slug>.feature
+tyrion epic activate <epic-slug>
+tyrion status
+```
+
+Safe to re-run on the same file. Idempotent by SHA256 hash; use `--force` when only non-story content changed.
+
+---
+
+### `/tyrion-add-story` — one story, mid-epic
+
+```
+/tyrion-add-story
+```
+
+Describe a story in plain language. The skill writes the scenario into the existing feature file, shows it for approval, and imports:
+
+```bash
+tyrion show <epic-slug>                       # reads current epic context
+# writes new Scenario block into features/<epic-slug>.feature
+# shows the new scenario inline → awaits approval
+tyrion import features/<epic-slug>.feature --force
+tyrion status
+```
+
+---
+
+### `/tyrion-implement` — one story, start to finish
+
+```
+/tyrion-implement my-first-story
+/tyrion-implement my-first-story --spike        # exploration, no quality gate
+/tyrion-implement my-first-story --tdd=strict   # failing test must come first
+```
+
+The heavy lifter. Nine steps, fully orchestrated. Here's what it calls:
+
+**Orient + claim:**
+```bash
+tyrion init && tyrion status && tyrion project show && tyrion epic show
+tyrion show <slug>
+tyrion epic activate <epic-slug>   # auto-activates if the story is in a different epic
+tyrion start <slug>                # transactional — refuses if another story is already in_progress
+```
+
+**Resume + plan:**
+```bash
+tyrion resume <slug>               # reads current_context, next_action, unchecked criteria
+tyrion show <slug>
+tyrion criteria add <slug> --given "..." --when "..." --then "..."   # if criteria need sharpening
+tyrion note <slug> plan "<implementation plan>"
+tyrion next <slug> "<first concrete action>"
+```
+
+**Per-criterion loop** (spawns a fresh subagent per criterion):
+```bash
+# Continuous capture — before anything else on each turn
+tyrion note <slug> progress "user requested: <exact request verbatim>"
+
+# After the criterion is implemented:
+tyrion note <slug> progress "<files changed, verbatim test output>"
+tyrion check <slug> <position> "<evidence — test command + verbatim output>"
+tyrion context <slug> "<what's done, what's pending>"
+tyrion next <slug> "<next concrete action>"
+```
+
+**UAT runbook + quality gate + close:**
+```bash
+tyrion note <slug> handoff "<per-criterion runbook: exact commands + expected output>"
+# /pre-push  (build/strict modes — tests + code review + docs + AI slop check)
+tyrion done <slug> "<completion summary>"
+tyrion status
+```
+
+Every step that a human would forget — logging the note, updating context, checking the criterion with evidence — the skill runs automatically. The story closes with a complete, re-verifiable evidence trail.
+
+---
+
+### `/tyrion-checkpoint` — save state before clearing context
+
+```
+/tyrion-checkpoint
+```
+
+An interrupt, not a lifecycle step. Run before `/compact`, `/clear`, or ending a session mid-story. Persists everything so the next agent can resume exactly.
+
+```bash
+tyrion resume <slug>               # read what's currently understood
+tyrion note <slug> progress "<what was just done>"
+tyrion context <slug> "<current state>"
+tyrion next <slug> "<where to start next session>"
+# if criteria were just met but not checked:
+tyrion check <slug> <position> "<evidence>"
+```
+
+The next session runs `/tyrion-orient`, reads the checkpoint, and picks up without re-explaining anything.
+
+---
 
 Tyrion was built during a SDRD session, when the handoff-doc problem became painful enough that building the solution was the right next spike. A tool born from its own use case, running the realm it was built for.
 
