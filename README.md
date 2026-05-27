@@ -2,7 +2,7 @@
 
 ![Tyrion — Small. Excellent. Running the realm.](assets/tyrion_hero.png)
 
-> *"I drink and I know things."* — Tyrion Lannister, Hand of the King
+> *"I drink and I know things."* — Tyrion Lannister, Hand of King and Queen
 
 **Small. Excellent. Running the realm.**
 
@@ -173,7 +173,13 @@ tyrion spike promote <disc-id>   Promote finding → story
 
 Tyrion is built on one principle: **if the tool requires discipline to use, it's already lost**.
 
-Most project tracking fails not because developers don't care — but because the tool is in the way when it matters most. Tyrion stays out of the way. The CLI and companion Claude Code skills work together so every common path — claiming a story, logging progress, handing off to a fresh agent — costs the minimum possible friction.
+Most project tracking fails not because developers don't care — but because the tool is in the way when it matters most. Every `tyrion note`, every `tyrion context`, every `tyrion next` you have to remember to run is a place where the ledger goes stale.
+
+The answer is the companion **Claude Code skills** — `/tyrion-implement`, `/tyrion-shape`, `/tyrion-new`. These aren't wrappers around the CLI; they're the intelligence layer that runs it for you. `/tyrion-implement` orchestrates an entire story: it claims the work, spawns focused subagents per criterion, logs evidence automatically, checks criteria as they're met, updates context and next-action after every step, and runs the quality gate before closing. You don't have to remember the protocol — the skill enforces it.
+
+The CLI is the engine. The skills are the driver.
+
+Every rough edge that surfaces — an extra command that could be eliminated, a step that could be inferred — gets folded back into the skills. That's the loop: friction is found in real use, then removed. Tyrion gets easier the more you use it, which is the opposite of how most tools work.
 
 Tyrion was built during a SDRD session, when the handoff-doc problem became painful enough that building the solution was the right next spike. A tool born from its own use case, running the realm it was built for.
 
