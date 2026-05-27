@@ -4,12 +4,7 @@ require 'spec_helper'
 
 RSpec.describe 'Tyrion::Commands.cmd_spike_done' do
   let(:ctx) do
-    tyrion_worktree(
-      git_branch:    'feature/scan-worker',
-      dirty_count:   0,
-      last_commit:   'deadbeef',
-      touched_files: []
-    )
+    tyrion_worktree(git_branch: 'feature/scan-worker')
   end
   let(:store) { ctx.store }
 
@@ -21,7 +16,6 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_done' do
     )
   end
 
-  # Criterion 1 — happy path
   context 'criterion 1 — active_spike exists, valid inputs provided' do
     let(:output) { StringIO.new }
 
@@ -30,12 +24,13 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_done' do
       Tyrion::Commands.cmd_spike_done([], store, input: input, output: output)
     end
 
+    let(:disc_id) { output.string[/\[findings_ready\] (disc-\d+)/, 1] }
+
     it 'prints [findings_ready] disc-NNN' do
       expect(output.string).to match(/\[findings_ready\] disc-\d+/)
     end
 
     it 'updates the discovery to findings_ready with correct fields' do
-      disc_id = output.string.match(/\[findings_ready\] (disc-\d+)/)[1]
       disc = store.find_discovery(disc_id)
       expect(disc).not_to be_nil
       expect(disc['status']).to eq 'findings_ready'
@@ -45,12 +40,11 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_done' do
     end
   end
 
-  # Criterion 2 — no active spike
   context 'criterion 2 — no active_spike exists for the active project' do
     let(:other) { store.create_project(slug: 'other', name: 'Other') }
 
     before do
-      other # ensure project is created
+      other
       stub_repo(active_project: 'other', active_epic: nil)
     end
 
@@ -59,11 +53,10 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_done' do
         expect { Tyrion::Commands.cmd_spike_done([], store) }.to raise_error(SystemExit)
       end
       expect(err).to match(/[Nn]o active spike/)
-      expect(store.list_discoveries(project_id: other['id'], status: 'findings_ready')).to eq []
+      expect(store.list_discoveries(project_id: ctx.project['id'], status: 'findings_ready')).to eq []
     end
   end
 
-  # Criterion 3 — confidence re-prompt on invalid input
   context 'criterion 3 — invalid confidence values are re-prompted until valid' do
     let(:output) { StringIO.new }
 
@@ -72,12 +65,13 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_done' do
       Tyrion::Commands.cmd_spike_done([], store, input: input, output: output)
     end
 
+    let(:disc_id) { output.string[/\[findings_ready\] (disc-\d+)/, 1] }
+
     it 'prints [findings_ready] disc-NNN after accepting valid confidence' do
       expect(output.string).to match(/\[findings_ready\] disc-\d+/)
     end
 
     it 'stores the valid confidence and other fields correctly' do
-      disc_id = output.string.match(/\[findings_ready\] (disc-\d+)/)[1]
       disc = store.find_discovery(disc_id)
       expect(disc).not_to be_nil
       expect(disc['status']).to eq 'findings_ready'

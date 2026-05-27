@@ -5,20 +5,15 @@ require 'spec_helper'
 RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
   let(:ctx) do
     tyrion_worktree(
-      project_slug:  'oriproj',
-      project_name:  'Orient Project',
-      epic_slug:     'ori-epic',
-      epic_name:     'Orient Epic',
-      git_branch:    'main',
-      dirty_count:   0,
-      last_commit:   'deadbeef',
-      touched_files: []
+      project_slug: 'oriproj',
+      project_name: 'Orient Project',
+      epic_slug:    'ori-epic',
+      epic_name:    'Orient Epic'
     )
   end
   let(:store)   { ctx.store }
   let(:project) { ctx.project }
 
-  # criterion 1 — active_spike discovery appears in DISCOVERIES section
   context 'criterion 1 — active_spike discovery shows in DISCOVERIES section' do
     it 'includes DISCOVERIES heading, discovery id, and question text' do
       disc = store.create_discovery(
@@ -35,7 +30,6 @@ RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
     end
   end
 
-  # criterion 2 — findings_ready discovery shows promote hint
   context 'criterion 2 — findings_ready discovery shows tyrion spike promote hint' do
     it 'includes the discovery id and the promote command hint' do
       disc = store.create_discovery(
@@ -51,7 +45,6 @@ RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
     end
   end
 
-  # criterion 3 — mark discoveries show aggregate count substring
   context 'criterion 3 — mark discoveries show aggregate count in status output' do
     it 'includes "2 unformalized mark" when two mark discoveries exist' do
       2.times do |i|
@@ -68,7 +61,6 @@ RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
     end
   end
 
-  # criterion 4 — no discoveries means no DISCOVERIES section
   context 'criterion 4 — no discoveries means DISCOVERIES section is absent' do
     it 'does not include DISCOVERIES when project has no discoveries' do
       out, = capture_io { Tyrion::Commands.cmd_status([], store) }
@@ -77,7 +69,6 @@ RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
     end
   end
 
-  # criterion 5 — mixed discovery types all appear correctly
   context 'criterion 5 — mixed discovery types all render in status output' do
     it 'shows all discovery ids, questions, promote hint, and mark count' do
       spike_disc = store.create_discovery(

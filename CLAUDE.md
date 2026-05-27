@@ -58,7 +58,7 @@ Status aliases for `tyrion discovery list --status`: `active`→`active_spike`, 
 
 **Schema migrations** — new columns use the `MIGRATIONS` constant (array of `[name, lambda]` pairs in `store.rb`), not raw `ALTER TABLE` in `setup_db`. The lambda checks `PRAGMA table_info` before altering so it's idempotent.
 
-**Default DB path** — `~/cultiv-os/cabinet/tyrion/tyrion.db`, overridable via `TYRION_DB_PATH` env var (`spec_helper.rb` sets this to a tmp path so specs never touch the real ledger). Always pass explicit `db_path:` to `Store.new` in specs (the `tyrion_worktree` helper does this automatically).
+**Default DB path** — `~/.tyrion/tyrion.db`, overridable via `TYRION_DB_PATH` env var (`spec_helper.rb` sets this to a tmp path so specs never touch the real ledger). Always pass explicit `db_path:` to `Store.new` in specs (the `tyrion_worktree` helper does this automatically).
 
 ### Test conventions (RSpec)
 

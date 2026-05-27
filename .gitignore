@@ -8,3 +8,10 @@ db/*.db-shm
 
 # tyrion worktree state
 .tyrion/
+
+# local scratch / tooling dirs (not part of the gem)
+.omx/
+.serena/
+demo/
+docs/
+DISCOVERY_LAYER.md

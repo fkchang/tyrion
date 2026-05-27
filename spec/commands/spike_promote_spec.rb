@@ -5,16 +5,12 @@ require 'spec_helper'
 RSpec.describe 'Tyrion::Commands.cmd_spike_promote' do
   let(:ctx) do
     tyrion_worktree(
-      epic_slug:     'discovery-layer',
-      git_branch:    'feature/spike-promote',
-      dirty_count:   0,
-      last_commit:   'deadbeef',
-      touched_files: []
+      epic_slug:  'discovery-layer',
+      git_branch: 'feature/spike-promote'
     )
   end
   let(:store) { ctx.store }
 
-  # Criterion 1 — findings_ready discovery promoted to story with title input
   context 'criterion 1 — findings_ready discovery exists, title provided' do
     let(:output) { StringIO.new }
     let(:disc_id) do
@@ -41,11 +37,8 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_promote' do
       expect(output.string).to include('tyrion criteria add')
     end
 
-    it 'includes finding or recommendation text in output' do
-      expect(
-        output.string.include?('Concurrent writes conflict') ||
-        output.string.include?('Use mutex')
-      ).to be true
+    it 'includes the finding text in output' do
+      expect(output.string).to include('Concurrent writes conflict')
     end
 
     it "updates discovery status to 'promoted_to_story'" do
@@ -62,7 +55,6 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_promote' do
     end
   end
 
-  # Criterion 2 — blank title defaults to question
   context 'criterion 2 — blank title input defaults to discovery question' do
     let(:output) { StringIO.new }
     let(:disc_id) do
@@ -92,7 +84,6 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_promote' do
     end
   end
 
-  # Criterion 3 — non-findings_ready discovery is rejected
   context "criterion 3 — discovery status is 'active_spike' (not findings_ready)" do
     let(:disc_id) do
       disc = store.create_discovery(
@@ -108,22 +99,15 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_promote' do
         expect { Tyrion::Commands.cmd_spike_promote([disc_id], store) }.to raise_error(SystemExit)
       end
       expect(err).to match(/#{Regexp.escape(disc_id)}/)
-      expect(err).to match(/findings_ready/)
+      expect(err).to include('findings_ready')
     end
 
     it 'creates no story in the active epic' do
-      capture_io do
-        begin
-          Tyrion::Commands.cmd_spike_promote([disc_id], store)
-        rescue SystemExit
-          nil
-        end
-      end
+      capture_io { expect { Tyrion::Commands.cmd_spike_promote([disc_id], store) }.to raise_error(SystemExit) }
       expect(store.stories_for_epic(ctx.epic['id'])).to be_empty
     end
   end
 
-  # Criterion 4 — unknown disc-id
   context 'criterion 4 — disc-id does not exist in the DB' do
     it 'exits 1 with stderr containing disc-999 and not found' do
       _out, err = capture_io do
@@ -134,13 +118,7 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_promote' do
     end
 
     it 'creates no story in the active epic' do
-      capture_io do
-        begin
-          Tyrion::Commands.cmd_spike_promote(['disc-999'], store)
-        rescue SystemExit
-          nil
-        end
-      end
+      capture_io { expect { Tyrion::Commands.cmd_spike_promote(['disc-999'], store) }.to raise_error(SystemExit) }
       expect(store.stories_for_epic(ctx.epic['id'])).to be_empty
     end
   end
