@@ -19,12 +19,6 @@ ruby bin/tyrion status
 ruby bin/tyrion help
 ```
 
-**During Minitest→RSpec migration** (both suites run in pre-push until all test_*.rb files are deleted):
-```bash
-# Legacy Minitest suite
-ruby -Ilib -e 'Dir["test/test_*.rb"].each { |f| require File.expand_path(f) }; require "minitest/autorun"'
-```
-
 Note: `ruby bin/tyrion` is used during development. When installed as a gem, `tyrion` is on PATH.
 
 ## Architecture
@@ -94,8 +88,6 @@ out, = capture_io { Commands.cmd_mark(['desc'], store) }
 disc_id = out[/\[mark\] (disc-\d+)/, 1]
 expect(store.find_discovery(disc_id)['question']).to eq 'desc'
 ```
-
-**Minitest tests** in `test/test_*.rb` are still present during migration and use the legacy `define_singleton_method` + `remove_method` pattern documented in those files. Do not write new tests in `test/` — add specs to `spec/` instead.
 
 ### Workflow: feature file → DB
 
