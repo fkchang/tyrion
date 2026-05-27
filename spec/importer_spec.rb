@@ -52,7 +52,6 @@ RSpec.describe Tyrion::Importer do
     path
   end
 
-  # Force ctx and feature_path to be created before each example
   before { feature_path }
 
   # ── Helpers ────────────────────────────────────────────────────────────────

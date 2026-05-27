@@ -3,16 +3,8 @@
 require 'digest'
 
 module Tyrion
-  # Importer — parse a Gherkin .feature file and upsert epics/stories/criteria.
   module Importer
-    SEMANTIC_KIND = {
-      'Given' => 'given',
-      'When'  => 'when',
-      'Then'  => 'then',
-      'And'   => nil, # resolved by context
-      'But'   => nil,
-      '*'     => nil
-    }.freeze
+    NARRATIVE_PREFIXES = ['As a ', 'As an ', 'In order to ', 'I want ', 'I would like '].freeze
 
     def self.run(args, store)
       confirm_abandon = args.delete('--confirm-abandon')
@@ -120,7 +112,7 @@ module Tyrion
         next if stripped.start_with?('#') || stripped.empty?
         next unless current_scenario
 
-        if stripped.match?(/\A(As an? |In order to |I want |I would like )/i)
+        if NARRATIVE_PREFIXES.any? { |p| stripped.start_with?(p) }
           current_scenario[:narrative] << stripped
           next
         end
@@ -149,9 +141,7 @@ module Tyrion
 
     def self.finalize_scenario(scenario)
       return unless scenario
-      if scenario[:intent].nil? && scenario[:narrative].any?
-        scenario[:intent] = scenario[:narrative].join(' ')
-      end
+      scenario[:intent] ||= scenario[:narrative].join("\n") unless scenario[:narrative].empty?
       scenario
     end
 
