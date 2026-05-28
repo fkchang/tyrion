@@ -22,7 +22,7 @@ Bridge skill: convert human inputs to Tyrion draft files. Writes drafts to disk,
 
 ## BRANCH A — `--from <docs...>` (Ingestion)
 
-Use when the user has existing documents: PRDs, scored scenario tables, narrative memos, brainstorm transcripts.
+Use when the user has existing documents: PRDs, scored scenario tables, narrative memos, brainstorm transcripts, Claude-written implementation plans.
 
 ### Step 1: Read all docs
 
@@ -38,29 +38,76 @@ tyrion status        # see what's already registered
 
 Determine project from: `--project` flag, active project, or ask. Determine epic from: `--epic` flag, or ask if ambiguous.
 
-### Step 3: Extract from the docs
+### Step 3: Comprehend and extract
 
-Pull out four types of content:
+**Plans come in many shapes.** A Claude-generated plan might use numbered sections, prose paragraphs, bullet lists, tables, or a mix. Don't pattern-match against a specific format — read and understand the document, then normalize what you find into tyrion's structure.
 
-**Project ABOUT material** (for `ABOUT.md`):
-- What is this app? What data does it use?
-- Who are the users and what are their goals?
-- What is the bigger-picture vision and unique value?
-- Key algorithms, signals, or domain concepts
+**What to find (by understanding, not by header name):**
 
-**Epic intent** (one paragraph):
-- What slice of the project does this epic represent?
-- What is the goal of this particular effort?
+**Project context material** — anything that describes what the app is, who uses it, what data it has, what the architecture is. This becomes ABOUT.md and epic context.
 
-**Epic context** (long-form narrative):
-- Detailed supporting material: algorithms, data shapes, query patterns, deferred work, open questions
-- Everything in the source docs that is *not* the story list
+**Cross-cutting concerns** — gotchas, vet results, discoveries, architectural decisions that apply across stories. These go into the epic context sidecar, not story notes.
 
-**Stories** (one per scenario/case/scored row/acceptance bullet):
-- Title: concise, action-oriented
-- Intent: one sentence from the source row or scenario description
-- Criteria: extract Given/When/Then if explicitly present in the docs
-- If no explicit G/W/T, leave a `# TODO: criteria` marker — the implement skill fills them at step 4
+**Stories** — any unit of work the plan describes as a discrete deliverable. These might appear as:
+- Numbered sections (`### S3 — Service Layer`)
+- Prose paragraphs ("Next we need a controller that...")
+- Bullet lists ("Stories: seed data, migration, service layer...")
+- A table of tasks
+- Implicit in a file map ("we'll need these new files...")
+
+**Visual/prototype sources — detect before extracting stories:**
+
+Before reading the story list, check whether the docs reference or you can locate any visual source:
+- Running prototype app (Sinatra, Rails, etc.) — note its path/port
+- Template files from a prototype directory (ERB, Haml, JSX, etc.)
+- Figma URLs, exported screenshots, StreamWeaver outputs
+
+If a visual source exists:
+1. Add a `PROTOTYPE:` line to the epic context_md:
+   ```
+   PROTOTYPE: <path or URL>
+   All UI stories must match this prototype. Before implementing any view, open the
+   prototype, navigate to the relevant page, and use what you see as the visual spec —
+   not just the text description in the plan.
+   ```
+2. For each UI story (views, components, tabs, nav), find the corresponding prototype template and **embed its source verbatim in the story's plan note** — not a pointer, the actual content. An agent implementing `AccountUserRow` needs to see `_user_table_row.erb`, not read "renders a table row." The prototype template IS the visual spec.
+
+For each story, extract:
+- **Title** — what it's called, in a few words
+- **Slug** — kebab-case from title; use explicit `Tyrion-slug:` if present
+- **Intent (Why)** — the reason this story exists; may be labeled `Why:`, `Purpose:`, or embedded in prose
+- **Criteria** — Given/When/Then if present; bullet-form acceptance conditions; or derive from the plan's description of what "done" looks like. Leave `# TODO: criteria` only if genuinely absent.
+- **Implementation body** — everything the plan says about HOW: file paths, code blocks, patterns, gotchas specific to this story. Capture it verbatim where possible. **For UI stories: include the relevant prototype template source verbatim.**
+
+**File maps** — any list of new/modified files the plan provides. Goes into epic context.
+
+**Deferred items** — things the plan explicitly excludes. Goes into epic context.
+
+### Step 3b: Rigor + batching detection
+
+**Do this for every story after extraction, before writing anything.**
+
+This is a judgment call based on understanding the work — not keyword matching. Ask yourself: *what does this story actually require?*
+
+**TRIVIAL** — implement directly, no subagents, no pre-push:
+
+The work is mechanical and fully specified. A careful developer could do it by reading the plan once. Examples: seeding dev data, adding an index, adding a tab to a nav constant, swapping an inline nav for a component, any change where the plan gives you the exact code and there's no logic to invent.
+
+**LOOSE** — tests encouraged, pre-push required:
+
+Framework plumbing: controllers, views, routes, standard CRUD. The plan specifies structure and behavior but the implementation requires knowing Rails/Phlex conventions. Tests make sense but aren't the core value.
+
+**STRICT** — failing test must come first:
+
+Novel logic that could be wrong in subtle ways: business rules, classification algorithms, numeric computations, data transformations. The plan may give you the rules, but the implementation has enough degrees of freedom that tests are the only reliable way to know it's right.
+
+**The test:** could this break silently with a plausible-looking but wrong implementation? If yes → strict. If the only way to be wrong is to not read the plan → trivial. Everything else → loose.
+
+**BATCHING** — how many subagents should implement this story?
+
+One story may contain multiple independent units of work. Identify natural seams: separate classes, separate views, separate behaviors. Each seam is a batch. Record: `"criteria 1-4 (ClassName A), criteria 5-7 (ClassName B)"`. If it's one cohesive unit, one batch.
+
+Record all decisions. They go into the ledger after import (Step 5b) and are shown in the draft review.
 
 ### Step 4: Write draft files
 
@@ -85,21 +132,38 @@ Feature: <epic name>
   Background:
     <any shared setup or domain context>
 
-  Scenario: <story title>
-    # TODO: criteria — fill during /tyrion-implement step 4
+  Scenario: <story-slug>
     # Intent: <one sentence from source>
-
-  Scenario: <next story title>
+    # RIGOR: trivial|loose|strict — <one-phrase rationale>
     Given <precondition>
     When <action>
     Then <observable outcome>
+
+  Scenario: <next-story-slug>
+    # Intent: <one sentence from source>
+    # RIGOR: loose — standard Rails controller
+    # TODO: criteria — fill during /tyrion-implement step 4
 ```
+
+The `# RIGOR:` comment is written into the feature file so it survives re-imports and is visible to any agent reading the file directly.
 
 **If ABOUT.md already exists**, show a brief diff of what changed — don't silently overwrite.
 
 ### Step 5: Show draft and import on approval
 
-Display the full `.feature` file content inline so the user can review it.
+Display the full `.feature` file content inline so the user can review it. Include the rigor/batching table:
+
+```
+Story rigor summary:
+  dev-data-seed              trivial   rake task, dev-only
+  new-index-migration        trivial   single migration file
+  crm-service-layer          strict    pure Ruby, persona classification logic
+  crm-navigation-accounts-tab trivial  3 file edits, no logic
+  crm-accounts-controller    loose     standard Rails controller
+  crm-phlex-subcomponents    loose     Phlex components, render-only
+  crm-accounts-views         loose     Phlex views, integration
+  crm-engagement-tab         loose     Rails + Phlex, existing file modification
+```
 
 Ask: **"Does this look right? (yes / edit: <what to change> / abort)"**
 
@@ -108,13 +172,25 @@ Ask: **"Does this look right? (yes / edit: <what to change> / abort)"**
   tyrion import features/<slug>.feature [--confirm-abandon if in-progress story exists]
   tyrion status
   ```
-  Then print: "Epic imported. Run `/tyrion-implement` to start building."
+  Then proceed to Step 5b.
 
 - **edit: <feedback>** — apply the requested changes to the draft file, show updated content, ask again.
 
-- **abort** — leave the draft files on disk unchanged. Print their paths so the user can edit manually and run `tyrion import` themselves if they change their mind.
+- **abort** — leave the draft files on disk unchanged. Print their paths so the user can edit manually.
 
 Never import without a "yes". Never require the user to run import manually when the answer is yes.
+
+### Step 5b: Bake rigor + batching + plan sections into the ledger
+
+**After import succeeds**, for each story, run:
+
+```bash
+tyrion note <slug> plan "RIGOR: <trivial|loose|strict>. <one-phrase rationale>. BATCHING: <grouping if applicable>. PLAN: <implementation body summary — key files, patterns, gotchas specific to this story>"
+```
+
+This is the payload that makes `/tyrion-implement` fast. When the implement skill runs `tyrion resume`, it finds RIGOR, BATCHING, and the implementation plan in one note — no file hunting, no re-derivation.
+
+For stories with substantial implementation bodies (code blocks, full file paths), include the full content in the note rather than summarizing — verbatim plan text in the ledger beats a pointer to a file.
 
 ---
 
@@ -179,7 +255,7 @@ Keep it factual and durable — not status updates or sprint notes.
 
 ## Idempotency
 
-Re-running shape with the same `--from` docs and the same project/epic is safe. If the `.feature` and ABOUT.md are unchanged, no files are rewritten (check content before writing). If changed, show the diff.
+Re-running shape with the same `--from` docs and the same project/epic is safe. If the `.feature` and ABOUT.md are unchanged, no files are rewritten. If changed, show the diff.
 
 ---
 

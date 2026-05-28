@@ -98,7 +98,7 @@ module Tyrion
         id          TEXT PRIMARY KEY,
         story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
         kind        TEXT NOT NULL
-                      CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery')),
+                      CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session')),
         body        TEXT NOT NULL,
         metadata    TEXT,
         created_at  TEXT NOT NULL
@@ -589,6 +589,28 @@ module Tyrion
       ['add_born_from_discovery_to_stories', lambda { |db|
         cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
         db.execute('ALTER TABLE stories ADD COLUMN born_from_discovery TEXT REFERENCES discoveries(id) ON DELETE SET NULL') unless cols.include?('born_from_discovery')
+      }],
+      ['add_session_to_story_notes_kind_check', lambda { |db|
+        # SQLite can't ALTER a CHECK constraint — recreate the table with the new allowed values
+        existing = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='story_notes'").first&.fetch('sql', '')
+        next if existing.to_s.include?("'session'")
+        db.execute_batch(<<~SQL)
+          PRAGMA foreign_keys = OFF;
+          ALTER TABLE story_notes RENAME TO story_notes_old;
+          CREATE TABLE story_notes (
+            id          TEXT PRIMARY KEY,
+            story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            kind        TEXT NOT NULL
+                          CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session')),
+            body        TEXT NOT NULL,
+            metadata    TEXT,
+            created_at  TEXT NOT NULL
+          );
+          INSERT INTO story_notes SELECT * FROM story_notes_old;
+          DROP TABLE story_notes_old;
+          CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
+          PRAGMA foreign_keys = ON;
+        SQL
       }]
     ].freeze
 

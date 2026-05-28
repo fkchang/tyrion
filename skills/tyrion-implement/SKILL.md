@@ -3,38 +3,46 @@ name: tyrion-implement
 description: Use when implementing a Tyrion story. Triggered by phrases like "implement story", "work scenario", "resume implementation", "/tyrion-implement", or when starting or continuing a coding session on a tracked project. This is the killer skill — it owns agent discipline for the entire implementation loop.
 ---
 
-# /tyrion-implement v0.2
+# /tyrion-implement v0.3
 
 Tyrion-aware implementation loop for one story. Follows a 9-step protocol in strict order — no skipping.
 
 ## Invocation
 
 ```
-/tyrion-implement [slug] [--spike | --tdd=strict|loose|off] [--review] [--no-prepush]
+/tyrion-implement [slug] [--spike | --trivial | --tdd=strict|loose|off] [--review] [--no-prepush] [--plan=<path>]
 ```
 
 ### Modes
 
-| Mode | Flag | TDD | Pre-push | When to use |
-|---|---|---|---|---|
-| **Spike** | `--spike` | off | skipped | Exploring — no test infra expected, discovery-first |
-| **Build** | *(default)* | loose | required | Building to keep — tests encouraged, quality gate active |
-| **Strict** | `--tdd=strict` | strict | required | Production-grade — failing test must come first |
+| Mode | Flag | TDD | Pre-push | Subagents | When to use |
+|---|---|---|---|---|---|
+| **Trivial** | `--trivial` | off | skipped | none — orchestrator implements directly | Mechanical edits: nav tweaks, rake tasks, simple migrations, throwaway dev tooling |
+| **Spike** | `--spike` | off | skipped | per-batch | Exploring — no test infra expected, discovery-first |
+| **Build** | *(default)* | loose | required | per-batch | Building to keep — tests encouraged, quality gate active |
+| **Strict** | `--tdd=strict` | strict | required | per-batch | Production-grade — failing test must come first |
 
-`--spike` is shorthand for `--tdd=off --no-prepush`. Use it when you're in SDRD discovery mode and haven't decided whether to keep the work yet.
+`--trivial` — orchestrator implements all criteria directly, no subagent spawning, no UAT runbook, no pre-push. Use for edits where the right answer is obvious from the plan and ceremony costs more than the change.
 
-**To promote a spike to a keeper:** re-run `/tyrion-implement <slug>` (no `--spike`) after the story is done. It will apply the quality gate retroactively.
+`--spike` is shorthand for `--tdd=off --no-prepush`. Use when in SDRD discovery mode and you haven't decided whether to keep the work yet.
 
-**Fine-grained overrides** (when the named modes aren't quite right):
+**To promote a spike or trivial story to a keeper:** re-run `/tyrion-implement <slug>` (no `--spike`/`--trivial`) after done. It applies the quality gate retroactively.
+
+**Fine-grained overrides:**
 - `--tdd=loose` — tests encouraged but not blocking (Build default)
 - `--no-prepush` — skip pre-push only (keep TDD)
 - `--review` — pause at each step boundary for user steering
+- `--plan=<path>` — explicit plan file; overrides `Plan file:` in epic context_md
 
 **Mode resolution** (first match wins):
-1. `--spike` flag → TDD off + no pre-push
-2. `--tdd=` flag on this invocation
-3. `TYRION_TDD` env var (`strict|loose|off`)
-4. Default: Build mode (TDD loose + pre-push required)
+1. `--trivial` flag → TDD off + no pre-push + orchestrator implements directly
+2. `--spike` flag → TDD off + no pre-push
+3. `--tdd=` flag on this invocation
+4. `TYRION_TDD` env var (`strict|loose|off`)
+5. **`RIGOR:` tag in story's `[plan]` notes** (set by `/tyrion-shape` at import time) → maps trivial/loose/strict automatically
+6. Default: Build mode (TDD loose + pre-push required)
+
+The RIGOR tag is the zero-friction path: when `/tyrion-shape` ingested the plan, it already assessed each story. Read it in Step 3 and act on it — never ask the user to specify a mode that shape already decided.
 
 ---
 
@@ -51,13 +59,32 @@ tyrion epic show     # read the epic intent + context_md if present
 
 Read all output carefully before proceeding. The ABOUT.md and epic context define the frame — implementation decisions should stay consistent with them.
 
-**Announce the active mode now** — one line, prominently, before anything else:
+**Visual/prototype check — do this before Step 2:**
 
+If the epic context_md contains a `PROTOTYPE:` line, or if the story's `[plan]` note contains a prototype template source:
+
+- The prototype is the visual spec. Text descriptions in the plan are supplementary — they describe structure. The prototype shows what it should actually look like and how it should behave.
+- For UI stories (views, components, tabs, nav): you must look at the prototype before writing any code. Navigate to the relevant page/view in the running app (or read the template source in the plan note). What you see is what you're building.
+- If the plan note contains the prototype template source verbatim, read it now and treat it as the primary implementation reference — not a hint, the actual target.
+- A story that passes tests but looks nothing like the prototype is not done.
+
+**Plan file extraction — do this before Step 2:**
+
+If the epic context_md contains a `Plan file:` line, OR `--plan=<path>` was passed:
+
+1. Read the plan file now.
+2. Find the section for the current story (match by slug, story number, or title).
+3. Extract and hold: exact file paths, implementation code/pseudocode, gotchas, and any per-criterion implementation notes.
+4. Record: `PLAN_SECTION = <extracted text>` — you will inject this into every subagent prompt in Step 5.
+
+If no plan file is found, proceed normally — you will derive the plan from criteria and epic context in Step 4.
+
+**Announce the active mode now** — one line, prominently:
+
+- Trivial mode: `⚡ TRIVIAL MODE — orchestrator implements directly, no subagents, no pre-push. Fast path for mechanical changes.`
 - Spike mode: `🔬 SPIKE MODE — TDD off, pre-push skipped. Discovery-first. Run /tyrion-implement <slug> (no --spike) when ready to apply quality gates.`
 - Build mode: `🏗 BUILD MODE — TDD loose, pre-push required. Tests encouraged. Quality gate active before close.`
 - Strict mode: `✅ STRICT MODE — TDD strict, pre-push required. Failing test must come first per criterion.`
-
-This keeps both the user and the agent aligned on what gates are active for this run.
 
 If `--review` mode: pause here and report what you found. Wait for user ok before Step 2.
 
@@ -83,6 +110,23 @@ tyrion claim-next        # transactional claim of lowest-sequence pending story
 
 **Remember the slug for the rest of this session.** Every subsequent command uses it.
 
+**Capture session ID immediately after claiming:**
+
+```bash
+# Detect current agent session and record it on the story
+# Claude Code: find most recently modified JSONL for this project
+SESSION_FILE=$(ls -t ~/.claude/projects/-Users-fkchang-work-hedgeye-admin/*.jsonl 2>/dev/null | head -1)
+SESSION_ID=$(basename "$SESSION_FILE" .jsonl)
+tyrion note <slug> session "claude:${SESSION_ID} path:${SESSION_FILE}"
+```
+
+If `TYRION_SESSION_ID` env var is set (set by Codex, Gemini, or other agents), use that instead:
+```bash
+tyrion note <slug> session "${TYRION_AGENT:-claude}:${TYRION_SESSION_ID}"
+```
+
+This links the story to the transcript that built it. Postmortem: `tyrion show <slug>` → find the session note → read the JSONL for the full decision trail.
+
 ---
 
 ### 3. RESUME-STATE SANITY
@@ -93,12 +137,16 @@ Ground yourself in reality before touching any code.
 tyrion resume <slug>
 ```
 
+**Never query the tyrion SQLite DB directly.** The schema is internal and changes without notice. Everything you need is available through tyrion CLI commands — `tyrion resume`, `tyrion show`, `tyrion status`. If a CLI command doesn't surface what you need, that's a gap to note, not a reason to reach for sqlite3.
+
 Read the output carefully:
 - `current_context` — what was understood last time
 - `next_action` — what was planned next
-- recent notes — what actually happened
+- recent notes — what actually happened; **look for `[plan]` notes — these contain `RIGOR:`, `BATCHING:`, and `PLAN:` set by `/tyrion-shape`. Read them now and lock in the mode before Step 4.**
 - unchecked criteria — what still needs to be done
 - git branch, worktree path, dirty-file count — ground truth
+
+**If a `[plan]` note contains `RIGOR: trivial` → switch to trivial mode now, no override needed. If `RIGOR: strict` → switch to strict. If `RIGOR: loose` → stay in build mode. This is the decision `/tyrion-shape` already made from the plan — don't re-derive it.**
 
 **If the worktree shows partial edits inconsistent with `current_context`:**
 
@@ -118,15 +166,18 @@ Do not proceed to implementation until context and reality are aligned.
 tyrion show <slug>   # read full story: intent, criteria, notes
 ```
 
-**If the story has no criteria yet** (TODO markers left by `/tyrion-shape`):
-
-Propose criteria from the story's title, intent, and epic context. Write them BEFORE any code:
+**If a PLAN_SECTION was extracted in Step 1:** use it as the primary implementation plan. Extract file paths, code structure, and gotchas from it. Record the plan in a single note:
 
 ```bash
-tyrion criteria add <slug> \
-  --given "the precondition that must be true" \
-  --when "the action the user or system takes" \
-  --then "the observable outcome that proves success"
+tyrion note <slug> plan "Using plan file section: <1-2 sentence summary of what it specifies>"
+tyrion next <slug> "<first concrete action from the plan>"
+```
+
+**If no plan file exists:** derive the plan from criteria, epic context, and existing code. Write it as ≤5 sentences:
+
+```bash
+tyrion note <slug> plan "<your derived implementation plan>"
+tyrion next <slug> "<first concrete action>"
 ```
 
 **Criteria sharpness check — apply to every criterion (new or existing):**
@@ -135,10 +186,8 @@ Each criterion must contain a *verifiable assertion* — something a human or sc
 
 - VAGUE: `Then they see who engaged`
 - SHARP: `Then GET /priority returns HTTP 200 with at least one account row containing name and score fields`
-- VAGUE: `Then the report is generated`
-- SHARP: `Then stdout contains "Rows: N" and "Columns: col1, col2" and exits 0`
 
-A criterion is sharp if you can write the UAT runbook step for it (Step 7.5) before writing a single line of code. If you cannot, it is not sharp enough.
+A criterion is sharp if you can write the UAT runbook step (Step 7.5) before writing any code. If you cannot, it is not sharp enough.
 
 **HARD STOP — criterion sharpness is a requirements decision, not a mechanical fix:**
 
@@ -148,80 +197,70 @@ If any criterion is vague, **do not edit any file and do not write any code.** I
 2. Propose a sharp rewrite for each one
 3. Wait for the user to confirm, modify, or reject each proposed rewrite
 
-Only after the user approves the sharp criteria:
+Only after the user approves, update the `.feature` file (source of truth) and re-import:
 
 ```bash
-# Edit the .feature file with the approved sharp versions
-$EDITOR features/<epic-slug>.feature
-
-# Re-import to update the DB (use --force if hash already matches)
 tyrion import features/<epic-slug>.feature [--confirm-abandon] [--force]
 ```
 
-The `.feature` file is the source of truth. Rewriting criterion text only in evidence (while leaving the vague text in the DB) is **not acceptable** — future agents will see the vague version and the problem repeats.
-
-**This gate applies in all modes, including auto.** Getting the criterion wrong means all downstream evidence, UAT runbook, and closure are built on the wrong definition of done. Autonomy mode does not override this stop.
-
-Then record the plan:
-
-```bash
-tyrion note <slug> plan "<your implementation plan — ≤5 sentences>"
-tyrion next <slug> "<first concrete action>"
-```
+**This gate applies in all modes, including trivial.** Autonomy mode does not override this stop.
 
 If `--review` mode: present the criteria and plan, wait for user ok/steer before Step 5.
 
 ---
 
-### 5. IMPLEMENT (Ralph-light, TDD mode-aware)
+### 5. IMPLEMENT
 
-**The orchestrator (you) never implements directly.** For each unmet criterion, spawn a fresh subagent.
+**Trivial mode:** Orchestrator implements all criteria directly — no subagent spawning. Read the plan section and/or [plan] notes, make the file edits, record evidence, check criteria. Move to Step 7.5 (skip UAT runbook — write a one-line verification note instead). Then skip Step 8 and go directly to Step 9.
 
-#### Per-criterion cycle:
+**All other modes — grouped subagent cycle:**
 
-**a. Spawn a fresh subagent** with exactly this context:
-- The criterion text (Given/When/Then)
+#### Step 5a. Determine batching
+
+**Before spawning any subagent**, check for a `[plan]` note containing a `BATCHING:` instruction in `tyrion resume` output. If present, use that grouping exactly — it was set by a human who reviewed the story and knows the right unit of work.
+
+If no BATCHING instruction exists, apply this default logic:
+- Criteria that test the same class/file/action → one batch
+- Criteria with a Given/When/Then cluster that belongs to one behavior → one batch
+- Never default to one subagent per criterion unless each criterion truly tests an independent, unrelated behavior
+
+Document the batching plan before spawning:
+```bash
+tyrion note <slug> plan "Batching: criteria 1-4 → subagent A (AccountHitsCache); criteria 5-7 → subagent B (AccountProcessor)"
+```
+
+#### Step 5b. Per-batch subagent cycle
+
+For each batch:
+
+**Spawn a fresh subagent** with exactly this context:
+- The criteria text for this batch (all Given/When/Then steps)
 - The story's `current_context` and `next_action` from `tyrion resume`
-- The relevant file paths the subagent should read (from your Step 4 plan)
-- The active TDD mode
-- The test command to run (if applicable; e.g., `bundle exec rspec spec/...`, `ruby -Ilib test/...`)
+- The relevant file paths (from plan section or your Step 4 plan)
+- The active TDD mode and test command
+- **The PLAN_SECTION for this story** (from Step 1) — paste it in full if ≤ 300 lines; summarize key decisions if longer
+- **The `[plan]` notes** from `tyrion resume` — paste them verbatim; they contain gotchas and implementation decisions that must not be re-derived
 
 Subagent instructions vary by TDD mode:
 
-**strict**: "Write a failing test for this criterion first. Run it to confirm it's red. Then implement until green. Return: files changed, full test command + verbatim output."
+**strict**: "Write a failing test for these criteria first. Run it to confirm it's red. Then implement until green. Return: files changed, full test command + verbatim output."
 
-**loose**: "Implement the criterion. Write a test if it can be done without significant overhead. Return: files changed, test output if run, or the exact command + expected output that proves the criterion."
+**loose**: "Implement these criteria. Write tests if they can be done without significant overhead. Return: files changed, test output if run, or the exact command + expected output that proves each criterion."
 
-**off**: "Implement the criterion. Return: files changed, the exact command + expected output that proves the criterion works (e.g., a curl command with response body, or a script invocation with its output)."
+**off/spike**: "Implement these criteria. Return: files changed, the exact command + expected output that proves each criterion works."
 
-**b. The orchestrator receives the subagent's return** and writes evidence immediately:
-
-```bash
-tyrion note <slug> progress "criterion <N>: <files changed, verbatim test/command output>"
-```
-
-Evidence must be *verbatim* — paste the actual output, not a paraphrase. This is what makes notes re-verifiable after a crash.
-
-**c. Mark the criterion met:**
+**After each batch**, write evidence and check criteria:
 
 ```bash
-tyrion check <slug> <position> "<evidence — must be reproducible>"
-```
-
-Evidence shape by mode:
-- strict/loose (with test): `"<test_path>:<line> — <test command> → PASSED"`
-- off: `"curl http://localhost:PORT/route → HTTP 200, body: <actual snippet>"`
-
-**d. Update resume state:**
-
-```bash
+tyrion note <slug> progress "batch <A>: <files changed, verbatim test/command output>"
+tyrion check <slug> <position> "<evidence — must be reproducible>"  # for each criterion in batch
 tyrion context <slug> "<one-paragraph: what is implemented, what is pending>"
 tyrion next <slug> "<next concrete action>"
 ```
 
-**Repeat a–d for each unchecked criterion in order.**
+Evidence must be *verbatim* — paste the actual output, not a paraphrase.
 
-Do not batch these. Each criterion is its own spawn-capture-note-check cycle.
+**Repeat for each batch in order.**
 
 ---
 
@@ -258,13 +297,17 @@ Any Write, Edit, or Bash tool call made while the story is in_progress — for a
 tyrion note <slug> progress "<what changed, why, which files>"
 ```
 
-This rule closes the beads-style drift where interactive follow-ons (run the server, add an index route, restart a process, user asks for a new feature mid-flight) escape the ledger. The story is in_progress until `tyrion done` — everything that happens during that time belongs in the ledger.
-
 ---
 
 ### 7.5. UAT RUNBOOK
 
-Before closing, write a runbook so the user can verify the story independently:
+**Trivial mode:** Skip the runbook. Write one verification note instead:
+
+```bash
+tyrion note <slug> handoff "Verification: <the one command or page visit that proves this is done>"
+```
+
+**All other modes:** Write a runbook so the user can verify the story independently:
 
 ```bash
 tyrion note <slug> handoff "<UAT runbook: per-criterion steps>"
@@ -281,7 +324,7 @@ Criterion 1 — <Given/When/Then summary>
 Criterion 2 — ...
 ```
 
-The runbook must be executable: copy-paste the command, see the expected output. If you cannot write a runbook step, the criterion evidence (Step 5c) was not sharp enough — go back and sharpen it.
+The runbook must be executable: copy-paste the command, see the expected output. If you cannot write a runbook step, the criterion evidence was not sharp enough — go back and sharpen it.
 
 If `--review` mode: present the runbook. User can run it now to verify, or skip if trust is high.
 
@@ -289,7 +332,9 @@ If `--review` mode: present the runbook. User can run it now to verify, or skip 
 
 ### 8. REVIEW (quality gate)
 
-**Spike mode (`--spike`):** Skip pre-push. Instead, print:
+**Trivial mode:** Skip pre-push entirely. Go directly to Step 9.
+
+**Spike mode:** Skip pre-push. Instead, print:
 
 ```
 🔬 SPIKE — quality gate skipped. To promote this story to production-grade:
@@ -303,7 +348,7 @@ If `--review` mode: present the runbook. User can run it now to verify, or skip 
 /pre-push
 ```
 
-If `/pre-push` finds blocking issues: fix them, re-run, do not close until it passes. Do not rationalize past a required step failure — use `--spike` if this is genuinely a throwaway with no test infra, or fix the underlying issue.
+If `/pre-push` finds blocking issues: fix them, re-run, do not close until it passes.
 
 If `--review` mode: share the /pre-push output. Wait for user ok before Step 9.
 
@@ -320,12 +365,54 @@ tyrion status   # verify plan view shows the story as done
 
 The completion summary should reference or embed the UAT runbook note so the ledger is self-contained.
 
+**After `tyrion done` succeeds, print a Quick UAT block** — always, in every mode.
+
+The steps are always printed in full so the user can run them manually regardless of whether automation is used. Format:
+
+```
+─────────────────────────────────────────────────
+Quick UAT — optional. Run yourself or let me run it.
+─────────────────────────────────────────────────
+CLI checks:
+  $ rake crm:seed_dev_data
+    Expected: "Users created: N, Hits inserted: N"
+  $ rails runner "puts Hit.where(salesforce_account_id: 'X').count"
+    Expected: > 0
+
+Browser checks:
+  1. Visit: https://admin.hedgeye.test/cms/crm_accounts
+     → Search box renders. Accounts tab active in nav.
+  2. Search "samlyn" → Samlyn Capital row with user count badge
+  3. Click Samlyn → /cms/crm_accounts/<sf_id>
+     → User table with persona badges and 90d counts
+  4. Visit: https://admin.hedgeye.test/cms/crm_accounts/NOTREAL
+     → 404
+  5. Logged out: visit /cms/crm_accounts → redirects to login
+─────────────────────────────────────────────────
+Want me to run the browser checks now? (y/skip)
+```
+
+UAT steps are story-type-aware — derive from the criteria and implementation, not generic advice:
+
+- **Rake task / seed**: CLI only — `rake <task>` + `rails runner` count/existence check
+- **Migration**: CLI only — the EXPLAIN query from the criteria, expected `key:` in output
+- **Service object**: CLI only — `rails runner` with the exact call and expected return shape
+- **Controller**: browser checks for each action (index, show, error cases) + auth redirect check
+- **Phlex component**: browser check of the page that renders it + what element/text to look for
+- **View / tab / nav**: browser checks for each tab/link with active-state and content expectations
+
+**If the user answers `y`:** attempt browser automation. Try playwright-cli first (isolated session, no conflicts with other Claude Code sessions). If playwright-cli fails or isn't available, offer to use the Claude-in-Chrome plugin. Report each check as ✅ or ❌ with the actual page content seen. If automation fails entirely, say so — the steps are already printed for manual use.
+
+**If the user answers `skip` or doesn't respond:** do nothing. The steps are printed. Done.
+
 ---
 
 ## Why this protocol works
 
-- **Verbatim evidence** (Steps 5b/5c) makes notes re-verifiable — "I did X" is hearsay; a pasted test output is a fact.
-- **Fresh subagent per criterion** (Step 5a) prevents context bloat from corrupting evidence quality mid-story.
+- **Plan file injection** (Step 1 + 5b) means subagents execute a Claude-written plan rather than re-deriving it — the biggest source of wasted time in plan-driven stories.
+- **Batching from `[plan]` notes** (Step 5a) lets a human set the right unit of work per story without changing the skill; the agent reads and follows it.
+- **Trivial mode** (Steps 1/5/7.5/8) removes all ceremony for mechanical changes — nav tweaks, rake tasks, simple migrations — where the right answer is obvious from the plan.
+- **Verbatim evidence** (Step 5b) makes notes re-verifiable — "I did X" is hearsay; a pasted test output is a fact.
 - **Continuous capture** (Step 7) closes the beads-style drift — interactive follow-ons don't escape the ledger.
 - **UAT runbook** (Step 7.5) makes criteria self-enforcing — if you can't write the step, the criterion was never testable.
 - **/pre-push** (Step 8) makes quality consistent and non-negotiable before close.

@@ -813,18 +813,33 @@ module Tyrion
 
       notes = store.notes_for_story(story['id'], limit: 5)
       if notes.any?
-        puts Output.bold("Recent notes (last #{notes.length}):")
-        notes.each do |n|
-          ts   = n['created_at'][0, 16].gsub('T', ' ')
-          body = n['body'][0, 80]
-          puts "  #{Output.dim(ts)} [#{n['kind']}] #{body}"
+        plan_notes = notes.select { |n| n['kind'] == 'plan' }
+        other_notes = notes.reject { |n| n['kind'] == 'plan' }
+
+        if plan_notes.any?
+          puts Output.bold("Plan notes:")
+          plan_notes.each do |n|
+            ts = n['created_at'][0, 16].gsub('T', ' ')
+            puts "  #{Output.dim(ts)} [plan]"
+            n['body'].scan(/.{1,100}(?:\s|$)/).each { |line| puts "    #{line.rstrip}" }
+          end
+          puts
+        end
+
+        if other_notes.any?
+          puts Output.bold("Recent notes (last #{other_notes.length}):")
+          other_notes.each do |n|
+            ts   = n['created_at'][0, 16].gsub('T', ' ')
+            body = n['body'][0, 120]
+            puts "  #{Output.dim(ts)} [#{n['kind']}] #{body}"
+          end
         end
       end
     end
 
     # ── note ───────────────────────────────────────────────────────────────
 
-    VALID_NOTE_KINDS = %w[plan progress decision blocker test handoff recovery].freeze
+    VALID_NOTE_KINDS = %w[plan progress decision blocker test handoff recovery session].freeze
 
     def self.cmd_note(args, store)
       slug = args.shift
@@ -1018,7 +1033,7 @@ module Tyrion
           tyrion start <slug>                      Claim a story (transactional)
           tyrion claim-next                        Claim next pending story (transactional)
           tyrion resume [slug]                     Read-only context dump
-          tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery)
+          tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session)
           tyrion context <slug> "text"             Update current_context
           tyrion next <slug> "text"                Update next_action
 
