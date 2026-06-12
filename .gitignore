@@ -6,6 +6,9 @@ db/*.db
 db/*.db-wal
 db/*.db-shm
 
+# rspec run artifact
+spec/.rspec_status
+
 # tyrion worktree state
 .tyrion/
 
