@@ -18,3 +18,4 @@ spec/.rspec_status
 demo/
 docs/
 DISCOVERY_LAYER.md
+.playwright-cli/

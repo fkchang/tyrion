@@ -171,6 +171,30 @@ tyrion spike promote <disc-id>   Promote finding → story
 
 ---
 
+## The war room, on any screen
+
+Once you have a project in Tyrion, start the web UI and monitor active work from your phone, a second monitor, or any device on your Tailscale network — without touching the Claude Code session.
+
+```bash
+cd web
+TYRION_PROJECT=<your-project-slug> bundle exec ruby app.rb
+# → http://localhost:4579
+```
+
+**War Room** — kanban across all four lanes (Queue · Active Campaign · Blocked Frontier · Shipped Keep). See what's pending, what's stuck, and what shipped.
+
+![War Room](assets/screenshots/war-room.png)
+
+**Active Story** — the full briefing for whatever is in progress: MISSION BRIEF (the Gherkin "As a / In order to / I want"), current context set by the implementing agent, next action, criteria checklist, and recent notes. Polls every 30 seconds and reloads automatically when the agent updates anything — so you can watch work progress without switching windows.
+
+![Active Story](assets/screenshots/active-story.png)
+
+**Global View** — health cards for every project in the DB: active epic, story in progress, done/pending/blocked counts, last activity, and a quick Focus link to switch context.
+
+![Global View](assets/screenshots/global-view.png)
+
+---
+
 ## A Lannister always pays his debts
 
 Tyrion is built on one principle: **if the tool requires discipline to use, it's already lost**.
