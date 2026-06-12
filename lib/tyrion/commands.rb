@@ -427,6 +427,18 @@ module Tyrion
         puts
       end
 
+      # ── followups ────────────────────────────────────────────────────────
+      followups = store.done_stories_with_followup_notes(project['id'])
+      unless followups.empty?
+        fw = followups.map { |s| s['slug'].length }.max.to_i
+        puts "  NEEDS FOLLOW-UP"
+        followups.each do |s|
+          body = (s['followup_body'] || '(see story notes)')[0, 72]
+          puts "  ★ #{s['slug'].ljust(fw)}  #{body}"
+        end
+        puts
+      end
+
       # ── discoveries ──────────────────────────────────────────────────────
       active_spikes    = store.list_discoveries(project_id: project['id'], status: 'active_spike')
       findings_ready   = store.list_discoveries(project_id: project['id'], status: 'findings_ready')
@@ -457,7 +469,7 @@ module Tyrion
       status_filter = args.include?('--status') ? args[args.index('--status') + 1] : nil
       _project, epic = resolve_project_epic(store)
       stories = store.stories_for_epic(epic['id'])
-      stories.select! { |s| s['status'] == status_filter } if status_filter
+      stories = stories.select { |s| s['status'] == status_filter } if status_filter
       stories.each do |s|
         puts "#{Output.story_icon(s['status'])} #{s['slug'].ljust(14)} #{s['title']}"
       end
@@ -913,7 +925,7 @@ module Tyrion
 
     # ── note ───────────────────────────────────────────────────────────────
 
-    VALID_NOTE_KINDS = %w[plan progress decision blocker test handoff recovery session].freeze
+    VALID_NOTE_KINDS = %w[plan progress decision blocker test handoff recovery session followup].freeze
 
     def self.cmd_note(args, store)
       slug = args.shift
@@ -1109,7 +1121,7 @@ module Tyrion
           tyrion unblock <slug>                    Unblock a story → back to pending
           tyrion claim-next                        Claim next pending story (transactional)
           tyrion resume [slug]                     Read-only context dump
-          tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session)
+          tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session|followup)
           tyrion context <slug> "text"             Update current_context
           tyrion next <slug> "text"                Update next_action
 

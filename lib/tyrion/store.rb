@@ -98,7 +98,7 @@ module Tyrion
         id          TEXT PRIMARY KEY,
         story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
         kind        TEXT NOT NULL
-                      CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session')),
+                      CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session','followup')),
         body        TEXT NOT NULL,
         metadata    TEXT,
         created_at  TEXT NOT NULL
@@ -318,6 +318,27 @@ module Tyrion
           'SELECT * FROM story_notes WHERE story_id = ? ORDER BY created_at DESC LIMIT ?',
           [story_id, limit]
         )
+      end
+    end
+
+    def done_stories_with_followup_notes(project_id)
+      with_db do |db|
+        db.execute(<<~SQL, [project_id])
+          SELECT s.*, (
+            SELECT body FROM story_notes
+            WHERE story_id = s.id AND kind = 'followup'
+            ORDER BY created_at DESC LIMIT 1
+          ) AS followup_body
+          FROM stories s
+          JOIN epics e ON s.epic_id = e.id
+          WHERE e.project_id = ?
+            AND s.status = 'done'
+            AND EXISTS (
+              SELECT 1 FROM story_notes n
+              WHERE n.story_id = s.id AND n.kind = 'followup'
+            )
+          ORDER BY s.completed_at DESC
+        SQL
       end
     end
 
@@ -661,6 +682,27 @@ module Tyrion
       ['add_blocked_on_discovery_to_stories', lambda { |db|
         cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
         db.execute('ALTER TABLE stories ADD COLUMN blocked_on_discovery TEXT') unless cols.include?('blocked_on_discovery')
+      }],
+      ['add_followup_to_story_notes_kind_check', lambda { |db|
+        existing = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='story_notes'").first&.fetch('sql', '')
+        next if existing.to_s.include?("'followup'")
+        db.execute_batch(<<~SQL)
+          PRAGMA foreign_keys = OFF;
+          ALTER TABLE story_notes RENAME TO story_notes_old;
+          CREATE TABLE story_notes (
+            id          TEXT PRIMARY KEY,
+            story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            kind        TEXT NOT NULL
+                          CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session','followup')),
+            body        TEXT NOT NULL,
+            metadata    TEXT,
+            created_at  TEXT NOT NULL
+          );
+          INSERT INTO story_notes SELECT * FROM story_notes_old;
+          DROP TABLE story_notes_old;
+          CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
+          PRAGMA foreign_keys = ON;
+        SQL
       }]
     ].freeze
 
