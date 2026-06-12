@@ -1,0 +1,10 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gem "sinatra", "~> 4.2"
+gem "phlex", "~> 2.4"
+gem "phlex-sinatra", "~> 0.5"
+gem "puma", "~> 7.2"
+gem "rackup"
+gem "tyrion", path: ".."

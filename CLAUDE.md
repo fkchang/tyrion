@@ -36,6 +36,28 @@ Tyrion is a SQLite-backed resumability ledger. Its job is to answer "what was I 
 - **`Importer`** — parses `.feature` files (Gherkin) and upserts epics/stories/criteria into the DB. `tyrion import features/<epic>.feature` is how feature files get into the DB. The `.feature` file is the source of truth; importing is idempotent by SHA256 hash.
 - **`Output`** — terminal formatting helpers (`Output.green`, `Output.dim`, `Output.story_icon`, etc.).
 
+### Web UI (`web/`)
+
+Sinatra 4 + Phlex + phlex-sinatra prototype. Runs separately from the CLI gem.
+
+```bash
+# Start (from repo root):
+cd web && TYRION_PROJECT=<slug> bundle exec ruby app.rb
+# Default port 4579; override with TYRION_PORT
+# Binds 0.0.0.0 for Tailscale phone access
+```
+
+**Key files:**
+- **`web/app.rb`** — Sinatra routes. One route per view + `GET /api/poll` for live monitoring. Mutations use PRG (Post/Redirect/Get) with `session[:flash]`. `with_flash` helper in `helpers` block DRYs up all POST error handling.
+- **`web/lib/tyrion_web/data.rb`** — `TyrionWeb::Data` module. All DB queries for views live here; routes stay thin. `load_*_view` methods return plain hashes passed to Phlex components.
+- **`web/lib/tyrion_web/presenter.rb`** — `TyrionWeb::Presenter` module. Status glyphs, `time_ago`, `stale?`, epic seal CSS/glyph, story status badge CSS.
+- **`web/views/layout.rb`** — `Views::Layout` Phlex component. Two-row topbar (brand+breadcrumbs / nav tabs), sidebar with story list + discovery strip, yields main content.
+- **`web/views/active_story.rb`** — Story detail view. Shows MISSION BRIEF (Gherkin intent), Current Context, Next Action, criteria, notes. Live-polls `/api/poll` every 30s when story is `in_progress` — reloads on token change.
+- **`web/views/roadmap.rb`** — All epics with expand/collapse story lists and mini progress tracks.
+- **`web/views/global_view.rb`** — Project command center showing health cards for all projects in the DB.
+
+**`GET /api/poll?story_id=<id>`** — returns `{token, slug, status, met, total}`. Token is `"#{last_note_at}:#{met}:#{status}"` — changes when a note, criterion check, or status change occurs.
+
 ### Discovery layer
 
 `discoveries` table sits directly under `projects` (not epics). Two entry modes:

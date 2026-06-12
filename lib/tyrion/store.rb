@@ -166,6 +166,10 @@ module Tyrion
       with_db { |db| db.get_first_row('SELECT * FROM projects WHERE slug = ?', [slug]) }
     end
 
+    def find_project_by_id(id)
+      with_db { |db| db.get_first_row('SELECT * FROM projects WHERE id = ?', [id]) }
+    end
+
     def find_project_by_repo(repo_identity)
       with_db { |db| db.get_first_row('SELECT * FROM projects WHERE primary_repo_identity = ?', [repo_identity]) }
     end
@@ -201,6 +205,10 @@ module Tyrion
 
     def find_epic(project_id, epic_slug)
       with_db { |db| db.get_first_row('SELECT * FROM epics WHERE project_id = ? AND slug = ?', [project_id, epic_slug]) }
+    end
+
+    def find_epic_by_id(epic_id)
+      with_db { |db| db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id]) }
     end
 
     def list_epics(project_id)
