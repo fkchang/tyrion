@@ -25,6 +25,27 @@ Feature: v0.2 Features
     When git commit is made with a descriptive conventional-commits message
     Then git log shows the commit, git status is clean, and the full test suite still passes
 
+  Scenario: blocked-story-status
+    As a developer whose story is stuck waiting on an external dependency
+    In order to represent the real backlog state without lying about what can be started
+    I want to mark a story as blocked with a reason and see it surface clearly in the war room
+
+    Given a pending story in the active epic
+    When tyrion block <slug> "waiting for stakeholder answer from Finance" is run
+    Then the story status is 'blocked', blocked_on is 'waiting for stakeholder answer from Finance', and tyrion status renders a BLOCKED lane showing the slug, reason, and an unblock hint
+    Given a blocked story with blocked_on set
+    When tyrion unblock <slug> is run
+    Then the story status returns to 'pending', blocked_on is cleared, and blocked_on_discovery is cleared
+    Given a blocked story in the active epic
+    When tyrion start <slug> is run
+    Then the command exits 1, stderr contains the blocked reason and 'tyrion unblock <slug>'
+    Given a done story in the active epic
+    When tyrion block <slug> "any reason" is run
+    Then the command exits 1, stderr contains a message about done stories refusing to block
+    Given a blocked story linked to a disc-NNN that has transitioned to promoted_to_story
+    When tyrion status is run
+    Then the BLOCKED lane shows "[disc-NNN resolved → unblock?]" next to the story
+
   Scenario: tyrion-with-tyrion-dogfood
     # Intent: validates the full shape→import→implement loop on real work, surfaces v0.3 needs from actual use
     # TODO: criteria — fill during /tyrion-implement step 4

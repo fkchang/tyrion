@@ -327,6 +327,40 @@ module Tyrion
       end
     end
 
+    def block_story(story_id, blocked_on:, blocked_on_discovery: nil)
+      with_db do |db|
+        db.transaction(:immediate) do
+          story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+          raise "Story not found: #{story_id}" unless story
+          raise "Cannot block a done story" if story['status'] == 'done'
+
+          t = now
+          db.execute(
+            'UPDATE stories SET status=?, blocked_on=?, blocked_on_discovery=?, updated_at=? WHERE id=?',
+            ['blocked', blocked_on, blocked_on_discovery, t, story_id]
+          )
+        end
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    end
+
+    def unblock_story(story_id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+          raise "Story not found: #{story_id}" unless story
+          raise "Story is not blocked (status: #{story['status']})" unless story['status'] == 'blocked'
+
+          t = now
+          db.execute(
+            'UPDATE stories SET status=?, blocked_on=NULL, blocked_on_discovery=NULL, updated_at=? WHERE id=?',
+            ['pending', t, story_id]
+          )
+        end
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    end
+
     def complete_story(story_id, summary, force: false)
       with_db do |db|
         unless force
@@ -611,6 +645,14 @@ module Tyrion
           CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
           PRAGMA foreign_keys = ON;
         SQL
+      }],
+      ['add_blocked_on_to_stories', lambda { |db|
+        cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
+        db.execute('ALTER TABLE stories ADD COLUMN blocked_on TEXT') unless cols.include?('blocked_on')
+      }],
+      ['add_blocked_on_discovery_to_stories', lambda { |db|
+        cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
+        db.execute('ALTER TABLE stories ADD COLUMN blocked_on_discovery TEXT') unless cols.include?('blocked_on_discovery')
       }]
     ].freeze
 

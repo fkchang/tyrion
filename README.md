@@ -153,6 +153,8 @@ tyrion resume [slug]             Full context dump for a story
 tyrion pocket                    Compact briefing for agent handoff
 
 tyrion start <slug>              Claim a story
+tyrion block <slug> "reason"     Mark a story blocked (shows in war room BLOCKED lane)
+tyrion unblock <slug>            Clear the block — back to pending
 tyrion note <slug> <kind> "..."  Send a raven (kinds: plan|progress|decision|blocker|handoff)
 tyrion context <slug> "..."      Update what's currently understood
 tyrion next <slug> "..."         Update the next concrete action

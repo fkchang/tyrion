@@ -29,6 +29,8 @@ module Tyrion
       when 'list'         then cmd_list(args, store)
       when 'show'         then cmd_show(args, store)
       when 'start'        then cmd_start(args, store)
+      when 'block'        then cmd_block(args, store)
+      when 'unblock'      then cmd_unblock(args, store)
       when 'claim-next'   then cmd_claim_next(args, store)
       when 'pocket'       then cmd_pocket(args, store)
       when 'mark'         then cmd_mark(args, store)
@@ -403,6 +405,28 @@ module Tyrion
 
       puts
 
+      # ── blocked lane ─────────────────────────────────────────────────────
+      blocked = stories.select { |s| s['status'] == 'blocked' }
+      unless blocked.empty?
+        puts "  #{Output.red('BLOCKED')}"
+        blocked.each do |s|
+          slug_col  = s['slug'].ljust(slug_w)
+          reason    = (s['blocked_on'] || '(no reason recorded)')[0, 60]
+          disc_annot = ''
+          if (disc_id = s['blocked_on_discovery'])
+            disc = store.find_discovery(disc_id)
+            if disc && %w[promoted_to_story deferred invalidated].include?(disc['status'])
+              disc_annot = " #{Output.cyan("[#{disc_id} resolved → unblock?]")}"
+            else
+              disc_annot = " [#{disc_id}]"
+            end
+          end
+          puts "  #{Output.red('⊘')} #{slug_col}  #{reason}#{disc_annot}"
+          puts "    #{Output.dim('→ unblock:')} tyrion unblock #{s['slug']}"
+        end
+        puts
+      end
+
       # ── discoveries ──────────────────────────────────────────────────────
       active_spikes    = store.list_discoveries(project_id: project['id'], status: 'active_spike')
       findings_ready   = store.list_discoveries(project_id: project['id'], status: 'findings_ready')
@@ -511,9 +535,59 @@ module Tyrion
       story = store.find_story(epic['id'], slug)
       die "Story not found: #{slug} in epic #{epic['slug']}" unless story
 
+      if story['status'] == 'blocked'
+        reason = story['blocked_on'] || 'unknown reason'
+        die "#{slug} is blocked: #{reason}\nRun: tyrion unblock #{slug}"
+      end
+
       story = store.start_story(story['id'])
       puts "Started: #{story['slug']} — #{story['title']}"
       puts "Status: #{Output.yellow('in_progress')}"
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # ── block ──────────────────────────────────────────────────────────────
+
+    def self.cmd_block(args, store)
+      slug = args.shift
+      die "Usage: tyrion block <slug> \"what unblocks it\" [--discovery disc-NNN]" unless slug
+
+      disc_idx = args.index('--discovery')
+      disc_id  = disc_idx ? args[disc_idx + 1] : nil
+      reason   = presence((disc_idx ? args[0...disc_idx] : args).join(' '))
+
+      die "Usage: tyrion block <slug> \"what unblocks it\" [--discovery disc-NNN]" unless reason
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      if disc_id
+        die "Discovery not found: #{disc_id}" unless store.find_discovery(disc_id)
+      end
+
+      store.block_story(story['id'], blocked_on: reason, blocked_on_discovery: disc_id)
+      puts "#{Output.red('Blocked:')} #{slug} — #{story['title']}"
+      puts "Blocked on: #{reason}"
+      puts "Discovery:  #{disc_id}" if disc_id
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # ── unblock ────────────────────────────────────────────────────────────
+
+    def self.cmd_unblock(args, store)
+      slug = args.shift
+      die "Usage: tyrion unblock <slug>" unless slug
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      store.unblock_story(story['id'])
+      puts "#{Output.green('Unblocked:')} #{slug} — #{story['title']}"
+      puts "Status: #{Output.dim('pending')}"
     rescue RuntimeError => e
       die e.message
     end
@@ -1031,6 +1105,8 @@ module Tyrion
 
         Work:
           tyrion start <slug>                      Claim a story (transactional)
+          tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story with a reason
+          tyrion unblock <slug>                    Unblock a story → back to pending
           tyrion claim-next                        Claim next pending story (transactional)
           tyrion resume [slug]                     Read-only context dump
           tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session)

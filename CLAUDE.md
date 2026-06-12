@@ -54,6 +54,8 @@ Status aliases for `tyrion discovery list --status`: `active`→`active_spike`, 
 
 **Presence checks** — use `presence(str)` helper instead of `str && !str.empty? ? str : nil`.
 
+**Blocked stories** — `blocked` is a first-class story status (alongside `pending|in_progress|done|abandoned`). Use `tyrion block <slug> "reason" [--discovery disc-NNN]` / `tyrion unblock <slug>`. Blocking stores `blocked_on TEXT` (human reason) and optionally `blocked_on_discovery TEXT` (linked disc-id). `tyrion start` refuses a blocked story with the reason and the unblock command. `tyrion status` renders a distinct `BLOCKED` lane below the story list; if the linked discovery has resolved (`promoted_to_story|deferred|invalidated`), the lane shows `[disc-NNN resolved → unblock?]`.
+
 **Discovery IDs** — `disc-NNN` format, per-project sequential counter, zero-padded to 3 digits, generated inside `db.transaction(:immediate)`.
 
 **Schema migrations** — new columns use the `MIGRATIONS` constant (array of `[name, lambda]` pairs in `store.rb`), not raw `ALTER TABLE` in `setup_db`. The lambda checks `PRAGMA table_info` before altering so it's idempotent.
