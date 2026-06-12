@@ -352,6 +352,8 @@ If `/pre-push` finds blocking issues: fix them, re-run, do not close until it pa
 
 If `--review` mode: share the /pre-push output. Wait for user ok before Step 9.
 
+**Once `/pre-push` passes: proceed immediately to Step 9. Do not stop, do not summarise, do not wait for user confirmation. Pre-push passing is not the finish line — `tyrion done` + the UAT block is.**
+
 ---
 
 ### 9. CLOSE

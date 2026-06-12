@@ -39,11 +39,7 @@ Tyrion gives your project a spine:
 
 ## Install
 
-```bash
-gem install tyrion
-```
-
-Or from source:
+> **The gem is not yet published.** Tyrion is under active development — install from source until it stabilizes.
 
 ```bash
 git clone https://github.com/fkchang/tyrion
