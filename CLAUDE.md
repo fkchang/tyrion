@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Planning protocol
+
+When planning work that will be tracked in the Tyrion ledger, use `/tyrion-plan` instead of raw plan mode — it handles plan mode entry AND wires approval directly to `/tyrion-implement`.
+
+If the user says "let's plan" without specifying, ask: "Track this in Tyrion? (`/tyrion-plan`) or quick untracked plan?"
+
 ## Commands
 
 ```bash
@@ -20,6 +26,11 @@ ruby bin/tyrion help
 ```
 
 Note: `ruby bin/tyrion` is used during development. When installed as a gem, `tyrion` is on PATH.
+
+## Skill / UAT config
+
+- Browser tool: `playwright-cli` (no auth needed — localhost only)
+- UAT base URL: `http://localhost:4579`
 
 ## Architecture
 
