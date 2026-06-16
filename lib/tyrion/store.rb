@@ -221,11 +221,15 @@ module Tyrion
       t = now
       id = uuid
       with_db do |db|
-        seq = sequence || (db.get_first_value('SELECT COALESCE(MAX(sequence), 0) + 1 FROM stories WHERE epic_id = ?', [epic_id]))
-        db.execute(
-          'INSERT INTO stories (id, epic_id, sequence, slug, title, intent, status, born_from_discovery, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, epic_id, seq, slug, title, intent, 'pending', born_from_discovery, t, t]
-        )
+        # transaction(:immediate) makes the MAX(sequence)+1 read-then-write atomic;
+        # concurrent imports cannot collide on UNIQUE(epic_id, sequence).
+        db.transaction(:immediate) do
+          seq = sequence || db.get_first_value('SELECT COALESCE(MAX(sequence), 0) + 1 FROM stories WHERE epic_id = ?', [epic_id])
+          db.execute(
+            'INSERT INTO stories (id, epic_id, sequence, slug, title, intent, status, born_from_discovery, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, epic_id, seq, slug, title, intent, 'pending', born_from_discovery, t, t]
+          )
+        end
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [id])
       end
     end
@@ -501,9 +505,11 @@ module Tyrion
       t = now
       with_db do |db|
         db.transaction(:immediate) do
+          # Counter is global (no project_id filter) — disc-NNN is the table
+          # primary key and must be globally unique, not just per-project.
           seq = db.get_first_value(
-            'SELECT COALESCE(MAX(CAST(SUBSTR(id, 6) AS INTEGER)), 0) + 1 FROM discoveries WHERE project_id = ? AND id LIKE ?',
-            [project_id, 'disc-%']
+            'SELECT COALESCE(MAX(CAST(SUBSTR(id, 6) AS INTEGER)), 0) + 1 FROM discoveries WHERE id LIKE ?',
+            ['disc-%']
           )
           id = format('disc-%03d', seq)
           db.execute(
@@ -634,18 +640,83 @@ module Tyrion
       Digest::SHA256.file(path).hexdigest
     end
 
+    # Atomically upsert all stories + criteria for an epic in one transaction.
+    # Returns [{slug:, criteria_count:}] for caller to print progress.
+    # Sequence is assigned MAX+1 per insertion order (file order is preserved
+    # because scenarios are passed in file order and INSERTs happen serially).
+    # Policy: sequence = stable ledger order; re-importing does NOT renumber
+    # existing stories — it appends new ones after the current max.
+    def import_stories_for_epic(epic_id:, scenarios:)
+      results = []
+      t = now
+      with_db do |db|
+        db.transaction(:immediate) do
+          scenarios.each do |scenario|
+            existing = db.get_first_row(
+              'SELECT * FROM stories WHERE epic_id = ? AND slug = ?', [epic_id, scenario[:slug]]
+            )
+            story_id = if existing
+              if scenario[:title] != existing['title'] || scenario[:intent]
+                db.execute('UPDATE stories SET title = ?, intent = ?, updated_at = ? WHERE id = ?',
+                           [scenario[:title], scenario[:intent] || existing['intent'], t, existing['id']])
+              end
+              existing['id']
+            else
+              sid = uuid
+              seq = db.get_first_value('SELECT COALESCE(MAX(sequence), 0) + 1 FROM stories WHERE epic_id = ?', [epic_id])
+              db.execute(
+                'INSERT INTO stories (id, epic_id, sequence, slug, title, intent, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [sid, epic_id, seq, scenario[:slug], scenario[:title], scenario[:intent], 'pending', t, t]
+              )
+              sid
+            end
+
+            unless scenario[:criteria].empty?
+              db.execute("DELETE FROM criteria WHERE story_id = ? AND status = 'pending'", [story_id])
+              max_pos = db.get_first_value('SELECT COALESCE(MAX(position), 0) FROM criteria WHERE story_id = ?', [story_id]).to_i
+              scenario[:criteria].each_with_index do |clause, i|
+                pos = max_pos + i + 1
+                crit_id = uuid
+                ct = now
+                db.execute(
+                  'INSERT INTO criteria (id, story_id, position, keyword, semantic_kind, text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                  [crit_id, story_id, pos, clause[:keyword], clause[:semantic_kind], clause[:text], 'pending', ct, ct]
+                )
+              end
+            end
+
+            results << { slug: scenario[:slug], criteria_count: scenario[:criteria].length }
+          end
+        end
+      end
+      results
+    end
+
     private
 
+    # busy_timeout MUST be set before journal_mode=WAL — switching to WAL
+    # acquires a brief exclusive lock; without a timeout already applied that
+    # first PRAGMA can raise BusyException under concurrent writers.
     def with_db
-      db = SQLite3::Database.new(@db_path)
-      db.results_as_hash = true
-      db.execute('PRAGMA journal_mode=WAL')
-      db.execute('PRAGMA foreign_keys=ON')
-      db.execute('PRAGMA busy_timeout=5000')
-      db.execute('PRAGMA synchronous=NORMAL')
-      yield db
-    ensure
-      db&.close
+      attempt = 0
+      begin
+        db = SQLite3::Database.new(@db_path)
+        db.results_as_hash = true
+        db.execute('PRAGMA busy_timeout=5000')
+        db.execute('PRAGMA journal_mode=WAL')
+        db.execute('PRAGMA foreign_keys=ON')
+        db.execute('PRAGMA synchronous=NORMAL')
+        yield db
+      rescue SQLite3::BusyException
+        db&.close
+        db = nil
+        attempt += 1
+        raise if attempt >= 5
+        sleep(0.05 * (2**attempt))  # 100ms, 200ms, 400ms, 800ms
+        retry
+      ensure
+        db&.close
+      end
     end
 
     MIGRATIONS = [
@@ -669,7 +740,7 @@ module Tyrion
             metadata    TEXT,
             created_at  TEXT NOT NULL
           );
-          INSERT INTO story_notes SELECT * FROM story_notes_old;
+          INSERT INTO story_notes (id, story_id, kind, body, metadata, created_at) SELECT id, story_id, kind, body, metadata, created_at FROM story_notes_old;
           DROP TABLE story_notes_old;
           CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
           PRAGMA foreign_keys = ON;
@@ -698,7 +769,30 @@ module Tyrion
             metadata    TEXT,
             created_at  TEXT NOT NULL
           );
-          INSERT INTO story_notes SELECT * FROM story_notes_old;
+          INSERT INTO story_notes (id, story_id, kind, body, metadata, created_at) SELECT id, story_id, kind, body, metadata, created_at FROM story_notes_old;
+          DROP TABLE story_notes_old;
+          CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
+          PRAGMA foreign_keys = ON;
+        SQL
+      }],
+      # Convention: all future story_notes rebuilds must use explicit column lists
+      # (not SELECT *) so adding columns does not break them.
+      ['add_observation_to_story_notes_kind_check', lambda { |db|
+        existing = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='story_notes'").first&.fetch('sql', '')
+        next if existing.to_s.include?("'observation'")
+        db.execute_batch(<<~SQL)
+          PRAGMA foreign_keys = OFF;
+          ALTER TABLE story_notes RENAME TO story_notes_old;
+          CREATE TABLE story_notes (
+            id          TEXT PRIMARY KEY,
+            story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            kind        TEXT NOT NULL
+                          CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session','followup','observation')),
+            body        TEXT NOT NULL,
+            metadata    TEXT,
+            created_at  TEXT NOT NULL
+          );
+          INSERT INTO story_notes (id, story_id, kind, body, metadata, created_at) SELECT id, story_id, kind, body, metadata, created_at FROM story_notes_old;
           DROP TABLE story_notes_old;
           CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
           PRAGMA foreign_keys = ON;

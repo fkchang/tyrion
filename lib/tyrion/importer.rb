@@ -50,22 +50,12 @@ module Tyrion
 
       puts "Epic: #{epic['name']} [#{epic_slug}]"
 
-      parsed[:scenarios].each_with_index do |scenario, idx|
-        story = store.upsert_story(
-          epic_id:  epic['id'],
-          slug:     scenario[:slug],
-          title:    scenario[:title],
-          sequence: idx + 1,
-          intent:   scenario[:intent]
-        )
-
-        next if scenario[:criteria].empty?
-
-        existing_criteria = store.criteria_for_story(story['id'])
-        store.delete_pending_criteria(story['id']) if existing_criteria.any?
-
-        store.add_criteria(story['id'], scenario[:criteria])
-        puts "  Story: #{story['slug']} (#{scenario[:criteria].length} criteria)"
+      # All story + criteria writes are atomic in one transaction.
+      # Sequence is assigned MAX+1 (not file index) so appending a scenario
+      # to an existing epic never collides with existing story sequences.
+      results = store.import_stories_for_epic(epic_id: epic['id'], scenarios: parsed[:scenarios])
+      results.each do |r|
+        puts "  Story: #{r[:slug]} (#{r[:criteria_count]} criteria)" if r[:criteria_count] > 0
       end
 
       puts "Import complete: #{parsed[:scenarios].length} story/stories."

@@ -28,6 +28,7 @@ module Tyrion
       when 'status'       then cmd_status(args, store)
       when 'list'         then cmd_list(args, store)
       when 'show'         then cmd_show(args, store)
+      when 'notes'        then cmd_notes(args, store)
       when 'start'        then cmd_start(args, store)
       when 'block'        then cmd_block(args, store)
       when 'unblock'      then cmd_unblock(args, store)
@@ -253,10 +254,13 @@ module Tyrion
       end
       active_slug = Repo.active_epic
       epics.each do |e|
-        stories = store.stories_for_epic(e['id'])
-        done    = stories.count { |s| s['status'] == 'done' }
-        active  = e['slug'] == active_slug ? " #{Output.cyan('← active')}" : ''
-        puts "#{e['slug']}  #{e['name']}  #{done}/#{stories.length}  [#{e['status']}]#{active}"
+        stories    = store.stories_for_epic(e['id'])
+        done       = stories.count { |s| s['status'] == 'done' }
+        # Only show status bracket for non-default statuses — avoids every epic
+        # looking [active] when that's just the DB default, not the active pointer.
+        status_tag = e['status'] == 'active' ? '' : " [#{e['status']}]"
+        pointer    = e['slug'] == active_slug ? " #{Output.cyan('← active')}" : ''
+        puts "#{e['slug']}  #{e['name']}  #{done}/#{stories.length}#{status_tag}#{pointer}"
       end
     end
 
@@ -534,6 +538,37 @@ module Tyrion
           body = n['body'][0, 70]
           puts "  #{Output.dim(ts)} [#{Output.cyan(kind)}] #{body}"
         end
+      end
+    end
+
+    # ── notes ──────────────────────────────────────────────────────────────
+    # Full untruncated note dump — the "deep view" complement to the 70/120-char
+    # summary shown in tyrion show / tyrion resume.
+
+    def self.cmd_notes(args, store)
+      slug     = args.shift
+      kind_filter = args.shift  # optional kind filter (no flag needed — first positional)
+      die "Usage: tyrion notes <slug> [kind]" unless slug
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      notes = store.notes_for_story(story['id'], limit: 100)
+      notes = notes.select { |n| n['kind'] == kind_filter } if kind_filter
+
+      if notes.empty?
+        puts kind_filter ? "No #{kind_filter} notes for #{slug}." : "No notes for #{slug}."
+        return
+      end
+
+      puts Output.bold("Notes for #{slug}") + (kind_filter ? " [#{kind_filter}]" : "")
+      puts
+      notes.each do |n|
+        ts = n['created_at'][0, 16].gsub('T', ' ')
+        puts "#{Output.dim(ts)} [#{Output.cyan(n['kind'])}]"
+        puts n['body']
+        puts
       end
     end
 
@@ -845,7 +880,21 @@ module Tyrion
         s
       else
         s = store.in_progress_story(epic['id'])
-        die "No in_progress story in epic #{epic['slug']}. Use: tyrion start <slug>" unless s
+        unless s
+          # Self-guiding empty-state: show pending queue instead of a bare error
+          pending = store.stories_for_epic(epic['id']).select { |st| st['status'] == 'pending' }
+          $stderr.puts "No story is in progress in epic #{epic['slug']}."
+          if pending.any?
+            $stderr.puts ""
+            $stderr.puts "Next pending stories:"
+            pending.first(5).each { |st| $stderr.puts "  #{st['slug']}" }
+            $stderr.puts ""
+            $stderr.puts "Use: tyrion start #{pending.first['slug']}"
+          else
+            $stderr.puts "Use: tyrion start <slug>  or  tyrion list  to see all stories."
+          end
+          exit 1
+        end
         s
       end
 
@@ -925,7 +974,7 @@ module Tyrion
 
     # ── note ───────────────────────────────────────────────────────────────
 
-    VALID_NOTE_KINDS = %w[plan progress decision blocker test handoff recovery session followup].freeze
+    VALID_NOTE_KINDS = %w[plan progress decision blocker test handoff recovery session followup observation].freeze
 
     def self.cmd_note(args, store)
       slug = args.shift
@@ -1005,17 +1054,44 @@ module Tyrion
 
     def self.cmd_check(args, store)
       slug     = args.shift
-      position = args.shift
+      all_flag = args.delete('--all')
+      position = args.shift unless all_flag
       evidence = args.join(' ')
-      die "Usage: tyrion check <slug> <position> \"evidence\"" unless slug && position
 
       _project, epic = resolve_project_epic(store)
-      story = store.find_story(epic['id'], slug)
-      die "Story not found: #{slug}" unless story
+      story = store.find_story(epic['id'], slug) if slug
+      die "Story not found: #{slug}" if slug && !story
 
-      store.check_criterion(story['id'], position.to_i, evidence)
-      puts "Criterion #{position} marked met for #{slug}"
-      puts "Evidence: #{evidence}" unless evidence.empty?
+      # Self-guiding error: when slug is valid but position is missing, show criteria
+      unless slug && (position || all_flag)
+        if story
+          criteria = store.criteria_for_story(story['id'])
+          pending  = criteria.reject { |c| c['status'] == 'met' }
+          $stderr.puts "Usage: tyrion check <slug> <position> \"evidence\""
+          $stderr.puts "       tyrion check <slug> --all \"evidence\""
+          $stderr.puts ""
+          $stderr.puts "Criteria for #{slug}:"
+          criteria.each { |c| $stderr.puts "  #{Output.criterion_icon(c['status'])} #{c['position']}. #{c['keyword'].ljust(5)} #{c['text']}" }
+          $stderr.puts ""
+          $stderr.puts "#{pending.length} pending — e.g.: tyrion check #{slug} #{pending.first['position']} \"evidence\"" if pending.any?
+        else
+          $stderr.puts "Usage: tyrion check <slug> <position> \"evidence\""
+        end
+        exit 1
+      end
+
+      if all_flag
+        criteria = store.criteria_for_story(story['id'])
+        pending  = criteria.reject { |c| c['status'] == 'met' }
+        die "No pending criteria for #{slug}" if pending.empty?
+        pending.each { |c| store.check_criterion(story['id'], c['position'], evidence) }
+        puts "All #{pending.length} criteria marked met for #{slug}"
+        puts "Evidence: #{evidence}" unless evidence.empty?
+      else
+        store.check_criterion(story['id'], position.to_i, evidence)
+        puts "Criterion #{position} marked met for #{slug}"
+        puts "Evidence: #{evidence}" unless evidence.empty?
+      end
     rescue RuntimeError => e
       die e.message
     end
@@ -1038,14 +1114,44 @@ module Tyrion
     # ── done ───────────────────────────────────────────────────────────────
 
     def self.cmd_done(args, store)
-      slug    = args.shift
-      force   = args.delete('--force')
-      summary = args.join(' ')
-      die "Usage: tyrion done <slug> \"completion summary\" [--force]" unless slug && !summary.empty?
+      slug         = args.shift
+      force        = args.delete('--force')
+      from_checks  = args.delete('--from-checks')
+      summary      = args.join(' ')
 
       _project, epic = resolve_project_epic(store)
-      story = store.find_story(epic['id'], slug)
-      die "Story not found: #{slug}" unless story
+      story = store.find_story(epic['id'], slug) if slug
+      die "Story not found: #{slug}" if slug && !story
+
+      # Self-guiding error: when no summary, show met criteria + pre-filled command
+      unless slug && !summary.empty?
+        if story
+          criteria = store.criteria_for_story(story['id'])
+          met      = criteria.select { |c| c['status'] == 'met' }
+          pending  = criteria.reject { |c| c['status'] == 'met' }
+          $stderr.puts "Usage: tyrion done <slug> \"completion summary\" [--force]"
+          $stderr.puts ""
+          if pending.empty? && criteria.any?
+            $stderr.puts "All #{met.length} criteria are met. Provide a completion summary:"
+            $stderr.puts "  tyrion done #{slug} \"...\""
+          else
+            $stderr.puts "Criteria (#{met.length}/#{criteria.length} met):"
+            criteria.each { |c| $stderr.puts "  #{Output.criterion_icon(c['status'])} #{c['position']}. #{c['text']}" }
+            $stderr.puts ""
+            $stderr.puts "  tyrion done #{slug} \"...\" #{pending.any? ? '--force (unmet criteria exist)' : ''}"
+          end
+        else
+          $stderr.puts "Usage: tyrion done <slug> \"completion summary\" [--force]"
+        end
+        exit 1
+      end
+
+      if from_checks
+        criteria = store.criteria_for_story(story['id'])
+        evidence = criteria.select { |c| c['status'] == 'met' && c['evidence'] && !c['evidence'].empty? }
+                           .map { |c| "#{c['position']}. #{c['text']}: #{c['evidence']}" }.join('; ')
+        summary = evidence.empty? ? summary : "#{summary} | Evidence: #{evidence}"
+      end
 
       store.complete_story(story['id'], summary, force: force)
       puts "#{Output.green('Done:')} #{slug} — #{story['title']}"

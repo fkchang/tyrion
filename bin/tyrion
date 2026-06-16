@@ -18,6 +18,7 @@
 #   tyrion done <slug> "…"         Complete story
 #   tyrion help                    Full usage
 
+$stdout.sync = true  # stream output immediately even when piped (prevents "appears hung" on slow repos)
 $LOAD_PATH.unshift(File.join(__dir__, '..', 'lib'))
 
 require 'tyrion'
