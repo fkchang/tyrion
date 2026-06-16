@@ -3,17 +3,18 @@
 module Views
   class RoadmapView < Phlex::HTML
     def initialize(project:, epics:, active_epic:, active_story:, stories_by_epic:, criteria:,
-                   sidebar_stories:, disc_summary:, git_branch: 'main', dirty_count: 0)
+                   sidebar_stories:, disc_summary:, git_branch: 'main', dirty_count: 0, project_slug: nil)
       @project = project; @epics = epics; @active_epic = active_epic
       @active_story = active_story; @stories_by_epic = stories_by_epic; @criteria = criteria
       @sidebar_stories = sidebar_stories; @disc_summary = disc_summary
-      @git_branch = git_branch; @dirty_count = dirty_count
+      @git_branch = git_branch; @dirty_count = dirty_count; @project_slug = project_slug
     end
 
     def view_template
       render Views::Layout.new(project: @project, epic: @active_epic,
                                 stories: @sidebar_stories, disc_summary: @disc_summary,
-                                active_tab: :roadmap, git_branch: @git_branch, dirty_count: @dirty_count) do
+                                active_tab: :roadmap, git_branch: @git_branch, dirty_count: @dirty_count,
+                                project_slug: @project_slug) do
         div(class: "main-content visible", id: "s-roadmap") do
           div(class: "rm-outer") do
             div(class: "rm-wrap") do

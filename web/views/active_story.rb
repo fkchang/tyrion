@@ -8,7 +8,7 @@ module Views
     NEXT_ACTION_MAX_LEN = 120
 
     def initialize(project:, epic:, story:, criteria:, notes:, stories:, disc_summary:,
-                   git_branch: 'main', dirty_count: 0, flash: nil, active_tab: :active)
+                   git_branch: 'main', dirty_count: 0, flash: nil, active_tab: :active, project_slug: nil)
       @project     = project
       @epic        = epic
       @story       = story
@@ -20,6 +20,7 @@ module Views
       @dirty_count = dirty_count
       @flash       = flash
       @active_tab  = active_tab
+      @project_slug = project_slug
       @stale       = story ? TyrionWeb::Presenter.stale?(story['last_note_at']) : false
     end
 
@@ -27,7 +28,7 @@ module Views
       render Views::Layout.new(
         project: @project, epic: @epic, stories: @stories,
         disc_summary: @disc_summary, active_tab: @active_tab,
-        git_branch: @git_branch, dirty_count: @dirty_count
+        git_branch: @git_branch, dirty_count: @dirty_count, project_slug: @project_slug
       ) do
         div(class: "main-content visible", id: "s-active") do
           div(class: "as-outer") do

@@ -2,16 +2,17 @@
 
 module Views
   class DiscoveriesView < Phlex::HTML
-    def initialize(project:, spike:, findings_ready:, marks:, epic:, stories:, disc_summary:, git_branch: 'main', dirty_count: 0)
+    def initialize(project:, spike:, findings_ready:, marks:, epic:, stories:, disc_summary:, git_branch: 'main', dirty_count: 0, project_slug: nil)
       @project = project; @spike = spike; @findings_ready = findings_ready; @marks = marks
       @epic = epic; @stories = stories; @disc_summary = disc_summary
-      @git_branch = git_branch; @dirty_count = dirty_count
+      @git_branch = git_branch; @dirty_count = dirty_count; @project_slug = project_slug
     end
 
     def view_template
       render Views::Layout.new(project: @project, epic: @epic, stories: @stories,
                                 disc_summary: @disc_summary, active_tab: :discoveries,
-                                git_branch: @git_branch, dirty_count: @dirty_count) do
+                                git_branch: @git_branch, dirty_count: @dirty_count,
+                                project_slug: @project_slug) do
         div(class: "main-content visible", id: "s-discoveries") do
           div(class: "dv-outer") do
             div(class: "dv-ledger") do

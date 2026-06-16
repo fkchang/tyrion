@@ -395,6 +395,56 @@ Tyrion was built during a SDRD session, when the handoff-doc problem became pain
 
 ---
 
+## Forget the steps. The Hand remembers.
+
+You're juggling too many things. You switch contexts. You forget what you were building, what the next command is, whether you ran that check. That's fine — remembering is Tyrion's job. Yours is to show up.
+
+**Once per project:**
+```
+/tyrion-new                        # bootstrap from scratch
+/tyrion-shape --from PRD.md        # or shape from documents
+```
+
+**Once per story — repeat until the epic is done:**
+```
+/tyrion-implement    # claim, build, UAT, close
+/clear               # scrub context, start fresh
+```
+
+The skill handles every step you'd forget: orient, plan, note, context, check, handoff, pre-push, done. You review the UAT output and say whether it's right.
+
+### More effort, better results
+
+**Save time between sessions** — claim the next story before `/clear`. The next session sees it already in progress and skips the orient reasoning entirely.
+
+```bash
+tyrion start next-story   # pre-claim while context is still warm
+/clear
+/tyrion-implement         # resumes instantly
+```
+
+**Shape it toward great** — `/tyrion-implement` pauses at UAT and waits for you. That pause is the quality gate. Review what the agent built. "This button is in the wrong place." "The error message is confusing." Each correction closes the gap between what the agent inferred and what you actually meant.
+
+Per SDRD, you can't one-shot great — you discover what great looks like through the feedback loop. The skill runs the campaign. You decide whether the campaign was worth running.
+
+> *A Warden holds the land. A Hand shapes the realm.* The loop ships stories. The loop with guidance ships something worth shipping.
+
+### Dark factory
+
+`--dark-factory` — the agent runs UAT itself and closes the story without you. No pause, no review, no steering. The work ships.
+
+```
+/tyrion-implement my-story --dark-factory
+```
+
+`--adequate` if you're being generous. `--mediocre` if you're being honest. Use it when "done" is the bar, not "great."
+
+This is distinct from `--spike`, which skips the quality gate entirely because spike output is disposable. `--dark-factory` still runs UAT — the agent just reviews its own work. Meant to ship; you're just not in the loop.
+
+For full hands-off runs, pair with a `/goal` directive to drive an entire epic unattended.
+
+---
+
 ## License
 
 MIT

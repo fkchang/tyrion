@@ -62,7 +62,8 @@ get "/" do
     criteria: d[:criteria], notes: d[:notes],
     stories: d[:stories], disc_summary: d[:disc_summary],
     git_branch: d[:git_branch], dirty_count: d[:dirty_count],
-    flash: session[:flash].tap { session.delete(:flash) }
+    flash: session[:flash].tap { session.delete(:flash) },
+    project_slug: params[:project]
   )
 end
 
@@ -75,6 +76,7 @@ get "/roadmap" do
     project: d[:project], epics: d[:epics], active_epic: d[:active_epic],
     active_story: d[:active_story], stories_by_epic: d[:stories_by_epic], criteria: d[:criteria],
     sidebar_stories: base[:stories], disc_summary: base[:disc_summary],
+    project_slug: params[:project],
     **base_git
   )
 end
@@ -104,6 +106,7 @@ get "/discoveries" do
     findings_ready: d[:findings_ready], marks: d[:marks],
     epic: epic,
     stories: base[:stories], disc_summary: base[:disc_summary],
+    project_slug: params[:project],
     **base_git
   )
 end
@@ -118,6 +121,7 @@ get "/warroom" do
     project: d[:project], queue: d[:queue], active: d[:active],
     blocked: d[:blocked], done: d[:done],
     epic: epic, stories: base[:stories], disc_summary: base[:disc_summary],
+    project_slug: params[:project],
     **base_git
   )
 end

@@ -3,7 +3,7 @@
 module Views
   class Layout < Phlex::HTML
     def initialize(project:, epic:, stories: [], disc_summary: {}, active_tab: :active,
-                   git_branch: 'main', dirty_count: 0)
+                   git_branch: 'main', dirty_count: 0, project_slug: nil)
       @project     = project
       @epic        = epic
       @stories     = stories
@@ -11,6 +11,7 @@ module Views
       @active_tab  = active_tab
       @git_branch  = git_branch || 'unknown'
       @dirty_count = dirty_count.to_i
+      @project_slug = project_slug
     end
 
     TABS = [
@@ -76,8 +77,9 @@ module Views
         div(class: "topbar-nav") do
           TABS.each do |tab|
             is_active = @active_tab == tab[:id]
+            href = @project_slug ? "#{tab[:path]}?project=#{@project_slug}" : tab[:path]
             a(class: is_active ? "demo-tab active" : "demo-tab",
-              href: tab[:path],
+              href: href,
               style: "text-decoration:none;") do
               plain "#{tab[:icon]} #{tab[:label]}"
             end
