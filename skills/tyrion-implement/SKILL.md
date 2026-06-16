@@ -367,6 +367,15 @@ tyrion status   # verify plan view shows the story as done
 
 The completion summary should reference or embed the UAT runbook note so the ledger is self-contained.
 
+**SHEPHERD MODE `/clear` GATE — this is the natural context-reset point.**
+
+After `tyrion done` succeeds: the ledger is authoritative. The story is done. The next agent can reconstruct full state from `tyrion resume`. This means:
+
+- **It is safe to `/clear` right now.** You will not lose any work.
+- In shepherd mode, you SHOULD `/clear` here to defeat context rot. Then `/tyrion-implement` for the next story.
+- The context you are holding is now *redundant* — the ledger has it all. `/clear` is free.
+- If you do NOT `/clear`, you must mark THIS story done before implementing the next. Never implement story N+1 while story N is marked done but story N-1 is still in_progress in the ledger. The ledger reflects reality, not your memory.
+
 **After `tyrion done` succeeds, print a Quick UAT block** — always, in every mode.
 
 The steps are always printed in full so the user can run them manually regardless of whether automation is used. Format:
