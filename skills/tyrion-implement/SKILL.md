@@ -115,7 +115,7 @@ tyrion claim-next        # transactional claim of lowest-sequence pending story
 ```bash
 # Detect current agent session and record it on the story
 # Claude Code: find most recently modified JSONL for this project
-SESSION_FILE=$(ls -t ~/.claude/projects/-Users-fkchang-work-hedgeye-admin/*.jsonl 2>/dev/null | head -1)
+SESSION_FILE=$(ls -t ~/.claude/projects/-Users-fkchang-work-tyrion/*.jsonl 2>/dev/null | head -1)
 SESSION_ID=$(basename "$SESSION_FILE" .jsonl)
 tyrion note <slug> session "claude:${SESSION_ID} path:${SESSION_FILE}"
 ```
@@ -126,6 +126,19 @@ tyrion note <slug> session "${TYRION_AGENT:-claude}:${TYRION_SESSION_ID}"
 ```
 
 This links the story to the transcript that built it. Postmortem: `tyrion show <slug>` → find the session note → read the JSONL for the full decision trail.
+
+**Name the session after the story (for badge visibility and GEA orientation):**
+
+```bash
+# Claude Code — updates the session badge and triage UI
+/Users/fkchang/work/claude_code_history/bin/name-session \
+  --session-id "${SESSION_ID}" "tyrion: <slug>"
+
+# Codex / any terminal — set OS window title as fallback
+printf '\e]2;tyrion: <slug>\a' 2>/dev/null || true
+```
+
+Run whichever applies. Both are safe no-ops if the target isn't available. The badge/title stays for the life of the session so GEA tab switching always shows which story is in flight.
 
 ---
 
@@ -360,7 +373,7 @@ If `--review` mode: share the /pre-push output. Wait for user ok before Step 9.
 
 ```bash
 tyrion done <slug> "<one-paragraph completion summary: what was built, key decisions made, what the next story should know>"
-tyrion status   # verify plan view shows the story as done
+tyrion status   # verify plan view shows the story as done; note the next pending story slug
 ```
 
 `tyrion done` refuses if any criterion is still `pending` (unless `--force`). That refusal is the quality gate — don't bypass it without a written reason.
@@ -411,10 +424,29 @@ UAT steps are story-type-aware — derive from the criteria and implementation, 
 - **Controller**: browser checks for each action (index, show, error cases) + auth redirect check
 - **Phlex component**: browser check of the page that renders it + what element/text to look for
 - **View / tab / nav**: browser checks for each tab/link with active-state and content expectations
+- **Spec-only / test-only story**: DO NOT re-list specs as UAT — pre-push already ran them. Write CLI steps that exercise the observable behavior directly (set up data, run the command, observe the output). If the story has no CLI surface beyond the specs, print: `No additional UAT — behavior verified by pre-push test suite.`
 
 **If the user answers `y`:** attempt browser automation. Try playwright-cli first (isolated session, no conflicts with other Claude Code sessions). If playwright-cli fails or isn't available, offer to use the Claude-in-Chrome plugin. Report each check as ✅ or ❌ with the actual page content seen. If automation fails entirely, say so — the steps are already printed for manual use.
 
-**If the user answers `skip` or doesn't respond:** do nothing. The steps are printed. Done.
+After browser automation completes (all results reported), THEN ask:
+```
+Pre-claim `<next-pending-slug>` for the next session? [y/skip]
+```
+- All checks ✅: run `tyrion start <next-pending-slug>` if user says y.
+- Any check ❌: do NOT pre-claim regardless of what user says. Surface the failures instead.
+
+**If the user answers `skip` to browser checks:** do nothing with automation. Then ask:
+```
+Pre-claim `<next-pending-slug>` for the next session? [y/skip]
+```
+If user says y, run `tyrion start <next-pending-slug>`.
+
+**If the story has no browser checks** (CLI-only UAT: rake tasks, migrations, service objects, component library stories): skip the "Want me to run browser checks?" question entirely — it doesn't apply. Run CLI checks inline, report results, then ask:
+```
+Pre-claim `<next-pending-slug>` for the next session? [y/skip]
+```
+
+**NEVER ask "Want me to run browser checks?" and "Pre-claim?" in the same message.** These are two separate decisions that must be answered sequentially — a single `y` is ambiguous when both are present.
 
 ---
 
