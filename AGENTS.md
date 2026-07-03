@@ -183,7 +183,7 @@ ukf search "<term>"               # cross-member search -> member | title | path
 
 Read the page it points to. A `resource:` frontmatter field links the live artifact the page
 is about — fetch via an authenticated CLI where one exists, never a raw API. Master member
-list: `/Users/fkchang/work/cultiv-ai/wiki/members.md`.
+list: `members.md` at the hub — run `ukf hub` to locate it.
 
 ### Add knowledge
 
@@ -195,6 +195,6 @@ ukf register <path> [--reference]
 ```
 
 Full model (full vs. reference members, frontmatter convention, pre-commit gate):
-`/Users/fkchang/work/cultiv-ai/wiki/wiki-of-wikis.md`.
+`wiki-of-wikis.md` at the hub (`ukf hub` prints the hub path).
 
 <!-- END UKF FEDERATION SECTION -->
