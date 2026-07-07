@@ -10,7 +10,7 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 ## Invocation
 
 ```
-/tyrion-implement [slug] [--spike | --trivial | --tdd=strict|loose|off] [--review] [--no-prepush] [--plan=<path>] [--dark-factory | --adequate | --mediocre] [--vet]
+/tyrion-implement [slug] [--spike | --trivial | --tdd=strict|loose|off] [--review] [--no-prepush] [--plan=<path>] [--dark-factory | --adequate | --mediocre] [--vet] [--review-stack=superpowers]
 ```
 
 ### Modes
@@ -37,6 +37,7 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 - `--no-prepush` — skip pre-push only (keep TDD)
 - `--review` — pause at each step boundary for user steering
 - `--plan=<path>` — explicit plan file; overrides `Plan file:` in epic context_md
+- `--review-stack=superpowers` — add a two-stage review at Step 8 (after `/pre-push`): a spec-compliance reviewer subagent and the `superpowers:code-reviewer` agent, verdicts recorded as `spec-review` and `code-review` gates. Off by default; see Step 8.
 
 **Mode resolution** (first match wins):
 1. `--trivial` flag → TDD off + no pre-push + orchestrator implements directly
@@ -429,6 +430,58 @@ tyrion lessons --at pre-push-pass
 ```
 
 Just-in-time check, silent when nothing applies. The lesson most likely to fire here is the rule this very line encodes: don't stop, don't summarize, don't wait for confirmation — proceed immediately to Step 9. Pre-push passing is not the finish line — `tyrion done` + the UAT block is.
+
+**`--review-stack=superpowers` — opt-in two-stage review (only when the flag is present):**
+
+Off by default. `/pre-push` remains the standard quality gate; this adds a deeper review on top for stories where a recorded review verdict is worth the extra passes. When `--review-stack=superpowers` is set, run these two stages after `/pre-push` passes, before Step 9. Each stage records a gate — pass AND fail, every run — so the ledger holds the review history.
+
+**Stage 1 — spec-compliance reviewer (Tyrion's criteria ARE the spec):**
+
+Spawn a fresh general-purpose subagent (prompt adapted from superpowers' `subagent-driven-development/spec-reviewer-prompt.md`). Give it:
+- The story's criteria verbatim (all Given/When/Then) plus the `check` evidence recorded for each — this is the spec.
+- The diff to inspect: `git diff <BASE_SHA>..<HEAD_SHA>` where the SHAs come from the `tyrion commits <slug>` capture (see Stage 2 for deriving them).
+- The instruction: **do not trust the implementer's evidence — read the actual diff and verify each criterion independently.** Flag missing requirements, extra/unrequested work, and misunderstandings, each with a `file:line` reference.
+- Its verdict format: `✅ Spec compliant` or `❌ Issues found: <list with file:line>`.
+
+Record the verdict:
+
+```bash
+# ✅ Spec compliant:
+tyrion gate <slug> spec-review pass --detail "spec compliant — all N criteria verified against diff"
+# ❌ Issues found:
+tyrion gate <slug> spec-review fail --detail "<each issue with file:line, one per line>"
+```
+
+**Stage 2 — code-quality review via the `superpowers:code-reviewer` agent:**
+
+First derive the review range from the commit capture:
+
+```bash
+tyrion commits <slug>   # writes/refreshes the commit note; metadata.shas lists this story's commits (newest first)
+```
+
+`HEAD_SHA` = the newest commit (first sha in `metadata.shas`); `BASE_SHA` = `<oldest-sha>^` (the parent of the last sha in the list). If the capture recorded `no commits — no changes required`, skip Stage 2 and record `tyrion gate <slug> code-review pass --detail "no commits — nothing to review" --meta '{"critical":0,"important":0,"minor":0}'`.
+
+Dispatch the `superpowers:code-reviewer` agent (template at `~/.claude/plugins/cache/superpowers-marketplace/superpowers/5.0.5/skills/requesting-code-review/code-reviewer.md`), filling `{BASE_SHA}`/`{HEAD_SHA}`, `{WHAT_WAS_IMPLEMENTED}` (story intent + criteria), and `{PLAN_REFERENCE}` (the `[plan]` notes / PLAN_SECTION). Craft its context precisely from the story — never hand it raw session history. It returns Strengths / Issues (Critical | Important | Minor, each with file:line) / Assessment ending in `Ready to merge? [Yes/No/With fixes]`.
+
+Map the verdict and record the severity counts in `--meta` JSON:
+
+```bash
+# Ready to merge: Yes  → pass
+tyrion gate <slug> code-review pass --detail "Ready to merge: Yes — <1-line reasoning>" \
+  --meta '{"critical":0,"important":0,"minor":<n>}'
+# Ready to merge: No / With fixes  → fail
+tyrion gate <slug> code-review fail --detail "Ready to merge: With fixes — <top Critical/Important issues, file:line each>" \
+  --meta '{"critical":<n>,"important":<n>,"minor":<n>}'
+```
+
+**Fix → re-review loop:** any Critical or Important issue (from either stage) means the gate is a **fail** — fix the issues, then re-run that stage and record the new gate result. Minor-only issues do not block (record pass, note them in `--detail`). Repeat until both `spec-review` and `code-review` gates are pass. **Cap the loop at 3 iterations per stage** (superpowers convention); if still failing after the third, stop looping and block the story for a human:
+
+```bash
+tyrion block <slug> "review-stack=superpowers: <stage> still failing after 3 iterations — <remaining Critical/Important issues>"
+```
+
+In dark-factory mode the same cap applies — block rather than loop forever. Do not proceed to Step 9 until both gates are pass (or the story is blocked).
 
 ---
 
