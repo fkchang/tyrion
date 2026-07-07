@@ -10,7 +10,7 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 ## Invocation
 
 ```
-/tyrion-implement [slug] [--spike | --trivial | --tdd=strict|loose|off] [--review] [--no-prepush] [--plan=<path>]
+/tyrion-implement [slug] [--spike | --trivial | --tdd=strict|loose|off] [--review] [--no-prepush] [--plan=<path>] [--dark-factory | --adequate | --mediocre]
 ```
 
 ### Modes
@@ -21,10 +21,13 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 | **Spike** | `--spike` | off | skipped | per-batch | Exploring — no test infra expected, discovery-first |
 | **Build** | *(default)* | loose | required | per-batch | Building to keep — tests encouraged, quality gate active |
 | **Strict** | `--tdd=strict` | strict | required | per-batch | Production-grade — failing test must come first |
+| **Dark factory** | `--dark-factory` | per underlying mode | required | per-batch | Unattended runs + orchestrate subagents — agent reviews its own work, never prompts |
 
 `--trivial` — orchestrator implements all criteria directly, no subagent spawning, no UAT runbook, no pre-push. Use for edits where the right answer is obvious from the plan and ceremony costs more than the change.
 
 `--spike` is shorthand for `--tdd=off --no-prepush`. Use when in SDRD discovery mode and you haven't decided whether to keep the work yet.
+
+**`--dark-factory`** (aliases: `--adequate`, `--mediocre` — all three identical) — no human in the loop. Orthogonal to the TDD modes above: it composes with build or strict (default: build) and changes *who reviews*, not *whether* quality gates run. The agent runs the UAT runbook itself and records the result as a `uat` gate, never prompts, and pre-claims the next story automatically. Incompatible with `--review` (contradictory — refuse the combination and say why). This is the mode `/tyrion-orchestrate` subagents must run in: a subagent has no human to answer the Step 9 prompts. Use when "done" is the bar, not "great" — distinct from `--spike`, which skips the quality gate entirely because spike output is disposable.
 
 **To promote a spike or trivial story to a keeper:** re-run `/tyrion-implement <slug>` (no `--spike`/`--trivial`) after done. It applies the quality gate retroactively.
 
@@ -43,6 +46,8 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 6. Default: Build mode (TDD loose + pre-push required)
 
 The RIGOR tag is the zero-friction path: when `/tyrion-shape` ingested the plan, it already assessed each story. Read it in Step 3 and act on it — never ask the user to specify a mode that shape already decided.
+
+**Dark-factory is orthogonal to this resolution** — `--dark-factory`/`--adequate`/`--mediocre` modifies whichever TDD mode wins above (default: build). It never changes TDD or pre-push requirements; it only replaces every user prompt with the autonomous action + gate record described in Steps 4 and 9. `--dark-factory` with `--review` must refuse (`--review` means pause for the user at every boundary; dark factory means there is no user).
 
 ---
 
@@ -86,6 +91,7 @@ If no plan file is found, proceed normally — you will derive the plan from cri
 - Spike mode: `🔬 SPIKE MODE — TDD off, pre-push skipped. Discovery-first. Run /tyrion-implement <slug> (no --spike) when ready to apply quality gates.`
 - Build mode: `🏗 BUILD MODE — TDD loose, pre-push required. Tests encouraged. Quality gate active before close.`
 - Strict mode: `✅ STRICT MODE — TDD strict, pre-push required. Failing test must come first per criterion.`
+- Dark factory (appended to the underlying mode's banner): `🏭 DARK FACTORY — no human in the loop. UAT self-run and recorded as a uat gate. "Done" is the bar, not "great".`
 
 If `--review` mode: pause here and report what you found. Wait for user ok before Step 2.
 
@@ -219,6 +225,14 @@ tyrion import features/<epic-slug>.feature [--confirm-abandon] [--force]
 ```
 
 **This gate applies in all modes, including trivial.** Autonomy mode does not override this stop.
+
+**Dark-factory variant of this stop:** there is no user to answer, and guessing at sharpness is forbidden in every mode. Instead of waiting, block the story with the analysis attached and move on:
+
+```bash
+tyrion block <slug> "vague criteria — proposed sharp rewrites: <criterion N: proposed rewrite; ...>"
+```
+
+Then return `BLOCKED: <slug> — vague criteria, rewrites proposed in block reason` (orchestrate treats this as a full stop for the story; the human resolves it by editing the .feature and re-importing).
 
 If `--review` mode: present the criteria and plan, wait for user ok/steer before Step 5.
 
@@ -405,6 +419,24 @@ Just-in-time check, silent when nothing applies. The lesson most likely to fire 
 ---
 
 ### 9. CLOSE
+
+**Dark-factory override — self-run UAT before closing, then close without asking:**
+
+In dark-factory mode, do not print prompts anywhere in this step. Instead:
+
+1. Execute the Step 7.5 UAT runbook yourself, now, before `tyrion done`: CLI checks inline; browser checks via playwright-cli (isolated session — never the shared Chrome).
+2. Record the result — always:
+
+```bash
+tyrion gate <slug> uat pass --detail "<per-check ✅ results, one line each>"
+# or, on any failed check:
+tyrion gate <slug> uat fail --detail "<per-check ✅/❌ results — ❌ lines say what was seen instead>"
+```
+
+3. All checks ✅ → proceed to `tyrion done` below, then claim the next pending story with `tyrion start <next-slug>` automatically — no pre-claim question.
+4. Any check ❌ → fix and re-run UAT (recording each run), or if unfixable, `tyrion note <slug> blocker` + `tyrion block` and stop. Never close a story whose latest uat gate is fail.
+
+Everything below that is phrased as a question to the user ("Want me to run...?", "Pre-claim...?", "re-run any of the above?") is skipped in dark-factory mode — the answers are hardwired to: run everything, report results, pre-claim on success.
 
 ```bash
 tyrion done <slug> "<one-paragraph completion summary: what was built, key decisions made, what the next story should know>"
