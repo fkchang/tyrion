@@ -60,6 +60,7 @@ module Tyrion
       when 'resume'       then cmd_resume(args, store)
       when 'note'         then cmd_note(args, store)
       when 'gate'         then cmd_gate(args, store)
+      when 'commits'      then cmd_commits(args, store)
       when 'context'      then cmd_context(args, store)
       when 'next'         then cmd_next(args, store)
       when 'reconcile'    then cmd_reconcile(args, store)
@@ -1150,6 +1151,57 @@ module Tyrion
       puts "Gate recorded: #{result == 'pass' ? Output.green(label) : Output.red(label)}"
     end
 
+    # ── commits ──────────────────────────────────────────────────────────────
+    # Captures the story's commit record as a kind='commit' story note. Also runs
+    # automatically at `tyrion done` (see cmd_done). Append-only, like gates.
+
+    def self.cmd_commits(args, store)
+      slug = args.shift
+      die "Usage: tyrion commits <slug>" unless slug
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      since = commit_capture_since(story)
+      die "Cannot capture commits: #{slug} has no started_at, claimed_at, or created_at timestamp" unless since
+
+      count = write_commit_note(store, story, since)
+      die "Cannot capture commits: git is unavailable in this worktree" if count.nil?
+
+      puts "Commits recorded: #{count.zero? ? 'none' : count} — #{slug}"
+    end
+
+    # Timestamp a commit capture measures from — started_at wins, then claimed_at,
+    # then created_at. nil only if the story somehow has none.
+    def self.commit_capture_since(story)
+      presence(story['started_at']) || presence(story['claimed_at']) || presence(story['created_at'])
+    end
+
+    # Writes one kind='commit' note listing commits since `since`. Returns the
+    # commit count, or nil if git is unavailable (Repo.commits_since nil/raised).
+    # Raise-free so callers (e.g. cmd_done) can capture opportunistically.
+    def self.write_commit_note(store, story, since)
+      commits = begin
+        Repo.commits_since(since)
+      rescue StandardError
+        nil
+      end
+      return nil if commits.nil?
+
+      if commits.empty?
+        body = 'no commits — no changes required'
+        metadata = { 'shas' => [], 'count' => 0 }
+      else
+        shas = commits.map { |line| line.split(' ', 2).first }
+        body = (["commits since #{since}:"] + commits).join("\n")
+        metadata = { 'shas' => shas, 'count' => shas.length }
+      end
+
+      store.add_note(story['id'], 'commit', body, metadata: JSON.dump(metadata))
+      commits.length
+    end
+
     # ── context ────────────────────────────────────────────────────────────
 
     def self.cmd_context(args, store)
@@ -1365,6 +1417,13 @@ module Tyrion
         evidence = criteria.select { |c| c['status'] == 'met' && c['evidence'] && !c['evidence'].empty? }
                            .map { |c| "#{c['position']}. #{c['text']}: #{c['evidence']}" }.join('; ')
         summary = evidence.empty? ? summary : "#{summary} | Evidence: #{evidence}"
+      end
+
+      # Auto-capture the commit record before sealing the story. Never let a git
+      # hiccup block the close — write_commit_note is raise-free and returns nil
+      # when git is unavailable, in which case we skip silently (with a note).
+      if (since = commit_capture_since(story))
+        puts Output.dim("(commit capture skipped — git unavailable)") if write_commit_note(store, story, since).nil?
       end
 
       store.complete_story(story['id'], summary, force: force)
@@ -2084,7 +2143,11 @@ module Tyrion
         label = runs.length == 1 ? 'run' : 'runs'
         puts "  #{icon} #{name} (#{runs.length} #{label})"
       end
-      notes.select { |n| n['kind'] == 'commit' }.each { |c| puts "  #{c['body']}" }
+      notes.select { |n| n['kind'] == 'commit' }.each do |c|
+        lines = c['body'].lines.map(&:chomp)
+        puts "  #{lines.first}"
+        lines[1..].each { |line| puts "    #{line}" }
+      end
       puts
     end
 

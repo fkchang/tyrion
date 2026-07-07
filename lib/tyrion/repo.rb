@@ -82,6 +82,17 @@ module Tyrion
       `git -C #{path.shellescape} rev-parse --short HEAD 2>/dev/null`.strip
     end
 
+    # "<short-sha> <subject>" lines for commits on the current branch since
+    # `timestamp`. Returns [] when the window has no commits, nil when git is
+    # unavailable / not a repo (callers decide whether that's fatal).
+    def self.commits_since(timestamp, root: nil)
+      root ||= worktree_root
+      output = `git -C #{root.shellescape} log --oneline --since=#{timestamp.to_s.shellescape} 2>/dev/null`
+      return nil unless $?.success?
+
+      output.lines.map(&:strip).reject(&:empty?)
+    end
+
     TOUCHED_FILES_LIMIT = 10
 
     def self.touched_files(path = nil)
