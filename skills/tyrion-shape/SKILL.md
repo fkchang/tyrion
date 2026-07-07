@@ -83,6 +83,35 @@ For each story, extract:
 
 **Deferred items** — things the plan explicitly excludes. Goes into epic context.
 
+**Superpowers plans — recognize and map natively:**
+
+A document produced by `superpowers:writing-plans` is detectable by its mandatory header line:
+
+```
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development ...
+```
+
+plus `### Task N:` sections with `- [ ]` checkbox steps. These usually live at
+`docs/superpowers/plans/YYYY-MM-DD-<feature>.md`. When you detect one:
+
+- Each `### Task N:` section → one story. The task's **Files:** block and step details are the
+  implementation body (capture verbatim in the story's plan note).
+- Checkbox steps → criteria. Superpowers steps are TDD micro-steps ("write failing test", "run it",
+  "commit") — collapse each red/green/commit cycle into one sharp criterion asserting the behavior
+  the test proves, not five criteria for the five mechanical steps.
+- Add a `Plan file: <path-to-the-plan>` line to the epic context_md. `/tyrion-implement` Step 1
+  reads that line and injects the matching plan section into every subagent prompt — this is the
+  handoff that makes the superpowers plan executable under the Tyrion ledger.
+- Check for a sibling spec at `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` (written by
+  `superpowers:brainstorming`). If present, ingest it as project/epic context material like any
+  other design doc — it's the WHY behind the plan.
+- Superpowers plans are TDD-first by construction: default these stories to `RIGOR: strict` unless
+  the task is genuinely mechanical (Step 3b judgment still applies).
+
+This is the recommended front-end for new work: `superpowers:brainstorming` →
+`superpowers:writing-plans` → `/tyrion-shape --from <plan>` → `/tyrion-implement`. Superpowers owns
+brainstorm/plan discipline; Tyrion owns the ledger, resumability, and gate traceability.
+
 ### Step 3b: Rigor + batching detection
 
 **Do this for every story after extraction, before writing anything.**
