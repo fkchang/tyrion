@@ -1,11 +1,29 @@
 # frozen_string_literal: true
 
+require 'fileutils'
+require 'json'
 require 'time'
 require_relative 'importer'
+require_relative 'lesson_miner'
 
 module Tyrion
   module Commands
     STALE_HOURS = 4
+
+    TYRION_PERMISSIONS = [
+      'Bash(ruby bin/tyrion *)',
+      'Bash(tyrion *)'
+    ].freeze
+
+    WHITELIST_SCOPES = {
+      'local'   => -> { File.join(Dir.pwd, '.claude', 'settings.local.json') },
+      'project' => -> { File.join(Dir.pwd, '.claude', 'settings.json') },
+      'global'  => -> { File.join(Dir.home, '.claude', 'settings.json') }
+    }.freeze
+
+    # Sentinel — :unset means "not yet derived"; nil is a valid memoized result.
+    # Specs reset this to :unset to re-derive between examples.
+    @_lane_token = :unset
 
     DISCOVERY_ALIASES = {
       'active'   => 'active_spike',
@@ -30,6 +48,7 @@ module Tyrion
       when 'show'         then cmd_show(args, store)
       when 'notes'        then cmd_notes(args, store)
       when 'start'        then cmd_start(args, store)
+      when 'assign'       then cmd_assign(args, store)
       when 'block'        then cmd_block(args, store)
       when 'unblock'      then cmd_unblock(args, store)
       when 'claim-next'   then cmd_claim_next(args, store)
@@ -40,14 +59,23 @@ module Tyrion
       when 'spike'        then cmd_spike(args, store)
       when 'resume'       then cmd_resume(args, store)
       when 'note'         then cmd_note(args, store)
+      when 'gate'         then cmd_gate(args, store)
       when 'context'      then cmd_context(args, store)
       when 'next'         then cmd_next(args, store)
+      when 'reconcile'    then cmd_reconcile(args, store)
       when 'criteria'     then cmd_criteria(args, store)
       when 'check'        then cmd_check(args, store)
       when 'uncheck'      then cmd_uncheck(args, store)
       when 'done'         then cmd_done(args, store)
       when 'unstart'      then cmd_unstart(args, store)
       when 'backfill'     then cmd_backfill(args, store)
+      when 'drift'        then cmd_drift(args, store)
+      when 'followup'     then cmd_followup(args, store)
+      when 'depends'      then cmd_depends(args, store)
+      when 'wave'         then cmd_wave(args, store)
+      when 'whitelist'    then cmd_whitelist(args, store)
+      when 'lesson'       then cmd_lesson(args, store)
+      when 'lessons'      then cmd_lesson(['list'] + args, store)
       when nil, '--help', '-h', 'help' then usage
       else
         $stderr.puts "Unknown command: #{cmd}"
@@ -238,9 +266,10 @@ module Tyrion
       when 'show'     then cmd_epic_show(args, store)
       when 'activate' then cmd_epic_activate(args, store)
       when 'pause'    then cmd_epic_pause(args, store)
+      when 'complete' then cmd_epic_complete(args, store)
       else
         $stderr.puts "Unknown epic subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion epic [list|show|activate|pause]"
+        $stderr.puts "Usage: tyrion epic [list|show|activate|pause|complete]"
         exit 1
       end
     end
@@ -307,7 +336,12 @@ module Tyrion
       epic    = store.find_epic(project['id'], slug)
       die "Epic not found: #{slug}" unless epic
 
-      Repo.write_active_epic(slug)
+      token = current_lane_token
+      if token
+        set_active_epic_for_lane(slug, token: token)
+      else
+        Repo.write_active_epic(slug)
+      end
       puts "Active epic set to: #{epic['name']} [#{slug}]"
     end
 
@@ -322,10 +356,31 @@ module Tyrion
       puts "Epic paused: #{epic['name']} [#{slug}]"
     end
 
-    # ── import (stub — full implementation in phase 3) ────────────────────
+    def self.cmd_epic_complete(args, store)
+      force = args.delete('--force')
+      slug  = args.shift || Repo.active_epic
+      die "Usage: tyrion epic complete <slug> [--force]" unless slug
+      project = resolve_project(store)
+      epic    = store.find_epic(project['id'], slug)
+      die "Epic not found: #{slug}" unless epic
+
+      unless force || store.all_stories_done?(epic['id'])
+        stories = store.stories_for_epic(epic['id'])
+        undone  = stories.reject { |s| s['status'] == 'done' }
+        if stories.empty?
+          die "Epic '#{slug}' has no stories. Nothing to seal."
+        else
+          die "Epic '#{slug}' has #{undone.length} story/stories not done: " \
+              "#{undone.map { |s| s['slug'] }.join(', ')}. Finish them or pass --force."
+        end
+      end
+
+      store.update_epic(epic['id'], 'status' => 'done')
+      puts "Epic #{slug} sealed as done."
+    end
 
     def self.cmd_import(args, store)
-      die "Usage: tyrion import <file.feature> [--confirm-abandon]" if args.empty?
+      die "Usage: tyrion import <file.feature> [--confirm-abandon] [--force] [--criteria=then]" if args.empty?
       Importer.run(args, store)
     end
 
@@ -346,7 +401,9 @@ module Tyrion
       project = store.find_project_by_slug(project_slug)
       die "Active project '#{project_slug}' not found in DB. Run: tyrion init" unless project
 
+      north_star = project['about_md']&.lines&.first&.strip&.sub(/^#+\s*/, '')
       puts "#{Output.bold('Project:')} #{project['name']} [#{Output.dim(project_slug)}]"
+      puts "  #{Output.dim(north_star)}" if presence(north_star)
 
       unless epic_slug
         epics = store.list_epics(project['id'])
@@ -371,6 +428,10 @@ module Tyrion
 
       if epic['intent'] && !epic['intent'].empty?
         puts "           #{Output.dim(epic['intent'][0, 80])}#{'…' if epic['intent'].length > 80}"
+      end
+
+      if (drift_path = drift_changed_path(epic, Repo.worktree_root))
+        print_drift_warning(drift_path, indent: '  ')
       end
 
       puts
@@ -460,6 +521,14 @@ module Tyrion
         puts
       end
 
+      # ── lessons ──────────────────────────────────────────────────────────
+      lessons = lessons_for_scope(store, project_id: project['id'], epic_id: epic['id'])
+      unless lessons.empty?
+        puts "  LESSONS"
+        lessons.each { |l| puts "  📎 #{l['id']}  [#{l['trigger']}]  #{l['text']}" }
+        puts
+      end
+
       root   = Repo.worktree_root
       branch = Repo.git_branch
       dirty  = Repo.dirty_count
@@ -529,6 +598,8 @@ module Tyrion
         puts
       end
 
+      print_gates_section(store, story['id'])
+
       notes = store.notes_for_story(story['id'], limit: 10)
       if notes.any?
         puts Output.bold("Recent notes (#{notes.length}):")
@@ -546,9 +617,9 @@ module Tyrion
     # summary shown in tyrion show / tyrion resume.
 
     def self.cmd_notes(args, store)
-      slug     = args.shift
-      kind_filter = args.shift  # optional kind filter (no flag needed — first positional)
-      die "Usage: tyrion notes <slug> [kind]" unless slug
+      kind_filter = extract_flag_value(args, '--kind')
+      slug        = args.reject { |a| a.start_with?('--') }.first
+      die "Usage: tyrion notes <slug> [--kind <kind>]" unless slug
 
       _project, epic = resolve_project_epic(store)
       story = store.find_story(epic['id'], slug)
@@ -587,9 +658,29 @@ module Tyrion
         die "#{slug} is blocked: #{reason}\nRun: tyrion unblock #{slug}"
       end
 
-      story = store.start_story(story['id'])
+      story = store.start_story(story['id'], claimed_by: current_lane_token)
+      Repo.write_active_story(story['slug'], token: current_lane_token) if current_lane_token
       puts "Started: #{story['slug']} — #{story['title']}"
       puts "Status: #{Output.yellow('in_progress')}"
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # ── assign ─────────────────────────────────────────────────────────────
+
+    def self.cmd_assign(args, store)
+      slug = args.shift
+      lane = args.shift
+      die "Usage: tyrion assign <slug> <lane>" unless slug && lane
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug} in epic #{epic['slug']}" unless story
+      die "Story is not pending (status: #{story['status']})" unless story['status'] == 'pending'
+
+      store.assign_story(story['id'], lane)
+      puts "Assigned: #{slug} → assigned:#{lane}"
+      puts "Status: #{Output.dim('pending')} (agent running tyrion start #{slug} will adopt it)"
     rescue RuntimeError => e
       die e.message
     end
@@ -643,7 +734,8 @@ module Tyrion
 
     def self.cmd_claim_next(args, store)
       _project, epic = resolve_project_epic(store)
-      story = store.claim_next_story(epic['id'])
+      story = resolve_my_story(store, epic, explicit_slug: nil, claim_if_none: true)
+      die "No pending stories in this epic" unless story
       puts "Claimed: #{story['slug']} — #{story['title']}"
       puts "Status: #{Output.yellow('in_progress')}"
     rescue RuntimeError => e
@@ -655,7 +747,7 @@ module Tyrion
     def self.cmd_pocket(args, store)
       _project, epic = resolve_project_epic(store)
 
-      story = store.in_progress_story(epic['id'])
+      story = resolve_my_story(store, epic, explicit_slug: nil, claim_if_none: false)
       story ||= store.stories_for_epic(epic['id']).find { |s| s['status'] == 'pending' }
 
       unless story
@@ -872,14 +964,12 @@ module Tyrion
     # ── resume ─────────────────────────────────────────────────────────────
 
     def self.cmd_resume(args, store)
-      _project, epic = resolve_project_epic(store)
+      project, epic = resolve_project_epic(store)
 
       story = if args.first && !args.first.start_with?('--')
-        s = store.find_story(epic['id'], args.first)
-        die "Story not found: #{args.first}" unless s
-        s
+        resolve_my_story(store, epic, explicit_slug: args.first, claim_if_none: false)
       else
-        s = store.in_progress_story(epic['id'])
+        s = resolve_my_story(store, epic, explicit_slug: nil, claim_if_none: false)
         unless s
           # Self-guiding empty-state: show pending queue instead of a bare error
           pending = store.stories_for_epic(epic['id']).select { |st| st['status'] == 'pending' }
@@ -904,6 +994,25 @@ module Tyrion
         ''
       end
 
+      # ── Big-picture header ──────────────────────────────────────────────
+      north_star = project['about_md']&.lines&.first&.strip&.sub(/^#+\s*/, '')
+      puts "#{Output.bold('Project:')} #{project['name']}"
+      puts "         #{Output.dim(north_star)}" if presence(north_star)
+
+      epic_stories = store.stories_for_epic(epic['id'])
+      done_n  = epic_stories.count { |s| s['status'] == 'done' }
+      intent_snippet = epic['intent'] ? " — #{epic['intent'][0, 60]}#{'…' if epic['intent'].length > 60}" : ''
+      puts "#{Output.bold('Epic:')}    #{epic['name']} · #{done_n}/#{epic_stories.length} done#{intent_snippet}"
+
+      all_epics   = store.list_epics(project['id'])
+      open_parts  = all_epics.reject { |e| e['id'] == epic['id'] }.filter_map do |e|
+        e_stories = store.stories_for_epic(e['id'])
+        pending_n = e_stories.count { |s| %w[pending in_progress blocked].include?(s['status']) }
+        pending_n > 0 ? "#{e['slug']} (#{pending_n})" : nil
+      end
+      puts "#{Output.dim('Open:')}    #{open_parts.join(' · ')}" if open_parts.any?
+      puts
+
       puts "#{Output.bold('Resuming:')} #{story['slug']} — #{story['title']} [#{Output.status_label(story['status'])}]#{stale_flag}"
       puts
 
@@ -913,6 +1022,19 @@ module Tyrion
       puts "Branch:   #{branch}"
       puts "Worktree: #{root.sub(Dir.home, '~')}"
       puts "Dirty:    #{dirty > 0 ? Output.yellow("#{dirty} files") : Output.green('clean')}"
+
+      if (drift_path = drift_changed_path(epic, root))
+        puts
+        print_drift_warning(drift_path)
+      end
+
+      lessons = lessons_for_scope(store, project_id: epic['project_id'], epic_id: epic['id'], story_id: story['id'])
+      unless lessons.empty?
+        puts
+        puts Output.bold("Lessons:")
+        lessons.each { |l| puts "  📎 [#{l['trigger']}] #{l['text']}" }
+      end
+
       puts
 
       if story['current_context'] && !story['current_context'].empty?
@@ -945,6 +1067,8 @@ module Tyrion
         puts Output.dim("(no criteria yet — add with: tyrion criteria add #{story['slug']} --given \"...\" --then \"...\")")
         puts
       end
+
+      print_gates_section(store, story['id'])
 
       notes = store.notes_for_story(story['id'], limit: 5)
       if notes.any?
@@ -991,6 +1115,41 @@ module Tyrion
       puts "Note added to #{slug} [#{kind}]"
     end
 
+    # ── gate ───────────────────────────────────────────────────────────────
+    # Records a pass/fail gate result (pre-push, code-review, spec-review, codex-vet,
+    # uat, …) as a kind='gate' story note. The only writer of gate notes — do NOT
+    # route these through `tyrion note`.
+
+    def self.cmd_gate(args, store)
+      detail = extract_flag_value(args, '--detail')
+      meta   = extract_flag_value(args, '--meta')
+      slug, gate_name, result = args
+      die "Usage: tyrion gate <slug> <gate-name> pass|fail [--detail \"...\"] [--meta '<json>']" unless slug && gate_name && result
+      die "Invalid result: #{result}. Must be pass|fail." unless %w[pass fail].include?(result)
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      body = "#{gate_name}: #{result.upcase}"
+      body += " — #{detail}" if presence(detail)
+
+      metadata = { 'gate' => gate_name, 'result' => result }
+      metadata['detail'] = detail if presence(detail)
+      if presence(meta)
+        begin
+          metadata.merge!(JSON.parse(meta))
+        rescue JSON::ParserError
+          die "--meta must be valid JSON: #{meta}"
+        end
+      end
+
+      store.add_note(story['id'], 'gate', body, metadata: JSON.dump(metadata))
+
+      label = "#{gate_name} #{result.upcase} — #{slug}"
+      puts "Gate recorded: #{result == 'pass' ? Output.green(label) : Output.red(label)}"
+    end
+
     # ── context ────────────────────────────────────────────────────────────
 
     def self.cmd_context(args, store)
@@ -1019,6 +1178,61 @@ module Tyrion
 
       store.update_next_action(story['id'], text)
       puts "Next action updated for #{slug}"
+    end
+
+    # ── reconcile ──────────────────────────────────────────────────────────
+
+    def self.parse_reconcile_flags(args)
+      flags = { context: nil, next_action: nil, note: nil, checks: [] }
+      i = 0
+      while i < args.length
+        case args[i]
+        when '--context'
+          flags[:context] = args[i + 1]
+          i += 2
+        when '--next'
+          flags[:next_action] = args[i + 1]
+          i += 2
+        when '--note'
+          flags[:note] = args[i + 1]
+          i += 2
+        when '--check'
+          pos      = args[i + 1]
+          evidence = args[i + 2]
+          die "Usage: --check <n> \"evidence\"" unless pos && evidence
+          flags[:checks] << [pos, evidence]
+          i += 3
+        else
+          i += 1
+        end
+      end
+      flags
+    end
+
+    def self.cmd_reconcile(args, store, input: $stdin, output: $stdout)
+      slug = args.shift
+      die "Usage: tyrion reconcile <slug> [--context TEXT] [--next TEXT] [--note TEXT] [--check <n> \"evidence\"]" unless slug
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      flags     = parse_reconcile_flags(args)
+      ctx_text  = flags[:context]     || prompt(input, output, "Current context: ")
+      next_text = flags[:next_action] || prompt(input, output, "Next action: ")
+      note_text = flags[:note]        || prompt(input, output, "Decision note: ")
+      die "A decision note is required." unless presence(note_text)
+      checks = flags[:checks]
+
+      store.reconcile_story(story['id'], context: ctx_text, next_action: next_text, note: note_text, checks: checks)
+
+      output.puts "Reconciled #{slug}"
+      output.puts "  context updated"     if presence(ctx_text)
+      output.puts "  next action updated" if presence(next_text)
+      output.puts "  note added (decision)"
+      checks.each { |pos, _ev| output.puts "  criterion #{pos} marked met" }
+    rescue RuntimeError => e
+      die e.message
     end
 
     # ── criteria ───────────────────────────────────────────────────────────
@@ -1113,7 +1327,7 @@ module Tyrion
 
     # ── done ───────────────────────────────────────────────────────────────
 
-    def self.cmd_done(args, store)
+    def self.cmd_done(args, store, input: $stdin, output: $stdout)
       slug         = args.shift
       force        = args.delete('--force')
       from_checks  = args.delete('--from-checks')
@@ -1154,9 +1368,35 @@ module Tyrion
       end
 
       store.complete_story(story['id'], summary, force: force)
+      Repo.clear_active_story(token: current_lane_token)
       puts "#{Output.green('Done:')} #{slug} — #{story['title']}"
+
+      maybe_prompt_epic_seal(store, epic, input: input, output: output)
     rescue RuntimeError => e
       die e.message
+    end
+
+    # After a story closes, offer to seal the epic when every story is done.
+    # Prompt, don't silent-auto: sometimes the user wants to inspect first.
+    def self.maybe_prompt_epic_seal(store, epic, input:, output:)
+      return if epic['status'] == 'done'
+      return unless store.all_stories_done?(epic['id'])
+
+      count = store.stories_for_epic(epic['id']).length
+
+      # Dark-factory / non-interactive: never block a close on a prompt.
+      if input.equal?($stdin) && !$stdin.tty?
+        output.puts "All #{count} stories done. Tip: run `tyrion epic complete #{epic['slug']}` when ready to seal."
+        return
+      end
+
+      answer = prompt(input, output, "All #{count} stories done. Seal epic #{epic['slug']} as complete? [y/N] ")
+      if answer.downcase == 'y'
+        store.update_epic(epic['id'], 'status' => 'done')
+        output.puts "Epic #{epic['slug']} sealed as done."
+      else
+        output.puts "Tip: run `tyrion epic complete #{epic['slug']}` when ready to seal."
+      end
     end
 
     # ── unstart ────────────────────────────────────────────────────────────
@@ -1190,6 +1430,543 @@ module Tyrion
       puts "#{Output.green('Backfilled:')} #{slug} — #{story['title']} [#{status}]"
     end
 
+    def self.print_drift_warning(drift_path, indent: '')
+      puts Output.yellow("#{indent}⚠  feature file changed since import - criteria may be stale")
+      puts Output.yellow("#{indent}   Re-import: tyrion import #{drift_path}")
+    end
+
+    # epic_id/story_id nil means "don't filter by that scope" — a lesson with a
+    # nil epic_id or story_id is project-wide/epic-wide and always applies.
+    def self.lessons_for_scope(store, project_id:, epic_id:, story_id: nil)
+      store.list_lessons(project_id: project_id).select do |l|
+        (l['epic_id'].nil? || l['epic_id'] == epic_id) &&
+          (story_id.nil? || l['story_id'].nil? || l['story_id'] == story_id)
+      end
+    end
+
+    # Returns the stored feature_source_path when the epic's file has changed since
+    # import; nil when unchanged, missing, or untracked.
+    def self.drift_changed_path(epic, root)
+      return nil unless epic['feature_source_path'] && epic['feature_source_hash']
+
+      stored_path = epic['feature_source_path']
+      full_path   = File.absolute_path?(stored_path) ? stored_path : File.join(root, stored_path)
+      return nil unless File.exist?(full_path)
+      return nil if Digest::SHA256.file(full_path).hexdigest == epic['feature_source_hash']
+
+      stored_path
+    end
+
+    # ── drift ──────────────────────────────────────────────────────────────
+
+    def self.cmd_drift(args, store)
+      project = resolve_project(store)
+      epics   = store.list_epics(project['id'])
+      tracked = epics.select { |e| e['feature_source_path'] && e['feature_source_hash'] }
+
+      if tracked.empty?
+        puts "No epics with tracked feature files."
+        return
+      end
+
+      root = Repo.worktree_root
+      tracked.each do |epic|
+        stored_path = epic['feature_source_path']
+        full_path   = File.absolute_path?(stored_path) ? stored_path : File.join(root, stored_path)
+        slug        = epic['slug']
+
+        if !File.exist?(full_path)
+          puts "#{slug}: feature file missing"
+        elsif Digest::SHA256.file(full_path).hexdigest != epic['feature_source_hash']
+          puts "#{slug}: feature file changed - run tyrion import #{stored_path}"
+        else
+          puts "#{slug}: up to date"
+        end
+      end
+    end
+
+    # ── followup ───────────────────────────────────────────────────────────
+
+    def self.cmd_followup(args, store, output: $stdout)
+      sub = args.shift
+      case sub
+      when 'list'    then cmd_followup_list(args, store, output: output)
+      when 'resolve' then cmd_followup_resolve(args, store, output: output)
+      else
+        die "Unknown followup subcommand: #{sub}\n" \
+            "Usage: tyrion followup list <slug>\n" \
+            "       tyrion followup resolve <slug> <n>"
+      end
+    end
+
+    def self.cmd_followup_list(args, store, output: $stdout)
+      slug = args.reject { |a| a.start_with?('--') }.first
+      die "Usage: tyrion followup list <slug>" unless slug
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      notes = store.followup_notes(story['id'])
+      if notes.empty?
+        output.puts "No followup notes for #{slug}."
+        return
+      end
+
+      output.puts Output.bold("Followups for #{slug}")
+      output.puts
+      notes.each_with_index do |note, i|
+        resolved = note['resolved_at'] ? Output.dim(" [resolved #{note['resolved_at'][0, 10]}]") : ''
+        output.puts "  #{i + 1}. #{note['body']}#{resolved}"
+        output.puts "     #{Output.dim(note['created_at'][0, 19].gsub('T', ' '))}"
+      end
+    end
+
+    def self.cmd_followup_resolve(args, store, output: $stdout)
+      positional = args.reject { |a| a.start_with?('--') }
+      slug, n    = positional[0], positional[1]&.to_i
+      die "Usage: tyrion followup resolve <slug> <n>" unless slug && n && n >= 1
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      notes = store.followup_notes(story['id'])
+      die "No followup notes for #{slug}." if notes.empty?
+      note = notes[n - 1]
+      die "Index #{n} out of range (1-#{notes.length})" unless note
+      die "Followup #{n} is already resolved" if note['resolved_at']
+
+      store.resolve_followup_note(note['id'])
+      output.puts Output.green("✓ Followup #{n} resolved: #{note['body'][0, 60]}")
+    end
+
+    # ── lesson ─────────────────────────────────────────────────────────────
+
+    LESSON_USAGE = "Usage: tyrion lesson add --at <trigger> \"text\"\n" \
+                   "       tyrion lesson list [--at <trigger>] [--verbose]\n" \
+                   "       tyrion lesson retire <lesson-NNN>\n" \
+                   "       tyrion lesson promote <lesson-NNN> [--to epic|project|global]\n" \
+                   "       tyrion lesson demote <lesson-NNN>\n" \
+                   "       tyrion lesson mine [--dir <path>]"
+
+    def self.cmd_lesson(args, store, input: $stdin, output: $stdout)
+      sub = args.shift
+      case sub
+      when 'add'     then cmd_lesson_add(args, store, output: output)
+      when 'list'    then cmd_lesson_list(args, store, output: output)
+      when 'retire'  then cmd_lesson_retire(args, store, output: output)
+      when 'promote' then cmd_lesson_promote(args, store, output: output)
+      when 'demote'  then cmd_lesson_demote(args, store, output: output)
+      when 'mine'    then cmd_lesson_mine(args, store, input: input, output: output)
+      when nil       then die LESSON_USAGE
+      else                die "Unknown lesson subcommand: #{sub}\n#{LESSON_USAGE}"
+      end
+    end
+
+    def self.cmd_lesson_add(args, store, output: $stdout)
+      trigger = extract_flag_value(args, '--at')
+      die "Missing required --at <trigger>" unless trigger
+
+      text = args.join(' ')
+      die "Usage: tyrion lesson add --at <trigger> \"text\"" unless presence(text)
+
+      project, epic = resolve_project_epic(store, require_epic: false)
+      lesson = store.create_lesson(
+        project_id: project['id'],
+        trigger:    trigger,
+        text:       text,
+        epic_id:    epic&.dig('id')
+      )
+      output.puts Output.green("✓ Lesson #{lesson['id']} added [#{trigger}]")
+    end
+
+    # `--at <trigger>` is the just-in-time injection path other skill steps
+    # shell out to and parse verbatim: one lesson body per line, nothing else,
+    # and silent (no output at all) when there are no matches.
+    def self.cmd_lesson_list(args, store, output: $stdout)
+      trigger = extract_flag_value(args, '--at')
+      verbose = args.delete('--verbose')
+      project = resolve_project(store)
+
+      if trigger
+        lessons = store.list_lessons(project_id: project['id'], trigger: trigger)
+        lessons.each { |l| output.puts l['text'] }
+        return
+      end
+
+      lessons = store.list_lessons(project_id: project['id'])
+      return output.puts "(no lessons)" if lessons.empty?
+
+      lessons.group_by { |l| l['trigger'] }.each do |trig, group|
+        output.puts "[#{trig}]"
+        group.each do |l|
+          if verbose
+            output.puts "  #{l['id']}  #{lesson_scope_label(l)}  #{l['source']}  #{Output.time_ago(l['created_at'])}"
+            output.puts "    #{l['text']}"
+          else
+            output.puts "  #{l['id']}  #{l['text']}"
+          end
+        end
+      end
+    end
+
+    def self.cmd_lesson_retire(args, store, output: $stdout)
+      id = args.shift
+      die "Usage: tyrion lesson retire <lesson-NNN>" unless id
+
+      store.retire_lesson(id)
+      output.puts Output.green("✓ Lesson #{id} retired")
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # Values must track lesson_rank's scale 1:1 (epic/project/global only —
+    # you can't promote *to* story) so `target_rank - current_rank` in
+    # cmd_lesson_promote yields the correct number of promote_lesson calls.
+    LESSON_PROMOTE_TARGET_RANKS = { 'epic' => 1, 'project' => 2, 'global' => 3 }.freeze
+
+    def self.cmd_lesson_promote(args, store, output: $stdout)
+      id = args.shift
+      die "Usage: tyrion lesson promote <lesson-NNN> [--to epic|project|global]" unless id
+
+      level = extract_flag_value(args, '--to')
+
+      if level
+        die "Unknown --to level: #{level}. Must be one of: epic, project, global" unless LESSON_PROMOTE_TARGET_RANKS.key?(level)
+
+        lesson = store.find_lesson(id)
+        die "Lesson not found: #{id}" unless lesson
+
+        target_rank  = LESSON_PROMOTE_TARGET_RANKS[level]
+        current_rank = lesson_rank(lesson)
+        die "Lesson #{id} is already at or beyond #{level} scope" if current_rank >= target_rank
+
+        result = nil
+        (target_rank - current_rank).times { result = store.promote_lesson(id) }
+      else
+        result = store.promote_lesson(id)
+      end
+
+      output.puts Output.green("✓ Lesson #{id} promoted to #{lesson_scope_label(result, store: store)}")
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    def self.cmd_lesson_demote(args, store, output: $stdout)
+      id = args.shift
+      die "Usage: tyrion lesson demote <lesson-NNN>" unless id
+
+      result = store.demote_lesson(id)
+      output.puts Output.green("✓ Lesson #{id} demoted to #{lesson_scope_label(result, store: store)}")
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # Structural rank of a lesson's current scope, narrowest to widest:
+    # 0 = story-scoped, 1 = epic-scoped, 2 = project-wide, 3 = global.
+    # Assumes strict nesting (story_id set implies epic_id set implies
+    # project_id set) — the same assumption Store#promote_lesson's
+    # narrowest-field-wins column choice already depends on. Every current
+    # writer (create_lesson) upholds this; if a future caller ever creates a
+    # non-nested row, both this rank and promote_lesson's column choice need
+    # revisiting together, not just one of them.
+    def self.lesson_rank(lesson)
+      return 0 if lesson['story_id']
+      return 1 if lesson['epic_id']
+      return 2 if lesson['project_id']
+
+      3
+    end
+    private_class_method :lesson_rank
+
+    # Human-facing scope label: 'global', 'project-wide', or the epic name.
+    # `list_lessons` rows already carry `epic_name` from its join; rows from
+    # `promote_lesson`/`find_lesson` don't, so fall back to a store lookup.
+    def self.lesson_scope_label(lesson, store: nil)
+      return 'global' if lesson['project_id'].nil?
+      return 'project-wide' if lesson['epic_id'].nil?
+
+      lesson['epic_name'] || store&.find_epic_by_id(lesson['epic_id'])&.dig('name')
+    end
+    private_class_method :lesson_scope_label
+
+    # Scans session JSONL transcripts for recurring correction signals (deterministic
+    # regex matching — no LLM involved) and proposes candidate lessons for human
+    # approval. Never writes a lesson without an explicit 'y' at the prompt.
+    def self.cmd_lesson_mine(args, store, input: $stdin, output: $stdout)
+      dir = extract_flag_value(args, '--dir') || default_lesson_mine_dir
+      die "No session directory found. Pass --dir <path>." unless dir && Dir.exist?(dir)
+
+      project, epic = resolve_project_epic(store, require_epic: false)
+      groups = LessonMiner.scan(dir)
+      candidates = groups.values.flatten
+
+      if candidates.empty?
+        output.puts "No correction candidates found in #{dir}."
+        return
+      end
+
+      added = 0
+      skipped = 0
+      candidates.each do |candidate|
+        output.puts ""
+        output.puts "[#{candidate[:trigger]}] (#{candidate[:role]}, #{candidate[:file]})"
+        output.puts candidate[:text]
+        answer = prompt(input, output, "Add as lesson? [y/N]: ").downcase
+
+        if answer == 'y'
+          store.create_lesson(
+            project_id: project['id'],
+            trigger:    candidate[:trigger],
+            text:       candidate[:text],
+            epic_id:    epic&.dig('id'),
+            source:     'auto-extracted'
+          )
+          added += 1
+        else
+          skipped += 1
+        end
+      end
+
+      output.puts ""
+      output.puts Output.green("✓ #{candidates.length} candidates found, #{added} added, #{skipped} skipped")
+    end
+
+    # Default scan directory — derives the Claude Code session dir for the current
+    # cwd the same way the tyrion-implement skill does. Thin env wrapper; not unit
+    # tested (logic that matters is LessonMiner.scan, exercised with explicit --dir).
+    def self.default_lesson_mine_dir
+      dasherized = Dir.pwd.gsub('/', '-')
+      candidate = File.join(Dir.home, '.claude', 'projects', dasherized)
+      Dir.exist?(candidate) ? candidate : nil
+    end
+    private_class_method :default_lesson_mine_dir
+
+    # ── depends ────────────────────────────────────────────────────────────
+
+    def self.cmd_depends(args, store)
+      subcmd = args.shift
+      case subcmd
+      when 'add' then cmd_depends_add(args, store)
+      when 'rm'  then cmd_depends_rm(args, store)
+      else
+        die "Usage: tyrion depends add|rm <slug> <dep-slug>"
+      end
+    end
+
+    def self.cmd_depends_add(args, store)
+      slug, dep_slug = args
+      die "Usage: tyrion depends add <slug> <dep-slug>" unless slug && dep_slug
+
+      _project, epic = resolve_project_epic(store)
+      story     = store.find_story(epic['id'], slug)
+      dep_story = store.find_story(epic['id'], dep_slug)
+      die "Story not found: #{slug}"     unless story
+      die "Story not found: #{dep_slug}" unless dep_story
+      die "#{slug} cannot depend on itself" if slug == dep_slug
+
+      current = JSON.parse(story['depends_on'] || '[]')
+      if current.include?(dep_slug)
+        puts "#{slug} already depends on #{dep_slug}"
+      else
+        store.update_story_depends_on(story['id'], current + [dep_slug])
+        puts "#{Output.green('+')} #{slug} now depends on #{dep_slug}"
+      end
+    end
+
+    def self.cmd_depends_rm(args, store)
+      slug, dep_slug = args
+      die "Usage: tyrion depends rm <slug> <dep-slug>" unless slug && dep_slug
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      current = JSON.parse(story['depends_on'] || '[]')
+      if current.include?(dep_slug)
+        store.update_story_depends_on(story['id'], current - [dep_slug])
+        puts "#{Output.red('-')} #{slug} no longer depends on #{dep_slug}"
+      else
+        puts "#{slug} does not depend on #{dep_slug}"
+      end
+    end
+
+    # ── wave ───────────────────────────────────────────────────────────────
+
+    def self.cmd_wave(args, store)
+      subcmd = args.shift
+      case subcmd
+      when 'show' then cmd_wave_show(args, store)
+      when 'set'  then cmd_wave_set(args, store)
+      when 'next' then cmd_wave_next(args, store)
+      else
+        die "Usage: tyrion wave show | tyrion wave set <slug> <N> | tyrion wave next [--with-pocket]"
+      end
+    end
+
+    def self.cmd_wave_next(args, store)
+      with_pocket = args.include?('--with-pocket')
+      _project, epic = resolve_project_epic(store)
+      waves = store.wave_plan(epic['id'])
+      stories = store.stories_for_epic(epic['id'])
+      status_map = stories.to_h { |s| [s['slug'], s['status']] }
+
+      # Scan waves in order. Skip fully-done waves; return pending stories from
+      # the first wave that is not yet fully done (those are the dispatchable ones).
+      pending_slugs = []
+      waves.keys.grep(Integer).sort.each do |wn|
+        next if waves[wn].all? { |s| status_map[s] == 'done' }
+        pending_slugs = waves[wn].select { |s| status_map[s] == 'pending' }
+        break
+      end
+
+      if pending_slugs.empty?
+        puts '(no pending stories)'
+        return
+      end
+
+      criteria_map = if with_pocket
+                       stories.each_with_object({}) { |s, h| h[s['id']] = store.criteria_for_story(s['id']) }
+                     end
+
+      pending_slugs.each_with_index do |slug, i|
+        puts slug
+        next unless with_pocket
+
+        story = stories.find { |s| s['slug'] == slug }
+        unchecked = criteria_map[story['id']].reject { |c| %w[met not_applicable].include?(c['status']) }
+        puts "  epic: #{epic['slug']}"
+        puts "  story: #{slug}"
+        unchecked.each { |c| puts "  [ ] #{c['keyword']} #{c['text']}" }
+        puts unless i == pending_slugs.length - 1
+      end
+    end
+
+    def self.cmd_wave_show(_args, store)
+      _project, epic = resolve_project_epic(store)
+      waves = store.wave_plan(epic['id'])
+      if waves.empty?
+        puts Output.dim("No stories in this epic.")
+        return
+      end
+      pinned = store.stories_for_epic(epic['id'])
+                    .select { |s| s['wave_override'] }
+                    .to_h { |s| [s['slug'], s['wave_rationale']] }
+      waves.each do |wave_num, slugs|
+        if wave_num == :cycle
+          puts "#{Output.red('Cycle')}: #{slugs.join(', ')} (circular dependency — fix with tyrion depends rm)"
+        else
+          annotated = slugs.map { |s| pinned.key?(s) ? "#{s} #{Output.dim('[pinned]')}" : s }
+          puts "#{Output.bold("Wave #{wave_num}")}: #{annotated.join(', ')}"
+        end
+      end
+    end
+
+    def self.cmd_wave_set(args, store)
+      slug     = args.shift
+      wave_str = args.shift
+      rationale = args.shift
+      die "Usage: tyrion wave set <slug> <wave-number> [rationale]" unless slug && wave_str
+      wave_num = wave_str.to_i
+      die "wave-number must be a positive integer" unless wave_num.positive?
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+      waves = store.wave_plan(epic['id'])
+      die "Cannot override wave for #{slug}: story is in a dependency cycle" if waves[:cycle]&.include?(slug)
+      store.set_wave_override(story['id'], wave_num, rationale)
+      puts "#{Output.green('✓')} #{slug} pinned to wave #{wave_num}"
+    end
+
+    # ── whitelist ──────────────────────────────────────────────────────────
+
+    def self.cmd_whitelist(args, _store)
+      case args.shift || 'show'
+      when 'show'   then whitelist_show
+      when 'add'    then whitelist_add(whitelist_scope(args))
+      when 'remove' then whitelist_remove(whitelist_scope(args))
+      else die "Unknown whitelist subcommand. Use: add, remove, show"
+      end
+    end
+
+    def self.whitelist_scope(args)
+      scope = extract_flag_value(args, '--scope') || 'local'
+      die "Unknown scope '#{scope}'. Use: local, project, global" unless WHITELIST_SCOPES.key?(scope)
+      scope
+    end
+
+    def self.whitelist_add(scope)
+      path     = WHITELIST_SCOPES[scope].call
+      settings = load_settings(path)
+      allow    = allow_list(settings)
+      added    = TYRION_PERMISSIONS.reject { |p| allow.include?(p) }
+      if added.empty?
+        puts "Already whitelisted in #{scope} (#{path})"
+        return
+      end
+      settings['permissions'] ||= {}
+      settings['permissions']['allow'] = allow + added
+      write_settings(path, settings)
+      puts "Added to #{scope} (#{path}):"
+      added.each { |p| puts "  #{Output.green('+')} #{p}" }
+    end
+
+    def self.whitelist_remove(scope)
+      path = WHITELIST_SCOPES[scope].call
+      unless File.exist?(path)
+        puts "Nothing to remove — #{path} does not exist"
+        return
+      end
+      settings = load_settings(path)
+      allow    = allow_list(settings)
+      removed  = TYRION_PERMISSIONS.select { |p| allow.include?(p) }
+      if removed.empty?
+        puts "Nothing to remove — tyrion rules not found in #{scope}"
+        return
+      end
+      settings['permissions']['allow'] = allow - TYRION_PERMISSIONS
+      settings['permissions'].delete('allow') if settings['permissions']['allow'].empty?
+      settings.delete('permissions') if settings['permissions'].empty?
+      write_settings(path, settings)
+      puts "Removed from #{scope} (#{path}):"
+      removed.each { |p| puts "  #{Output.red('-')} #{p}" }
+    end
+
+    def self.whitelist_show
+      indent = ' ' * 12
+      puts "Tyrion permission whitelist status:\n\n"
+      WHITELIST_SCOPES.each do |scope_name, build_path|
+        path  = build_path.call
+        label = scope_name.ljust(8)
+        unless File.exist?(path)
+          puts "  #{Output.dim(label)} #{Output.dim('(no settings file)')}"
+          next
+        end
+        found = TYRION_PERMISSIONS & allow_list(load_settings(path))
+        if found.any?
+          puts "  #{Output.green(label)} #{path}"
+          found.each { |p| puts "#{indent}#{Output.dim(p)}" }
+        else
+          puts "  #{Output.dim(label)} #{path} #{Output.dim('(no tyrion rules)')}"
+        end
+      end
+    end
+
+    def self.allow_list(settings) = settings.dig('permissions', 'allow') || []
+
+    def self.load_settings(path)
+      return {} unless File.exist?(path)
+      JSON.parse(File.read(path))
+    rescue JSON::ParserError => e
+      die "Invalid JSON in #{path}: #{e.message}"
+    end
+
+    def self.write_settings(path, settings)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "#{JSON.pretty_generate(settings)}\n")
+    end
+
     # ── usage ──────────────────────────────────────────────────────────────
 
     def self.usage
@@ -1212,6 +1989,7 @@ module Tyrion
           tyrion epic show [slug]                  Show epic intent + context
           tyrion epic activate <slug>              Set active epic for this worktree
           tyrion epic pause <slug>                 Pause an epic
+          tyrion epic complete [slug] [--force]    Seal an epic as done (all stories must be done)
 
         Import:
           tyrion import <file.feature>             Import gherkin scenarios as stories
@@ -1220,6 +1998,7 @@ module Tyrion
           tyrion status                            Plan view (the main command)
           tyrion list [--status pending]           List stories
           tyrion show <slug>                       Full story detail
+          tyrion notes <slug> [--kind <kind>]      All notes, untruncated (full body)
 
         Work:
           tyrion start <slug>                      Claim a story (transactional)
@@ -1240,6 +2019,9 @@ module Tyrion
           tyrion done <slug> "summary" [--force]   Complete story
           tyrion unstart <slug>                    Reset to pending (crash recovery)
           tyrion backfill <slug> done "summary"    Mark pre-Tyrion work done
+          tyrion drift                             Check if feature files have changed since last import
+          tyrion followup list <slug>              List followup notes (open + resolved)
+          tyrion followup resolve <slug> <n>       Mark followup #n as resolved
 
         Discovery (SDRD spike loop):
           tyrion mark "description"                Bookmark — instant breadcrumb with git context
@@ -1249,7 +2031,33 @@ module Tyrion
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
           tyrion discovery list [--status <alias>] List discoveries (aliases: active|ready|promoted|deferred|all)
           tyrion discovery show <disc-id>          Show full discovery detail
+
+        Lessons:
+          tyrion lesson add --at <trigger> "text"   Record a lesson, scoped to active epic if any
+          tyrion lessons [--at <trigger>]           List active lessons (silent if none match --at)
+          tyrion lesson list [--at <trigger>] [--verbose]  Same as above (--verbose adds scope/source/age)
+          tyrion lesson retire <lesson-NNN>         Retire a lesson
+          tyrion lesson mine [--dir <path>]         Scan session JSONL for candidate lessons, approve interactively
+
+        Permissions:
+          tyrion whitelist show                    Show whitelist status across all scopes
+          tyrion whitelist add [--scope local|project|global]   Add tyrion rules (default: local)
+          tyrion whitelist remove [--scope local|project|global] Remove tyrion rules
       USAGE
+    end
+
+    # Derive a stable, per-session lane token for the calling agent process.
+    # Token format: "claude:<pid>:<start-stamp>" (ps path) or "<agent>:<session-id>" (sandbox path).
+    # Tiers (first match wins):
+    #   1. TYRION_LANE env — explicit override, sandbox-safe, universal.
+    #   2. CODEX_THREAD_ID env — sandbox-safe Codex identity (ps denied in Codex sandbox).
+    #   3. Process-walk via Repo.agent_pid — claude path, terminal-agnostic.
+    #   4. CMUX_CLAUDE_PID env — optional fast-path accelerator for the claude/pid token.
+    #   5. nil — legacy single-session behavior (no lane ownership).
+    # Memoized per OS process via @_lane_token; reset to :unset to re-derive (e.g. in specs).
+    def self.current_lane_token
+      @_lane_token = derive_lane_token if @_lane_token == :unset
+      @_lane_token
     end
 
     private
@@ -1261,6 +2069,66 @@ module Tyrion
       exit 1
     end
 
+    # Renders the Gates: section (gate/commit notes) for tyrion show / tyrion resume.
+    # Per gate name: latest result (✓ pass / ✗ fail) + total run count. Commit notes
+    # print their body verbatim. Prints nothing when the story has no gate/commit notes.
+    def self.print_gates_section(store, story_id)
+      notes = store.gate_notes_for_story(story_id)
+      return if notes.empty?
+
+      puts Output.bold("Gates:")
+      notes.select { |n| n['kind'] == 'gate' }
+           .group_by { |n| n['body'][/\A(.+?): (?:PASS|FAIL)/, 1] || n['body'] }
+           .each do |name, runs|
+        icon  = runs.last['body'].match?(/\A.+?: PASS/) ? Output.green('✓') : Output.red('✗')
+        label = runs.length == 1 ? 'run' : 'runs'
+        puts "  #{icon} #{name} (#{runs.length} #{label})"
+      end
+      notes.select { |n| n['kind'] == 'commit' }.each { |c| puts "  #{c['body']}" }
+      puts
+    end
+
+    # Removes "--flag value" from args in place and returns the value.
+    # Dies with a clear message if the flag is present but has no value.
+    def self.extract_flag_value(args, flag)
+      return nil unless (idx = args.index(flag))
+      value = args[idx + 1]
+      die "Missing value after #{flag}" if value.nil? || value.start_with?('--')
+      args.slice!(idx, 2)
+      value
+    end
+
+    def self.derive_lane_token
+      # Tier 1 — explicit override
+      explicit = ENV['TYRION_LANE']
+      return explicit if explicit && !explicit.strip.empty?
+
+      agent_label = ENV['TYRION_AGENT']
+
+      # Tier 2 — Codex sandbox-safe identity (ps is denied under Codex)
+      thread_id = ENV['CODEX_THREAD_ID']
+      if thread_id && !thread_id.strip.empty?
+        label = agent_label || 'codex'
+        return "#{label}:#{thread_id}"
+      end
+
+      # Tier 3 & 4 — pid-based token (claude path); CMUX_CLAUDE_PID is a fast-path
+      # accelerator that skips the ps walk when available, but produces the same result.
+      pid = if ENV['CMUX_CLAUDE_PID']&.match?(/\A\d+\z/)
+              ENV['CMUX_CLAUDE_PID'].to_i
+            else
+              Repo.agent_pid
+            end
+      return nil unless pid
+
+      stamp = Repo.pid_start_stamp(pid)
+      return nil unless stamp
+
+      label = agent_label || 'claude'
+      "#{label}:#{pid}:#{stamp}"
+    end
+    private_class_method :derive_lane_token
+
     def self.resolve_project(store)
       slug = Repo.active_project
       die "No active project. Run: tyrion project activate <slug>" unless slug
@@ -1269,10 +2137,20 @@ module Tyrion
       project
     end
 
+    # Activate +slug+ as the per-lane epic for +token+. Prints a loud warning on
+    # stderr when the epic changes so concurrent sessions can spot cross-lane drift.
+    # Silent on first activation or re-activating the same epic (no noise).
+    def self.set_active_epic_for_lane(slug, token:, root: nil)
+      root ||= Repo.worktree_root
+      old = Repo.active_epic(root, token: token)
+      Repo.write_active_epic(slug, root, token: token)
+      $stderr.puts Output.yellow("⚠ EPIC SWITCHED #{old} → #{slug}") if old && old != slug
+    end
+
     def self.resolve_project_epic(store, require_epic: true)
       project = resolve_project(store)
 
-      epic_slug = Repo.active_epic
+      epic_slug = Repo.active_epic(token: current_lane_token)
       unless epic_slug
         die "No active epic. Run: tyrion epic activate <slug>" if require_epic
         return [project, nil]
@@ -1282,6 +2160,53 @@ module Tyrion
       die "Active epic '#{epic_slug}' not found. Run: tyrion epic activate <slug>" unless epic
 
       [project, epic]
+    end
+
+    # Six-rung story resolver for the current lane. Returns a story hash or nil.
+    # Rung 1: explicit_slug given → always wins (dies if not found).
+    # Rung 2: in_progress story whose claimed_by == current lane token (PRIMARY; survives /clear).
+    # Rung 3: story with claimed_by == "assigned:<TYRION_LANE>" → adopt + re-stamp to real token.
+    # Rung 4: .tyrion/active-story file pin (per-lane then shared fallback via Repo.active_story).
+    # Rung 5: sole unclaimed (NULL claimed_by) in_progress story — legacy single-session.
+    # Rung 6: claim-next and stamp, only when claim_if_none: true.
+    def self.resolve_my_story(store, epic, explicit_slug:, claim_if_none:)
+      # Rung 1 — explicit slug always wins
+      if explicit_slug
+        story = store.find_story(epic['id'], explicit_slug)
+        die "Story not found: #{explicit_slug}" unless story
+        return story
+      end
+
+      token = current_lane_token
+
+      # Rung 2 — in_progress story owned by this lane token (PRIMARY; survives /clear)
+      if token
+        story = store.story_in_progress_for_token(epic['id'], token)
+        return story if story
+      end
+
+      # Rung 3 — pre-claim placeholder "assigned:<TYRION_LANE>" → adopt + re-stamp
+      if token && (lane_env = presence(ENV['TYRION_LANE']))
+        story = store.story_with_pre_claim(epic['id'], "assigned:#{lane_env}")
+        return store.update_story(story['id'], 'claimed_by' => token) if story
+      end
+
+      # Rung 4 — per-lane .tyrion/active-story file pin
+      if (pinned_slug = Repo.active_story(token: token))
+        story = store.find_story(epic['id'], pinned_slug)
+        return story if story
+      end
+
+      # Rung 5 — sole unclaimed in_progress story (legacy single-session)
+      story = store.story_in_progress_unclaimed(epic['id'])
+      return story if story
+
+      # Rung 6 — claim-next and stamp (only when claim_if_none: true)
+      if claim_if_none
+        story = store.claim_next_story(epic['id'], claimed_by: token)
+        Repo.write_active_story(story['slug'], token: token) if token
+        story
+      end
     end
 
     def self.parse_criteria_flags(args)

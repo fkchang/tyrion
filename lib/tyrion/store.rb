@@ -5,6 +5,8 @@ require 'securerandom'
 require 'fileutils'
 require 'time'
 require 'digest'
+require 'json'
+require 'set'
 
 module Tyrion
   # Store — SQLite-backed resumability ledger.
@@ -64,6 +66,10 @@ module Tyrion
         completed_at         TEXT,
         last_note_at         TEXT,
         born_from_discovery  TEXT REFERENCES discoveries(id) ON DELETE SET NULL,
+        blocked_on           TEXT,
+        blocked_on_discovery TEXT,
+        claimed_by           TEXT,
+        claimed_at           TEXT,
         created_at           TEXT NOT NULL,
         updated_at           TEXT NOT NULL,
         UNIQUE(epic_id, slug),
@@ -71,10 +77,6 @@ module Tyrion
       );
 
       CREATE INDEX IF NOT EXISTS idx_stories_epic_status ON stories(epic_id, status);
-
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_one_in_progress_story_per_epic
-        ON stories(epic_id)
-        WHERE status = 'in_progress';
 
       CREATE TABLE IF NOT EXISTS criteria (
         id            TEXT PRIMARY KEY,
@@ -98,7 +100,7 @@ module Tyrion
         id          TEXT PRIMARY KEY,
         story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
         kind        TEXT NOT NULL
-                      CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session','followup')),
+                      CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session','followup','observation','gate','commit')),
         body        TEXT NOT NULL,
         metadata    TEXT,
         created_at  TEXT NOT NULL
@@ -207,8 +209,31 @@ module Tyrion
       with_db { |db| db.get_first_row('SELECT * FROM epics WHERE project_id = ? AND slug = ?', [project_id, epic_slug]) }
     end
 
+    # True only when an epic has at least one story and every story is done.
+    def all_stories_done?(epic_id)
+      with_db do |db|
+        total = db.get_first_value('SELECT COUNT(*) FROM stories WHERE epic_id = ?', [epic_id]).to_i
+        return false if total.zero?
+        db.get_first_value("SELECT COUNT(*) FROM stories WHERE epic_id = ? AND status != 'done'", [epic_id]).to_i.zero?
+      end
+    end
+
     def find_epic_by_id(epic_id)
       with_db { |db| db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id]) }
+    end
+
+    def seal_epic(epic_id, force: false)
+      unless force || all_stories_done?(epic_id)
+        stories = stories_for_epic(epic_id)
+        undone  = stories.reject { |s| s['status'] == 'done' }
+        raise "Epic has no stories — nothing to seal." if stories.empty?
+        raise "#{undone.length} story/stories not done: #{undone.map { |s| s['slug'] }.join(', ')}"
+      end
+      update_epic(epic_id, 'status' => 'done')
+    end
+
+    def unarchive_epic(epic_id)
+      update_epic(epic_id, 'archived_at' => nil)
     end
 
     def list_epics(project_id)
@@ -235,7 +260,11 @@ module Tyrion
     end
 
     def find_story(epic_id, story_slug)
-      with_db { |db| db.get_first_row('SELECT * FROM stories WHERE epic_id = ? AND slug = ?', [epic_id, story_slug]) }
+      with_db do |db|
+        row = db.get_first_row('SELECT * FROM stories WHERE epic_id = ? AND slug = ?', [epic_id, story_slug])
+        next nil unless row
+        row.merge('wave_source' => row['wave_override'] ? 'user' : 'inferred')
+      end
     end
 
     def find_story_by_id(story_id)
@@ -246,23 +275,122 @@ module Tyrion
       with_db { |db| db.execute('SELECT * FROM stories WHERE epic_id = ? ORDER BY sequence', [epic_id]) }
     end
 
+    def update_story_depends_on(story_id, deps_array)
+      with_db do |db|
+        db.transaction(:immediate) do
+          t = now
+          db.execute(
+            'UPDATE stories SET depends_on = ?, updated_at = ? WHERE id = ?',
+            [deps_array.empty? ? nil : JSON.dump(deps_array), t, story_id]
+          )
+        end
+      end
+    end
+
+    def set_wave_override(story_id, wave_num, rationale = nil)
+      with_db do |db|
+        db.transaction(:immediate) do
+          t = now
+          stripped = rationale&.strip
+          stored_rationale = (stripped.nil? || stripped.empty?) ? nil : stripped
+          db.execute(
+            'UPDATE stories SET wave_override = ?, wave_rationale = ?, updated_at = ? WHERE id = ?',
+            [wave_num, stored_rationale, t, story_id]
+          )
+        end
+      end
+    end
+
+    # Returns { wave_number => [slug, ...] } computed by topological layering.
+    # Stories with unknown/missing deps are treated as if the dep doesn't exist.
+    # Cycles are surfaced under the :cycle key rather than silently dropped.
+    # Stories with wave_override set are moved to their override wave after topo sort.
+    def wave_plan(epic_id)
+      stories = stories_for_epic(epic_id)
+      deps = stories.to_h { |s| [s['slug'], JSON.parse(s['depends_on'] || '[]')] }
+      overrides = stories.filter_map { |s| [s['slug'], s['wave_override']] if s['wave_override'] }.to_h
+      known = deps.keys.to_set
+      dependents = Hash.new { |h, k| h[k] = [] }
+      in_degree  = Hash.new(0)
+
+      deps.each do |slug, prereqs|
+        prereqs.each do |prereq|
+          next unless known.include?(prereq)
+          dependents[prereq] << slug
+          in_degree[slug]    += 1
+        end
+      end
+
+      waves = {}
+      wave  = 1
+      queue = known.select { |s| in_degree[s].zero? }.sort
+      until queue.empty?
+        waves[wave] = queue
+        queue = queue.flat_map { |s| dependents[s] }
+                     .select { |d| (in_degree[d] -= 1).zero? }
+                     .sort
+        wave += 1
+      end
+
+      assigned = waves.values.flatten.to_set
+      cycled = known.reject { |s| assigned.include?(s) }
+      waves[:cycle] = cycled.sort unless cycled.empty?
+
+      unless overrides.empty?
+        overrides.each do |slug, override_wave|
+          waves.each { |wn, slugs| slugs.delete(slug) unless wn == :cycle }
+          waves[override_wave] ||= []
+          waves[override_wave] << slug unless waves[override_wave].include?(slug)
+          waves[override_wave].sort!
+        end
+        waves.reject! { |k, v| k != :cycle && v.empty? }
+      end
+
+      waves
+    end
+
     def in_progress_story(epic_id)
       with_db { |db| db.get_first_row("SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress'", [epic_id]) }
     end
 
+    # Rung 2: find the in_progress story owned by this exact lane token.
+    def story_in_progress_for_token(epic_id, token)
+      with_db { |db| db.get_first_row("SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress' AND claimed_by = ?", [epic_id, token]) }
+    end
+
+    # Rung 3: find a story (any status) whose claimed_by is the pre-claim placeholder.
+    def story_with_pre_claim(epic_id, assigned_label)
+      with_db { |db| db.get_first_row("SELECT * FROM stories WHERE epic_id = ? AND claimed_by = ?", [epic_id, assigned_label]) }
+    end
+
+    # Rung 5: find the sole unclaimed in_progress story (claimed_by IS NULL).
+    def story_in_progress_unclaimed(epic_id)
+      with_db { |db| db.get_first_row("SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress' AND claimed_by IS NULL", [epic_id]) }
+    end
+
+    # Write the "assigned:<lane>" pre-claim placeholder without changing status.
+    def assign_story(story_id, lane)
+      t = Time.now.utc.iso8601(6)
+      with_db do |db|
+        db.transaction(:immediate) do
+          story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+          raise "Story not found: #{story_id}" unless story
+          raise "Story is not pending (status: #{story['status']})" unless story['status'] == 'pending'
+          db.execute('UPDATE stories SET claimed_by=?, updated_at=? WHERE id=?', ["assigned:#{lane}", t, story_id])
+          db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+        end
+      end
+    end
+
     # Transactional claim — refuses if any story in epic is already in_progress.
-    def start_story(story_id)
+    def start_story(story_id, claimed_by: nil)
       with_db do |db|
         db.transaction(:immediate) do
           story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
           raise "Story not found: #{story_id}" unless story
           raise "Story is not pending (status: #{story['status']})" unless story['status'] == 'pending'
 
-          t = now
-          db.execute(
-            'UPDATE stories SET status=?, started_at=?, last_note_at=?, updated_at=? WHERE id=?',
-            ['in_progress', t, t, t, story_id]
-          )
+          claim_row!(db, story_id, claimed_by)
         end
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end
@@ -271,7 +399,7 @@ module Tyrion
     end
 
     # Transactional claim of lowest-sequence pending story.
-    def claim_next_story(epic_id)
+    def claim_next_story(epic_id, claimed_by: nil)
       with_db do |db|
         db.transaction(:immediate) do
           next_story = db.get_first_row(
@@ -280,11 +408,7 @@ module Tyrion
           )
           raise "No pending stories in this epic" unless next_story
 
-          t = now
-          db.execute(
-            'UPDATE stories SET status=?, started_at=?, last_note_at=?, updated_at=? WHERE id=?',
-            ['in_progress', t, t, t, next_story['id']]
-          )
+          claim_row!(db, next_story['id'], claimed_by)
           db.get_first_row('SELECT * FROM stories WHERE id = ?', [next_story['id']])
         end
       end
@@ -325,12 +449,23 @@ module Tyrion
       end
     end
 
+    # Gate/commit notes for a story, oldest first — the traceability trail rendered
+    # by the Gates: section in tyrion show / tyrion resume.
+    def gate_notes_for_story(story_id)
+      with_db do |db|
+        db.execute(
+          "SELECT * FROM story_notes WHERE story_id = ? AND kind IN ('gate','commit') ORDER BY created_at ASC",
+          [story_id]
+        )
+      end
+    end
+
     def done_stories_with_followup_notes(project_id)
       with_db do |db|
         db.execute(<<~SQL, [project_id])
           SELECT s.*, (
             SELECT body FROM story_notes
-            WHERE story_id = s.id AND kind = 'followup'
+            WHERE story_id = s.id AND kind = 'followup' AND resolved_at IS NULL
             ORDER BY created_at DESC LIMIT 1
           ) AS followup_body
           FROM stories s
@@ -339,10 +474,26 @@ module Tyrion
             AND s.status = 'done'
             AND EXISTS (
               SELECT 1 FROM story_notes n
-              WHERE n.story_id = s.id AND n.kind = 'followup'
+              WHERE n.story_id = s.id AND n.kind = 'followup' AND n.resolved_at IS NULL
             )
           ORDER BY s.completed_at DESC
         SQL
+      end
+    end
+
+    def followup_notes(story_id)
+      with_db do |db|
+        db.execute(
+          "SELECT * FROM story_notes WHERE story_id = ? AND kind = 'followup' ORDER BY created_at ASC",
+          [story_id]
+        )
+      end
+    end
+
+    def resolve_followup_note(note_id)
+      t = now
+      with_db do |db|
+        db.execute('UPDATE story_notes SET resolved_at = ? WHERE id = ?', [t, note_id])
       end
     end
 
@@ -360,6 +511,23 @@ module Tyrion
       end
     end
 
+    def reconcile_story(story_id, context:, next_action:, note:, checks: [])
+      t = now
+      with_db do |db|
+        db.transaction(:immediate) do
+          db.execute(
+            'UPDATE stories SET current_context=?, next_action=?, last_note_at=?, updated_at=? WHERE id=?',
+            [context, next_action, t, t, story_id]
+          )
+          db.execute(
+            "INSERT INTO story_notes (id, story_id, kind, body, created_at) VALUES (?, ?, 'decision', ?, ?)",
+            [uuid, story_id, note, t]
+          )
+          checks.each { |position, evidence| mark_criterion_met!(db, story_id, position, evidence, t) }
+        end
+      end
+    end
+
     def block_story(story_id, blocked_on:, blocked_on_discovery: nil)
       with_db do |db|
         db.transaction(:immediate) do
@@ -369,9 +537,10 @@ module Tyrion
 
           t = now
           db.execute(
-            'UPDATE stories SET status=?, blocked_on=?, blocked_on_discovery=?, updated_at=? WHERE id=?',
+            'UPDATE stories SET status=?, blocked_on=?, blocked_on_discovery=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?',
             ['blocked', blocked_on, blocked_on_discovery, t, story_id]
           )
+          reopen_epic_if_done!(db, story['epic_id'])
         end
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end
@@ -405,7 +574,7 @@ module Tyrion
         end
         t = now
         db.execute(
-          'UPDATE stories SET status=?, completed_at=?, updated_at=? WHERE id=?',
+          'UPDATE stories SET status=?, completed_at=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?',
           ['done', t, t, story_id]
         )
         db.execute(
@@ -419,7 +588,7 @@ module Tyrion
     def unstart_story(story_id)
       t = now
       with_db do |db|
-        db.execute('UPDATE stories SET status=?, updated_at=? WHERE id=?', ['pending', t, story_id])
+        db.execute('UPDATE stories SET status=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?', ['pending', t, story_id])
         db.execute(
           "INSERT INTO story_notes (id, story_id, kind, body, created_at) VALUES (?, ?, 'recovery', ?, ?)",
           [uuid, story_id, 'Story reset to pending via tyrion unstart', t]
@@ -470,13 +639,7 @@ module Tyrion
     def check_criterion(story_id, position, evidence)
       t = now
       with_db do |db|
-        criterion = db.get_first_row('SELECT * FROM criteria WHERE story_id = ? AND position = ?', [story_id, position.to_i])
-        raise "Criterion #{position} not found" unless criterion
-
-        db.execute(
-          'UPDATE criteria SET status=?, evidence=?, checked_at=?, updated_at=? WHERE story_id=? AND position=?',
-          ['met', evidence, t, t, story_id, position.to_i]
-        )
+        mark_criterion_met!(db, story_id, position.to_i, evidence, t)
         db.get_first_row('SELECT * FROM criteria WHERE story_id = ? AND position = ?', [story_id, position.to_i])
       end
     end
@@ -591,6 +754,104 @@ module Tyrion
       end
     end
 
+    # ── Lessons ────────────────────────────────────────────────────────────
+
+    def create_lesson(project_id:, trigger:, text:, epic_id: nil, story_id: nil, source: 'manual')
+      t = now
+      with_db do |db|
+        db.transaction(:immediate) do
+          # Counter is global (no project_id filter) — lesson-NNN is the table
+          # primary key and must be globally unique, not just per-project.
+          seq = db.get_first_value(
+            'SELECT COALESCE(MAX(CAST(SUBSTR(id, 8) AS INTEGER)), 0) + 1 FROM lessons WHERE id LIKE ?',
+            ['lesson-%']
+          )
+          id = format('lesson-%03d', seq)
+          db.execute(
+            'INSERT INTO lessons (id, project_id, epic_id, story_id, trigger, text, source, status, created_at, updated_at, origin_project_id, origin_epic_id, origin_story_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, project_id, epic_id, story_id, trigger, text, source, 'active', t, t, project_id, epic_id, story_id]
+          )
+          db.get_first_row('SELECT * FROM lessons WHERE id = ?', [id])
+        end
+      end
+    end
+
+    # epic_id: nil means "don't filter by epic" (returns lessons regardless of
+    # their own epic_id, including project-wide rows) — not "match NULL". When
+    # given, it's an exact match, not a project-wide-union of relevant lessons.
+    def list_lessons(project_id:, trigger: nil, epic_id: nil, status: 'active')
+      conditions = ['(lessons.project_id = ? OR lessons.project_id IS NULL)']
+      params     = [project_id]
+      { trigger:, epic_id:, status: }.compact.each do |col, val|
+        conditions << "lessons.#{col} = ?"
+        params << val
+      end
+      with_db do |db|
+        db.execute(<<~SQL, params)
+          SELECT lessons.*, epics.name AS epic_name
+          FROM lessons
+          LEFT JOIN epics ON lessons.epic_id = epics.id
+          WHERE #{conditions.join(' AND ')}
+          ORDER BY lessons.created_at
+        SQL
+      end
+    end
+
+    def find_lesson(id)
+      with_db { |db| db.get_first_row('SELECT * FROM lessons WHERE id = ?', [id]) }
+    end
+
+    def promote_lesson(id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          lesson = db.get_first_row('SELECT * FROM lessons WHERE id = ?', [id])
+          raise "Lesson not found: #{id}" unless lesson
+
+          column = %w[story_id epic_id project_id].find { |c| lesson[c] }
+          raise "Lesson #{id} is already global — nothing to promote to" unless column
+
+          db.execute("UPDATE lessons SET #{column} = NULL, updated_at = ? WHERE id = ?", [now, id])
+          db.get_first_row('SELECT * FROM lessons WHERE id = ?', [id])
+        end
+      end
+    end
+
+    # One-step jump straight back to the lesson's original creation-time scope
+    # (via origin_project_id/origin_epic_id/origin_story_id), not a symmetric
+    # one-rung undo of promote_lesson. Restoring from a wider level also
+    # restores every more-specific field recorded below it in the same call.
+    DEMOTE_RESTORE_COLUMNS = [%w[project_id epic_id story_id], %w[epic_id story_id], %w[story_id]].freeze
+
+    def demote_lesson(id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          lesson = db.get_first_row('SELECT * FROM lessons WHERE id = ?', [id])
+          raise "Lesson not found: #{id}" unless lesson
+
+          cols = DEMOTE_RESTORE_COLUMNS.find { |head,| lesson[head].nil? && lesson["origin_#{head}"] }
+          raise "Lesson #{id} is already at its original scope — nothing to demote" unless cols
+
+          set   = cols.map { |c| "#{c} = ?" }.join(', ')
+          binds = cols.map { |c| lesson["origin_#{c}"] } + [now, id]
+          db.execute("UPDATE lessons SET #{set}, updated_at = ? WHERE id = ?", binds)
+
+          db.get_first_row('SELECT * FROM lessons WHERE id = ?', [id])
+        end
+      end
+    end
+
+    def retire_lesson(id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          lesson = db.get_first_row('SELECT * FROM lessons WHERE id = ?', [id])
+          raise "Lesson not found: #{id}" unless lesson
+
+          db.execute("UPDATE lessons SET status='retired', updated_at=? WHERE id=?", [now, id])
+          db.get_first_row('SELECT * FROM lessons WHERE id = ?', [id])
+        end
+      end
+    end
+
     # ── Import helpers ─────────────────────────────────────────────────────
 
     def upsert_project(slug:, name:, repo_identity: nil, about_md: nil)
@@ -608,20 +869,24 @@ module Tyrion
     end
 
     def upsert_epic(project_id:, slug:, name:, intent: nil, context_md: nil,
-                    feature_source_path: nil, feature_source_hash: nil)
+                    feature_source_path: nil, feature_source_hash: nil,
+                    context_source_hash: nil)
       existing = find_epic(project_id, slug)
       if existing
         attrs = {}
         attrs['intent']               = intent if intent
-        attrs['context_md']           = context_md if context_md
+        # Unconditional — nil must propagate so deleting the .context.md file clears the DB column.
+        attrs['context_md']           = context_md
+        attrs['context_source_hash']  = context_source_hash
         attrs['feature_source_path']  = feature_source_path if feature_source_path
         attrs['feature_source_hash']  = feature_source_hash if feature_source_hash
-        update_epic(existing['id'], attrs) unless attrs.empty?
+        update_epic(existing['id'], attrs)
         find_epic(project_id, slug)
       else
         create_epic(project_id: project_id, slug: slug, name: name, intent: intent,
                     context_md: context_md, feature_source_path: feature_source_path,
-                    feature_source_hash: feature_source_hash)
+                    feature_source_hash: feature_source_hash,
+                    context_source_hash: context_source_hash)
       end
     end
 
@@ -649,6 +914,7 @@ module Tyrion
     def import_stories_for_epic(epic_id:, scenarios:)
       results = []
       t = now
+      inserted_new = false
       with_db do |db|
         db.transaction(:immediate) do
           scenarios.each do |scenario|
@@ -668,6 +934,7 @@ module Tyrion
                 'INSERT INTO stories (id, epic_id, sequence, slug, title, intent, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [sid, epic_id, seq, scenario[:slug], scenario[:title], scenario[:intent], 'pending', t, t]
               )
+              inserted_new = true
               sid
             end
 
@@ -687,12 +954,31 @@ module Tyrion
 
             results << { slug: scenario[:slug], criteria_count: scenario[:criteria].length }
           end
+          reopen_epic_if_done!(db, epic_id) if inserted_new
         end
       end
       results
     end
 
     private
+
+    # claimed_at tracks claimed_by: both set together, or both NULL for an unclaimed claim.
+    def claim_row!(db, story_id, claimed_by)
+      t = now
+      claimed_at = claimed_by && t
+      db.execute(
+        'UPDATE stories SET status=?, started_at=?, last_note_at=?, claimed_by=?, claimed_at=?, updated_at=? WHERE id=?',
+        ['in_progress', t, t, claimed_by, claimed_at, t, story_id]
+      )
+      epic_id = db.get_first_value('SELECT epic_id FROM stories WHERE id = ?', [story_id])
+      reopen_epic_if_done!(db, epic_id)
+    end
+
+    # Honesty flip: a sealed epic that gains a non-done story is no longer done.
+    def reopen_epic_if_done!(db, epic_id)
+      return unless db.get_first_value('SELECT status FROM epics WHERE id = ?', [epic_id]) == 'done'
+      db.execute('UPDATE epics SET status=?, updated_at=? WHERE id=?', ['active', now, epic_id])
+    end
 
     # busy_timeout MUST be set before journal_mode=WAL — switching to WAL
     # acquires a brief exclusive lock; without a timeout already applied that
@@ -797,8 +1083,134 @@ module Tyrion
           CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
           PRAGMA foreign_keys = ON;
         SQL
+      }],
+      ['add_resolved_at_to_story_notes', lambda { |db|
+        cols = db.execute('PRAGMA table_info(story_notes)').map { |r| r['name'] }
+        db.execute('ALTER TABLE story_notes ADD COLUMN resolved_at TEXT') unless cols.include?('resolved_at')
+      }],
+      ['parallel_story_execution_schema', lambda { |db|
+        # Two partial uniques replace the old single in_progress-per-epic rule:
+        #   per lane: at most one in_progress story per (epic, claimed_by) when non-NULL
+        #   unclaimed: at most one in_progress story with NULL claimed_by per epic
+        cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
+        db.execute('ALTER TABLE stories ADD COLUMN claimed_by TEXT') unless cols.include?('claimed_by')
+        db.execute('ALTER TABLE stories ADD COLUMN claimed_at TEXT') unless cols.include?('claimed_at')
+        db.execute('DROP INDEX IF EXISTS idx_one_in_progress_story_per_epic')
+        db.execute(<<~SQL)
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_one_in_progress_story_per_lane
+            ON stories(epic_id, claimed_by)
+            WHERE status = 'in_progress' AND claimed_by IS NOT NULL
+        SQL
+        db.execute(<<~SQL)
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_one_unclaimed_in_progress_story_per_epic
+            ON stories(epic_id)
+            WHERE status = 'in_progress' AND claimed_by IS NULL
+        SQL
+      }],
+      ['add_depends_on_to_stories', lambda { |db|
+        cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
+        db.execute('ALTER TABLE stories ADD COLUMN depends_on TEXT') unless cols.include?('depends_on')
+      }],
+      ['add_wave_override_to_stories', lambda { |db|
+        cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
+        db.execute('ALTER TABLE stories ADD COLUMN wave_override INTEGER') unless cols.include?('wave_override')
+        db.execute('ALTER TABLE stories ADD COLUMN wave_rationale TEXT') unless cols.include?('wave_rationale')
+      }],
+      ['create_lessons_table', lambda { |db|
+        db.execute_batch(<<~SQL)
+          CREATE TABLE IF NOT EXISTS lessons (
+            id          TEXT PRIMARY KEY,
+            project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            epic_id     TEXT REFERENCES epics(id) ON DELETE SET NULL,
+            story_id    TEXT REFERENCES stories(id) ON DELETE SET NULL,
+            trigger     TEXT NOT NULL,
+            text        TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'manual',
+            status      TEXT NOT NULL CHECK(status IN ('active','retired')) DEFAULT 'active',
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_lessons_project_trigger ON lessons(project_id, trigger);
+        SQL
+      }],
+      ['make_lessons_project_id_nullable', lambda { |db|
+        # WARNING: any future migration adding columns to 'lessons' (e.g. 'add_lesson_origin_columns')
+        # MUST run AFTER this one — this rebuild uses an explicit column list below and will silently
+        # DROP any columns not listed there if it runs after they've been added.
+        existing = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='lessons'").first&.fetch('sql', '')
+        next unless existing.to_s.match?(/project_id\s+TEXT\s+NOT\s+NULL/)
+
+        db.execute_batch(<<~SQL)
+          PRAGMA foreign_keys = OFF;
+          ALTER TABLE lessons RENAME TO lessons_old;
+          CREATE TABLE lessons (
+            id          TEXT PRIMARY KEY,
+            project_id  TEXT REFERENCES projects(id) ON DELETE CASCADE,
+            epic_id     TEXT REFERENCES epics(id) ON DELETE SET NULL,
+            story_id    TEXT REFERENCES stories(id) ON DELETE SET NULL,
+            trigger     TEXT NOT NULL,
+            text        TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'manual',
+            status      TEXT NOT NULL CHECK(status IN ('active','retired')) DEFAULT 'active',
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+          );
+          INSERT INTO lessons (id, project_id, epic_id, story_id, trigger, text, source, status, created_at, updated_at)
+            SELECT id, project_id, epic_id, story_id, trigger, text, source, status, created_at, updated_at
+            FROM lessons_old;
+          DROP TABLE lessons_old;
+          CREATE INDEX IF NOT EXISTS idx_lessons_project_trigger ON lessons(project_id, trigger);
+          PRAGMA foreign_keys = ON;
+        SQL
+      }],
+      ['add_lesson_origin_columns', lambda { |db|
+        # MUST run after 'make_lessons_project_id_nullable' in the MIGRATIONS array. That migration's
+        # rebuild uses an explicit column list (INSERT INTO lessons (id, project_id, ...) SELECT ...) —
+        # if this migration ran first, the rebuild would silently DROP these columns and any data in
+        # them. This is a hard ordering requirement, not a readability preference.
+        cols = db.execute('PRAGMA table_info(lessons)').map { |r| r['name'] }
+        db.execute('ALTER TABLE lessons ADD COLUMN origin_project_id TEXT REFERENCES projects(id) ON DELETE SET NULL') unless cols.include?('origin_project_id')
+        db.execute('ALTER TABLE lessons ADD COLUMN origin_epic_id TEXT REFERENCES epics(id) ON DELETE SET NULL') unless cols.include?('origin_epic_id')
+        db.execute('ALTER TABLE lessons ADD COLUMN origin_story_id TEXT REFERENCES stories(id) ON DELETE SET NULL') unless cols.include?('origin_story_id')
+      }],
+      ['add_archived_at_to_epics', lambda { |db|
+        cols = db.execute('PRAGMA table_info(epics)').map { |r| r['name'] }
+        db.execute('ALTER TABLE epics ADD COLUMN archived_at TEXT') unless cols.include?('archived_at')
+      }],
+      ['add_gate_and_commit_to_story_notes_kind_check', lambda { |db|
+        # Runs after add_resolved_at_to_story_notes, so the live table has resolved_at —
+        # the explicit column list below MUST include it or the rebuild would drop it.
+        existing = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='story_notes'").first&.fetch('sql', '')
+        next if existing.to_s.include?("'gate'")
+        db.execute_batch(<<~SQL)
+          PRAGMA foreign_keys = OFF;
+          ALTER TABLE story_notes RENAME TO story_notes_old;
+          CREATE TABLE story_notes (
+            id          TEXT PRIMARY KEY,
+            story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+            kind        TEXT NOT NULL
+                          CHECK(kind IN ('plan','progress','decision','blocker','test','handoff','recovery','session','followup','observation','gate','commit')),
+            body        TEXT NOT NULL,
+            metadata    TEXT,
+            created_at  TEXT NOT NULL,
+            resolved_at TEXT
+          );
+          INSERT INTO story_notes (id, story_id, kind, body, metadata, created_at, resolved_at) SELECT id, story_id, kind, body, metadata, created_at, resolved_at FROM story_notes_old;
+          DROP TABLE story_notes_old;
+          CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
+          PRAGMA foreign_keys = ON;
+        SQL
       }]
     ].freeze
+
+    def mark_criterion_met!(db, story_id, position, evidence, t)
+      criterion = db.get_first_row('SELECT * FROM criteria WHERE story_id = ? AND position = ?', [story_id, position.to_i])
+      raise "Criterion #{position} not found" unless criterion
+      db.execute(
+        'UPDATE criteria SET status=?, evidence=?, checked_at=?, updated_at=? WHERE story_id=? AND position=?',
+        ['met', evidence, t, t, story_id, position.to_i]
+      )
+    end
 
     def setup_db
       with_db do |db|
