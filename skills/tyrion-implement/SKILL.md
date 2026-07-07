@@ -287,7 +287,7 @@ For each batch:
 
 Subagent instructions vary by TDD mode:
 
-**strict**: "Invoke the `superpowers:test-driven-development` skill and follow it exactly — red-green-refactor, no production code without a failing test first, delete any code written before its test. Write a failing test for these criteria first. Run it to confirm it's red. Then implement until green. Return: files changed, full test command + verbatim output." (The superpowers skill owns the TDD discipline — don't restate or soften its rules in the prompt.)
+**strict**: "Invoke the `superpowers:test-driven-development` skill and follow it exactly — red-green-refactor, no production code without a failing test first, delete any code written before its test. Write a failing test for these criteria first. Run it to confirm it's red. Then implement until green. Return: files changed, full test command + verbatim output." (The superpowers skill owns the TDD discipline — don't restate or soften its rules in the prompt. **If the superpowers plugin isn't installed or the agent has no Skill tool — e.g. Codex running this protocol — skip the invoke and follow the rules as written in this prompt; they are the same discipline.**)
 
 **loose**: "Implement these criteria. Write tests if they can be done without significant overhead. Return: files changed, test output if run, or the exact command + expected output that proves each criterion."
 
