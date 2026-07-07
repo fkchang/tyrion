@@ -55,9 +55,10 @@ tyrion init          # idempotent — registers repo if needed
 tyrion status        # read the plan view; understand where things are
 tyrion project show  # read the project ABOUT.md — anchor on what this app/system *is*
 tyrion epic show     # read the epic intent + context_md if present
+tyrion lessons --at start   # just-in-time: lessons relevant to starting/orienting work
 ```
 
-Read all output carefully before proceeding. The ABOUT.md and epic context define the frame — implementation decisions should stay consistent with them.
+Read all output carefully before proceeding. The ABOUT.md and epic context define the frame — implementation decisions should stay consistent with them. `tyrion status` already surfaces a LESSONS lane ambiently when any apply to the active project/epic; `tyrion lessons --at start` is the targeted, fresh-output version — if it prints anything, follow it before doing anything else. It prints nothing when no `start`-triggered lessons exist (silent on none — don't report "no lessons found").
 
 **Visual/prototype check — do this before Step 2:**
 
@@ -158,6 +159,7 @@ Read the output carefully:
 - recent notes — what actually happened; **look for `[plan]` notes — these contain `RIGOR:`, `BATCHING:`, and `PLAN:` set by `/tyrion-shape`. Read them now and lock in the mode before Step 4.**
 - unchecked criteria — what still needs to be done
 - git branch, worktree path, dirty-file count — ground truth
+- **`Lessons:` section, if present** — `tyrion resume` auto-surfaces any active lesson scoped to the current project/epic/story (same ambient mechanism as the drift warning). If shown, it is not optional context — follow it for the rest of the session, same as a `tyrion lessons --at start` result in Step 1.
 
 **If a `[plan]` note contains `RIGOR: trivial` → switch to trivial mode now, no override needed. If `RIGOR: strict` → switch to strict. If `RIGOR: loose` → stay in build mode. This is the decision `/tyrion-shape` already made from the plan — don't re-derive it.**
 
@@ -256,7 +258,7 @@ For each batch:
 
 Subagent instructions vary by TDD mode:
 
-**strict**: "Write a failing test for these criteria first. Run it to confirm it's red. Then implement until green. Return: files changed, full test command + verbatim output."
+**strict**: "Invoke the `superpowers:test-driven-development` skill and follow it exactly — red-green-refactor, no production code without a failing test first, delete any code written before its test. Write a failing test for these criteria first. Run it to confirm it's red. Then implement until green. Return: files changed, full test command + verbatim output." (The superpowers skill owns the TDD discipline — don't restate or soften its rules in the prompt.)
 
 **loose**: "Implement these criteria. Write tests if they can be done without significant overhead. Return: files changed, test output if run, or the exact command + expected output that proves each criterion."
 
@@ -286,6 +288,14 @@ tyrion note <slug> blocker "<what the blocker is and what you already tried>"
 tyrion next <slug> "<best recovery step when resumed>"
 ```
 
+**Before moving on, ask: is this a generalizable mistake or gap (something a future agent on a different story would also be at risk of), or a one-off specific to this code?** If generalizable, record it as a lesson so it doesn't recur silently:
+
+```bash
+tyrion lesson add --at <trigger> "<the rule, stated as an instruction to a future agent>"
+```
+
+Pick `<trigger>` from the workflow moment where the mistake would actually happen again (`start`, `uat`, `pre-push-pass`, `import-existing`, or a new one if none fit — triggers are just string tags, no registry to update). Skip this for genuine one-offs; not every blocker is a lesson.
+
 Then either resolve it or stop. Do not thrash.
 
 ---
@@ -313,6 +323,14 @@ tyrion note <slug> progress "<what changed, why, which files>"
 ---
 
 ### 7.5. UAT RUNBOOK
+
+**Before drafting the runbook, in every mode (including trivial):**
+
+```bash
+tyrion lessons --at uat
+```
+
+This is a just-in-time check — it prints nothing when no `uat`-triggered lessons exist (stay silent, do not report "no lessons"). If it prints anything, honor it before writing the runbook. The lesson most likely to fire here: do not re-offer the rspec/test suite as UAT when `/pre-push` already ran it — write CLI/browser checks that exercise observable behavior instead.
 
 **Trivial mode:** Skip the runbook. Write one verification note instead:
 
@@ -361,11 +379,19 @@ If `--review` mode: present the runbook. User can run it now to verify, or skip 
 /pre-push
 ```
 
-If `/pre-push` finds blocking issues: fix them, re-run, do not close until it passes.
+If `/pre-push` finds blocking issues: fix them, re-run, do not close until it passes. If a blocking issue is a generalizable mistake (the same review check would catch it again on a future story, in a different epic), record it as a lesson per the Step 6 ON BLOCKER guidance above before re-running — don't just fix and move on.
+
+For an optional deeper spot-check beyond `/pre-push` (criteria-evidence completeness, not just code quality), `/engineering-review <slug>` is available manually — it is not auto-invoked by any rigor level; see its own SKILL.md for what it checks.
 
 If `--review` mode: share the /pre-push output. Wait for user ok before Step 9.
 
-**Once `/pre-push` passes: proceed immediately to Step 9. Do not stop, do not summarise, do not wait for user confirmation. Pre-push passing is not the finish line — `tyrion done` + the UAT block is.**
+**Once `/pre-push` passes:**
+
+```bash
+tyrion lessons --at pre-push-pass
+```
+
+Just-in-time check, silent when nothing applies. The lesson most likely to fire here is the rule this very line encodes: don't stop, don't summarize, don't wait for confirmation — proceed immediately to Step 9. Pre-push passing is not the finish line — `tyrion done` + the UAT block is.
 
 ---
 
@@ -377,6 +403,17 @@ tyrion status   # verify plan view shows the story as done; note the next pendin
 ```
 
 `tyrion done` refuses if any criterion is still `pending` (unless `--force`). That refusal is the quality gate — don't bypass it without a written reason.
+
+**Epic close → Timeline update.** When `tyrion status` shows the epic is fully done (all stories ✓), record the arc in the project ABOUT.md `## Timeline` section:
+
+```
+- YYYY-MM-DD | <epic-slug> shipped (N/N) | review: <one-line finding> | spawned: <slug>
+```
+
+- `review:` captures what prompted a corrective epic (missing feature, gap found in review, etc.). Omit if nothing was spawned.
+- `spawned:` names the corrective epic slug. Omit if nothing followed.
+- Use `tyrion project edit <project-slug>` to update the about_md, or edit the project's ABOUT.md file directly if one exists in the repo root.
+- This entry is the memory of WHY the next epic exists — without it, the next agent sees only the spawned epic in isolation.
 
 The completion summary should reference or embed the UAT runbook note so the ledger is self-contained.
 
@@ -441,7 +478,11 @@ Pre-claim `<next-pending-slug>` for the next session? [y/skip]
 ```
 If user says y, run `tyrion start <next-pending-slug>`.
 
-**If the story has no browser checks** (CLI-only UAT: rake tasks, migrations, service objects, component library stories): skip the "Want me to run browser checks?" question entirely — it doesn't apply. Run CLI checks inline, report results, then ask:
+**If the story has no browser checks** (CLI-only UAT: rake tasks, migrations, service objects, component library stories): skip the "Want me to run browser checks?" question entirely — it doesn't apply. Run CLI checks inline automatically without asking. Then report results (✅/❌ per check) and state explicitly that you ran them. Always follow with:
+```
+(ran automatically — re-run any of the above? [y/skip])
+```
+If user says y, re-run and report again. Then ask:
 ```
 Pre-claim `<next-pending-slug>` for the next session? [y/skip]
 ```
