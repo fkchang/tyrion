@@ -379,7 +379,15 @@ If `--review` mode: present the runbook. User can run it now to verify, or skip 
 /pre-push
 ```
 
-If `/pre-push` finds blocking issues: fix them, re-run, do not close until it passes. If a blocking issue is a generalizable mistake (the same review check would catch it again on a future story, in a different epic), record it as a lesson per the Step 6 ON BLOCKER guidance above before re-running — don't just fix and move on.
+**Record every run in the ledger — pass or fail. Traceability is the point: a failed pre-push that got fixed is history worth keeping, not noise.**
+
+If `/pre-push` finds blocking issues, record the failure BEFORE fixing anything:
+
+```bash
+tyrion gate <slug> pre-push fail --detail "<comma-separated failing step names + one-phrase reason each>"
+```
+
+Then fix, re-run `/pre-push`, and record again. Do not close until it passes. If a blocking issue is a generalizable mistake (the same review check would catch it again on a future story, in a different epic), record it as a lesson per the Step 6 ON BLOCKER guidance above before re-running — don't just fix and move on.
 
 For an optional deeper spot-check beyond `/pre-push` (criteria-evidence completeness, not just code quality), `/engineering-review <slug>` is available manually — it is not auto-invoked by any rigor level; see its own SKILL.md for what it checks.
 
@@ -388,6 +396,7 @@ If `--review` mode: share the /pre-push output. Wait for user ok before Step 9.
 **Once `/pre-push` passes:**
 
 ```bash
+tyrion gate <slug> pre-push pass --detail "<one-line summary: test count, notable checks>"
 tyrion lessons --at pre-push-pass
 ```
 
