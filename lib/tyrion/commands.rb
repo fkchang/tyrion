@@ -268,9 +268,11 @@ module Tyrion
       when 'activate' then cmd_epic_activate(args, store)
       when 'pause'    then cmd_epic_pause(args, store)
       when 'complete' then cmd_epic_complete(args, store)
+      when 'archive'   then cmd_epic_archive(args, store)
+      when 'unarchive' then cmd_epic_unarchive(args, store)
       else
         $stderr.puts "Unknown epic subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion epic [list|show|activate|pause|complete]"
+        $stderr.puts "Usage: tyrion epic [list|show|activate|pause|complete|archive|unarchive]"
         exit 1
       end
     end
@@ -283,14 +285,24 @@ module Tyrion
         return
       end
       active_slug = Repo.active_epic
-      epics.each do |e|
+      active, archived = epics.partition { |e| e['archived_at'].nil? }
+
+      line = lambda do |e, extra_tag = ''|
         stories    = store.stories_for_epic(e['id'])
         done       = stories.count { |s| s['status'] == 'done' }
         # Only show status bracket for non-default statuses — avoids every epic
         # looking [active] when that's just the DB default, not the active pointer.
         status_tag = e['status'] == 'active' ? '' : " [#{e['status']}]"
         pointer    = e['slug'] == active_slug ? " #{Output.cyan('← active')}" : ''
-        puts "#{e['slug']}  #{e['name']}  #{done}/#{stories.length}#{status_tag}#{pointer}"
+        puts "#{e['slug']}  #{e['name']}  #{done}/#{stories.length}#{status_tag}#{extra_tag}#{pointer}"
+      end
+
+      active.each { |e| line.call(e) }
+
+      unless archived.empty?
+        puts
+        puts Output.dim("Archived:")
+        archived.each { |e| line.call(e, " #{Output.dim('[archived]')}") }
       end
     end
 
@@ -378,6 +390,28 @@ module Tyrion
 
       store.update_epic(epic['id'], 'status' => 'done')
       puts "Epic #{slug} sealed as done."
+    end
+
+    def self.cmd_epic_archive(args, store)
+      slug = args.shift || Repo.active_epic
+      die "Usage: tyrion epic archive <slug>" unless slug
+      project = resolve_project(store)
+      epic    = store.find_epic(project['id'], slug)
+      die "Epic not found: #{slug}" unless epic
+
+      store.archive_epic(epic['id'])
+      puts "Epic archived: #{epic['name']} [#{slug}]. Restore with: tyrion epic unarchive #{slug}"
+    end
+
+    def self.cmd_epic_unarchive(args, store)
+      slug = args.shift
+      die "Usage: tyrion epic unarchive <slug>" unless slug
+      project = resolve_project(store)
+      epic    = store.find_epic(project['id'], slug)
+      die "Epic not found: #{slug}" unless epic
+
+      store.unarchive_epic(epic['id'])
+      puts "Epic unarchived: #{epic['name']} [#{slug}]"
     end
 
     def self.cmd_import(args, store)

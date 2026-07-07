@@ -232,6 +232,10 @@ module Tyrion
       update_epic(epic_id, 'status' => 'done')
     end
 
+    def archive_epic(epic_id)
+      update_epic(epic_id, 'archived_at' => now)
+    end
+
     def unarchive_epic(epic_id)
       update_epic(epic_id, 'archived_at' => nil)
     end
