@@ -10,7 +10,7 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 ## Invocation
 
 ```
-/tyrion-implement [slug] [--spike | --trivial | --tdd=strict|loose|off] [--review] [--no-prepush] [--plan=<path>] [--dark-factory | --adequate | --mediocre]
+/tyrion-implement [slug] [--spike | --trivial | --tdd=strict|loose|off] [--review] [--no-prepush] [--plan=<path>] [--dark-factory | --adequate | --mediocre] [--vet]
 ```
 
 ### Modes
@@ -33,6 +33,7 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 
 **Fine-grained overrides:**
 - `--tdd=loose` — tests encouraged but not blocking (Build default)
+- `--vet` — Codex vets the plan before implementation (Step 4); verdict recorded as a `codex-vet` gate. Also auto-activates from a `RIGOR: <mode>+vet` tag in `[plan]` notes (set by `/tyrion-shape`), so shape can decide vetting once and no session ever has to ask.
 - `--no-prepush` — skip pre-push only (keep TDD)
 - `--review` — pause at each step boundary for user steering
 - `--plan=<path>` — explicit plan file; overrides `Plan file:` in epic context_md
@@ -167,7 +168,7 @@ Read the output carefully:
 - git branch, worktree path, dirty-file count — ground truth
 - **`Lessons:` section, if present** — `tyrion resume` auto-surfaces any active lesson scoped to the current project/epic/story (same ambient mechanism as the drift warning). If shown, it is not optional context — follow it for the rest of the session, same as a `tyrion lessons --at start` result in Step 1.
 
-**If a `[plan]` note contains `RIGOR: trivial` → switch to trivial mode now, no override needed. If `RIGOR: strict` → switch to strict. If `RIGOR: loose` → stay in build mode. This is the decision `/tyrion-shape` already made from the plan — don't re-derive it.**
+**If a `[plan]` note contains `RIGOR: trivial` → switch to trivial mode now, no override needed. If `RIGOR: strict` → switch to strict. If `RIGOR: loose` → stay in build mode. A `+vet` suffix (e.g. `RIGOR: strict+vet`) additionally activates vet mode — Codex reviews the plan at Step 4 before any implementation. This is the decision `/tyrion-shape` already made from the plan — don't re-derive it.**
 
 **If the worktree shows partial edits inconsistent with `current_context`:**
 
@@ -233,6 +234,19 @@ tyrion block <slug> "vague criteria — proposed sharp rewrites: <criterion N: p
 ```
 
 Then return `BLOCKED: <slug> — vague criteria, rewrites proposed in block reason` (orchestrate treats this as a full stop for the story; the human resolves it by editing the .feature and re-importing).
+
+**Vet mode (`--vet` flag or `RIGOR: <mode>+vet` tag) — Codex reviews the plan before you build it:**
+
+After the plan note is written and criteria are confirmed sharp, invoke the `/design-review` skill on this story's plan: package the criteria, the `[plan]` notes / PLAN_SECTION, and the key files it touches; Codex returns `SHIP IT | SIMPLIFY | RETHINK`. Record the verdict — always:
+
+```bash
+# SHIP IT:
+tyrion gate <slug> codex-vet pass --detail "SHIP IT — <minor suggestions worth taking, if any>"
+# SIMPLIFY or RETHINK:
+tyrion gate <slug> codex-vet fail --detail "<VERDICT>: <top concerns, one line each>"
+```
+
+On fail: revise the plan (update the `[plan]` note with the new approach), re-run `/design-review`, and record the new gate result. Do not proceed to Step 5 until the latest `codex-vet` gate is pass. In dark-factory mode, a second consecutive fail → `tyrion block` with both verdicts in the reason (don't loop forever arguing with Codex).
 
 If `--review` mode: present the criteria and plan, wait for user ok/steer before Step 5.
 

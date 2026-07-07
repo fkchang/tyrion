@@ -46,6 +46,18 @@ With this skill:
 
 2. Write the plan as usual (the full plan file approach works well here).
 
+2b. **`--vet` — Codex vets the plan before you present it.** When invoked as
+   `/tyrion-plan --vet` (or whenever the plan touches 5+ files, new abstractions,
+   or system boundaries — the `/design-review` skill's own suggestion triggers),
+   run `/design-review` on the full plan before presenting it for approval.
+   `SHIP IT` → proceed; `SIMPLIFY`/`RETHINK` → revise first. Record the outcome
+   two ways: the verdict + top concerns go into the epic's `.context.md`
+   (cross-cutting vet results belong in epic context), and each story that vetting
+   materially shaped gets `RIGOR: <mode>+vet` in its `# RIGOR:` comment so
+   `/tyrion-implement` re-vets its per-story plan at Step 4 and records a
+   `codex-vet` gate in the ledger. This is the first-class form of "write up a
+   plan, have Codex vet it, then ingest into tyrion."
+
 3. **Also produce a feature file.** The plan's stories → Gherkin scenarios:
    - One epic per major initiative
    - One scenario per story, with the narrative (As a / In order to / I want)
@@ -90,12 +102,13 @@ This means:
 - `/clear` at any point = zero lost work
 - Forrest's/Gloria's Law satisfied: zero friction to context-reset
 
-## Adequate mode (future — DTO-driven)
+## Adequate mode — shipped as `--dark-factory`
 
-When the autonomy-loop discovery (`disc-003`) resolves:
-- DTO spawns a fresh session per story
-- Same ledger, same implement skill, same CLOSE step
-- Forrest stays out of the loop unless blocked
+`/tyrion-implement <slug> --dark-factory` (aliases `--adequate`, `--mediocre`) now
+exists: no prompts, self-run UAT recorded as a `uat` gate, auto pre-claim. For whole
+epics, `/tyrion-orchestrate` dispatches dark-factory subagents per story. The
+DTO-driven fresh-session-per-story variant (`disc-003`) remains a future option on
+top of the same ledger + implement skill.
 
 ---
 
