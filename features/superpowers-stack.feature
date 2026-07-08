@@ -124,3 +124,16 @@ Feature: Superpowers Stack Integration — Gates, Vetting & Dark Factory
     Then each story closes with pre-push, uat gates and commit records visible in tyrion show
     And a decision note on this story summarizes the scorecard: gates passed/failed per story, interventions needed, verdict on dark-factory readiness
     And any generalizable failure is recorded via tyrion lesson add with an appropriate trigger
+
+  Scenario: setup-codex-command
+    As a new Codex user adopting Tyrion
+    In order to use the tyrion skills directly in Codex without knowing any setup lore
+    I want a single tyrion setup-codex command that installs native skill discovery
+
+    Given tyrion is installed as a gem or run from a repo checkout
+    When I run tyrion setup-codex
+    Then ~/.agents/skills/tyrion is a symlink pointing at tyrion's skills directory
+    And the command prints the discovered skill names and restart-Codex guidance
+    And re-running the command is idempotent and refreshes a stale symlink without error
+    When ~/.agents/skills/tyrion already exists as a real directory rather than a symlink
+    Then the command exits 1 via die telling the user to move it aside

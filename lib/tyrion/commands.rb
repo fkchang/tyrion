@@ -75,6 +75,7 @@ module Tyrion
       when 'depends'      then cmd_depends(args, store)
       when 'wave'         then cmd_wave(args, store)
       when 'whitelist'    then cmd_whitelist(args, store)
+      when 'setup-codex'  then cmd_setup_codex(args, store)
       when 'lesson'       then cmd_lesson(args, store)
       when 'lessons'      then cmd_lesson(['list'] + args, store)
       when nil, '--help', '-h', 'help' then usage
@@ -1972,6 +1973,28 @@ module Tyrion
       puts "#{Output.green('✓')} #{slug} pinned to wave #{wave_num}"
     end
 
+    # ── setup-codex ────────────────────────────────────────────────────────
+
+    def self.cmd_setup_codex(_args, _store)
+      skills_dir = File.expand_path('../../skills', __dir__)
+      die "skills directory not found: #{skills_dir}" unless Dir.exist?(skills_dir)
+
+      link = File.join(Dir.home, '.agents', 'skills', 'tyrion')
+      if File.symlink?(link)
+        File.unlink(link)
+      elsif File.exist?(link)
+        die "#{link} exists and is not a symlink — move it aside and re-run"
+      end
+      FileUtils.mkdir_p(File.dirname(link))
+      File.symlink(skills_dir, link)
+
+      names = Dir.glob(File.join(skills_dir, '*/SKILL.md')).map { |p| File.basename(File.dirname(p)) }.sort
+      puts Output.green('Codex skill discovery installed:')
+      puts "  #{link} -> #{skills_dir}"
+      puts "Skills available (#{names.size}): #{names.join(', ')}"
+      puts 'Restart the Codex CLI to discover them.'
+    end
+
     # ── whitelist ──────────────────────────────────────────────────────────
 
     def self.cmd_whitelist(args, _store)
@@ -2136,6 +2159,9 @@ module Tyrion
           tyrion whitelist show                    Show whitelist status across all scopes
           tyrion whitelist add [--scope local|project|global]   Add tyrion rules (default: local)
           tyrion whitelist remove [--scope local|project|global] Remove tyrion rules
+
+        Other agents:
+          tyrion setup-codex                       Install tyrion skills into Codex native skill discovery (~/.agents/skills)
       USAGE
     end
 
