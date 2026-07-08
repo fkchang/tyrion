@@ -51,6 +51,19 @@ helpers do
   ensure
     redirect "/"
   end
+
+  def with_epic_flash
+    slug = params[:project]
+    proj = slug ? store.find_project_by_slug(slug) : TyrionWeb::Data.resolve_active_project
+    raise "project not found" unless proj
+    epic = store.find_epic(proj['id'], params[:slug])
+    raise "epic not found" unless epic
+    session[:flash] = yield(epic)
+  rescue StandardError => e
+    session[:flash] = "Error: #{e.message}"
+  ensure
+    redirect "/roadmap#{"?project=#{slug}" if slug}"
+  end
 end
 
 # ── Active Story (default) ─────────────────────────────────────────────────────
@@ -73,10 +86,12 @@ get "/roadmap" do
   d    = TyrionWeb::Data.load_roadmap_view(project_slug: params[:project])
   base = TyrionWeb::Data.load_sidebar_data(d[:project], d[:active_epic])
   phlex Views::RoadmapView.new(
-    project: d[:project], epics: d[:epics], active_epic: d[:active_epic],
+    project: d[:project], active_epics: d[:active_epics], archived_epics: d[:archived_epics],
+    active_epic: d[:active_epic],
     active_story: d[:active_story], stories_by_epic: d[:stories_by_epic], criteria: d[:criteria],
     sidebar_stories: base[:stories], disc_summary: base[:disc_summary],
     project_slug: params[:project],
+    flash: session.delete(:flash),
     **base_git
   )
 end
@@ -213,4 +228,12 @@ post "/stories/:id/next_action" do
     text = params[:text]&.strip
     store.update_next_action(params[:id], text) if text
   end
+end
+
+post "/epic/:slug/seal" do
+  with_epic_flash { |epic| store.seal_epic(epic['id']); "Epic #{params[:slug]} sealed ✓" }
+end
+
+post "/epic/:slug/unarchive" do
+  with_epic_flash { |epic| store.unarchive_epic(epic['id']); "Epic #{params[:slug]} unarchived" }
 end

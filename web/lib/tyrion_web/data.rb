@@ -91,7 +91,7 @@ module TyrionWeb
 
     def self.load_roadmap_view(project_slug: nil)
       project = project_slug ? store.find_project_by_slug(project_slug) : resolve_active_project
-      return { project: nil, epics: [], active_epic: nil, active_story: nil, stories_by_epic: {}, criteria: [] } unless project
+      return { project: nil, active_epics: [], archived_epics: [], active_epic: nil, active_story: nil, stories_by_epic: {}, criteria: [] } unless project
 
       epics        = store.list_epics(project['id'])
       active_epic  = resolve_active_epic(project)
@@ -99,11 +99,19 @@ module TyrionWeb
       criteria     = active_story ? store.criteria_for_story(active_story['id']) : []
 
       stories_by_epic = {}
-      epics.each { |e| stories_by_epic[e['id']] = store.stories_for_epic(e['id']) }
+      decorated_epics = epics.map do |e|
+        stories = store.stories_for_epic(e['id'])
+        stories_by_epic[e['id']] = stories
+        e.merge('story_stats' => story_counts(stories), 'max_last_note_at' => max_note_at(stories))
+      end
+
+      active_epics   = decorated_epics.reject { |e| e['archived_at'] }
+      archived_epics = decorated_epics.select { |e| e['archived_at'] }
 
       {
-        project: project, epics: epics, active_epic: active_epic,
-        active_story: active_story, stories_by_epic: stories_by_epic, criteria: criteria
+        project: project, active_epics: active_epics, archived_epics: archived_epics,
+        active_epic: active_epic, active_story: active_story,
+        stories_by_epic: stories_by_epic, criteria: criteria
       }
     end
 
@@ -117,17 +125,13 @@ module TyrionWeb
         last_note_at = nil
 
         epics.each do |e|
-          store.stories_for_epic(e['id']).each do |s|
-            case s['status']
-            when 'done'        then done_count    += 1
-            when 'pending'     then pending_count += 1
-            when 'blocked'     then blocked_count += 1
-            when 'in_progress' then active_count  += 1
-            end
-            if s['last_note_at'] && (last_note_at.nil? || s['last_note_at'] > last_note_at)
-              last_note_at = s['last_note_at']
-            end
-          end
+          stories = store.stories_for_epic(e['id'])
+          counts  = story_counts(stories)
+          done_count    += counts[:done]
+          pending_count += counts[:pending]
+          blocked_count += counts[:blocked]
+          active_count  += counts[:in_progress]
+          last_note_at   = [last_note_at, max_note_at(stories)].compact.max
         end
 
         in_progress = active_epic ? store.in_progress_story(active_epic['id']) : nil
@@ -204,6 +208,21 @@ module TyrionWeb
 
     def self.empty_disc_summary
       { spike: nil, ready_count: 0, mark_count: 0 }
+    end
+
+    def self.story_counts(stories)
+      by_status = stories.group_by { |s| s['status'] }
+      {
+        done:        by_status.fetch('done', []).size,
+        in_progress: by_status.fetch('in_progress', []).size,
+        blocked:     by_status.fetch('blocked', []).size,
+        pending:     by_status.fetch('pending', []).size,
+        total:       stories.size
+      }
+    end
+
+    def self.max_note_at(stories)
+      stories.filter_map { |s| s['last_note_at'] }.max
     end
 
     def self.safe_git_branch

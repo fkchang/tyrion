@@ -52,6 +52,60 @@ module TyrionWeb
       criteria.count { |c| c['status'] == 'met' }
     end
 
+    # Derive the canonical display state for an epic from its stories + status.
+    # Returns { state:, color_css:, glyph:, label:, action:, focus:, archived: }.
+    def self.epic_state(epic, stories, active_epic_id)
+      in_progress  = stories.select { |s| s['status'] == 'in_progress' }
+      done_count   = stories.count  { |s| s['status'] == 'done' }
+      blocked_count = stories.count { |s| s['status'] == 'blocked' }
+      story_count  = stories.size
+      max_note_at  = in_progress.map { |s| s['last_note_at'] }.compact.max
+
+      state =
+        if story_count.zero?
+          :empty
+        elsif epic['status'] == 'done'
+          :sealed
+        elsif done_count == story_count
+          :ready
+        elsif in_progress.any? && !stale?(max_note_at)
+          :active
+        elsif in_progress.any?
+          :cold
+        elsif epic['status'] == 'paused'
+          :paused
+        elsif blocked_count.positive?
+          :blocked
+        elsif done_count.positive?
+          :started
+        else
+          :queued
+        end
+
+      color_css, glyph, label, action =
+        case state
+        when :empty   then ['rm-seal future',  nil, 'empty',          :import]
+        when :sealed  then ['rm-seal',          '✓', 'sealed',         nil]
+        when :ready   then ['rm-seal ready',    '✦', 'READY TO SEAL',  :seal]
+        when :active  then ['rm-seal active',   '●', 'active',         nil]
+        when :cold    then ['rm-seal cold',     '⚠', "cold · #{time_ago(max_note_at)}", :resume]
+        when :paused  then ['rm-seal paused',   '‖', 'paused',         :resume]
+        when :blocked then ['rm-seal blocked',  '✕', "#{blocked_count} blocked", :blocker]
+        when :started then ['rm-seal active',   nil, 'active',         nil]
+        when :queued  then ['rm-seal future',   nil, 'queued',         nil]
+        end
+
+      {
+        state:     state,
+        color_css: color_css,
+        glyph:     glyph,
+        label:     label,
+        action:    action,
+        focus:     epic['id'] == active_epic_id,
+        archived:  !epic['archived_at'].nil?
+      }
+    end
+
     def self.epic_seal_css(epic, active_epic_id)
       if epic['status'] == 'done'
         'rm-seal'
