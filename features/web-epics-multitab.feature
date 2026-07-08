@@ -74,12 +74,12 @@ Feature: web-epics-multitab — Web: epics view, multi-tab scoping, epic switche
     In order to know which worktree owns which epic and story without relying on memory
     I want tyrion worktrees to surface all git worktrees with their active epics and in-progress stories
 
-    Given the project has multiple git worktrees (e.g. ~/work/tyrion and ~/work/tyrion-web-epics)
-    When I run tyrion worktrees
-    Then output shows one row per worktree with: path, branch, active epic slug, and in-progress story slug (or none)
-    And the worktree where the command is run is marked as current
+    # NOTE: the `tyrion worktrees` command itself is specified canonically by the
+    # parallel-execution epic (story tyrion-worktrees-command) — a fuller cross-lane
+    # dashboard with owner token, age, live/dead, and the "N lanes share this working
+    # tree" warning. This epic only depends on that command's ORIENT integration below.
 
-    Given tyrion worktrees output is available
+    Given tyrion worktrees output is available (per parallel-execution/tyrion-worktrees-command)
     When tyrion-implement ORIENT runs with an explicit slug (e.g. warroom-scope-to-epic)
     Then it reads tyrion worktrees to find which worktree has that story's epic active
     And all subsequent tyrion commands in that session run from that worktree directory

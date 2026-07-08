@@ -56,6 +56,7 @@ module Tyrion
       when 'claim-next'   then cmd_claim_next(args, store)
       when 'unclaim'      then cmd_unclaim(args, store)
       when 'whoami'       then cmd_whoami(args, store)
+      when 'worktrees'    then cmd_worktrees(args, store)
       when 'pocket'       then cmd_pocket(args, store)
       when 'mark'         then cmd_mark(args, store)
       when 'discover'     then cmd_discover(args, store)
@@ -852,6 +853,79 @@ module Tyrion
       else
         puts "Story: #{Output.dim('(none claimed by this lane)')}"
       end
+    end
+
+    # ── worktrees ──────────────────────────────────────────────────────────
+    # Cross-lane dashboard: one block per git worktree, one line per active lane
+    # (in_progress story with an owner token) mapped into it, plus a trailing
+    # section for orphan lanes whose worktree isn't in `git worktree list`.
+    # A lane maps to a worktree when SHA256(token)[0,16] matches a lane dir under
+    # that worktree's .tyrion/lanes. Read-only — no state mutation.
+
+    def self.cmd_worktrees(args, store)
+      project  = resolve_project(store)
+      my_token = current_lane_token
+
+      # Every active lane across the project: one per in_progress owned story.
+      lanes = store.list_epics(project['id']).flat_map do |e|
+        store.in_progress_stories(e['id']).filter_map do |st|
+          tok = presence(st['claimed_by'])
+          tok && { token: tok, hash: Repo.lane_hash(tok),
+                   epic: e['slug'], story: st['slug'], age: st['last_note_at'] }
+        end
+      end
+
+      worktrees = Repo.worktrees
+      matched   = {}
+
+      puts "#{Output.bold('WORKTREES')} — #{project['slug']}  " \
+           "#{Output.dim("(#{pluralize(worktrees.size, 'worktree')} · #{pluralize(lanes.size, 'active lane')})")}"
+      puts
+
+      worktrees.each do |wt|
+        wt_hashes = Repo.lane_hashes(wt[:path])
+        wt_lanes  = lanes.select { |l| wt_hashes.include?(l[:hash]) }
+        wt_lanes.each { |l| matched[l[:token]] = true }
+
+        header = "#{Output.cyan(abbr_path(wt[:path]))}  [#{wt[:branch] || Output.dim('(detached)')}]"
+        header += "  #{Output.yellow("⚠ #{wt_lanes.size} lanes share this working tree")}" if wt_lanes.size >= 2
+        puts header
+
+        if wt_lanes.empty?
+          shared = Repo.active_epic(wt[:path])
+          puts "  #{Output.dim("○ no active lane  (#{shared ? "active epic: #{shared}" : 'no active epic'})")}"
+        else
+          wt_lanes.each { |l| puts worktree_lane_line(l, my_token) }
+        end
+        puts
+      end
+
+      orphans = lanes.reject { |l| matched[l[:token]] }
+      return if orphans.empty?
+
+      puts Output.dim('Orphan lanes (no matching git worktree):')
+      orphans.each { |l| puts worktree_lane_line(l, my_token) }
+      puts
+    end
+
+    # One lane row: live/dead glyph, epic/story, owner token, age, ← current.
+    def self.worktree_lane_line(lane, my_token)
+      live = case Repo.lane_liveness(lane[:token])
+             when :live then Output.green('● live')
+             when :dead then Output.red('✗ dead')
+             else            Output.dim('? unknown')
+             end
+      you = lane[:token] == my_token ? "  #{Output.cyan('← current')}" : ''
+      "  #{live}  #{lane[:epic]} / #{lane[:story]}  #{Output.dim(lane[:token])}  " \
+        "#{Output.dim(Output.time_ago(lane[:age]))}#{you}"
+    end
+
+    def self.abbr_path(path)
+      path.sub(/\A#{Regexp.escape(Dir.home)}(?=\/)/, '~')
+    end
+
+    def self.pluralize(n, word)
+      "#{n} #{word}#{'s' unless n == 1}"
     end
 
     # ── assign ─────────────────────────────────────────────────────────────
@@ -2322,6 +2396,7 @@ module Tyrion
           tyrion claim <slug> --as <label>         Pre-claim a story for a lane (adopts on TYRION_LANE=<label> start)
           tyrion unclaim <slug> [--steal]          Release a claim → pending (frees a dead lane; --steal for a live one)
           tyrion whoami                            Show this lane's token, liveness, and claimed story
+          tyrion worktrees                         Dashboard of all git worktrees + active lanes (path, branch, epic, story, owner, live/dead)
           tyrion resume [slug]                     Read-only context dump
           tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session|followup)
           tyrion context <slug> "text"             Update current_context
