@@ -244,6 +244,28 @@ module Tyrion
       with_db { |db| db.execute('SELECT * FROM epics WHERE project_id = ? ORDER BY created_at', [project_id]) }
     end
 
+    # The earliest-created epic (optionally excluding one) that still has at least
+    # one pending story. Skips done/abandoned and archived epics. Returns nil when
+    # nothing qualifies — the caller renders "All epics complete". `IS NOT ?` is
+    # NULL-safe so a nil exclude_epic_id matches every epic.
+    def next_pending_epic(project_id, exclude_epic_id: nil)
+      with_db do |db|
+        db.get_first_row(<<~SQL, [project_id, exclude_epic_id])
+          SELECT e.* FROM epics e
+          WHERE e.project_id = ?
+            AND e.id IS NOT ?
+            AND e.status NOT IN ('done', 'abandoned')
+            AND e.archived_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM stories s
+              WHERE s.epic_id = e.id AND s.status = 'pending'
+            )
+          ORDER BY e.created_at, e.rowid
+          LIMIT 1
+        SQL
+      end
+    end
+
     # ── Stories ────────────────────────────────────────────────────────────
 
     def create_story(epic_id:, slug:, title:, sequence: nil, intent: nil, born_from_discovery: nil)
@@ -607,13 +629,13 @@ module Tyrion
       end
     end
 
-    def unstart_story(story_id)
+    def unstart_story(story_id, note: 'Story reset to pending via tyrion unstart')
       t = now
       with_db do |db|
         db.execute('UPDATE stories SET status=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?', ['pending', t, story_id])
         db.execute(
           "INSERT INTO story_notes (id, story_id, kind, body, created_at) VALUES (?, ?, 'recovery', ?, ?)",
-          [uuid, story_id, 'Story reset to pending via tyrion unstart', t]
+          [uuid, story_id, note, t]
         )
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end

@@ -35,4 +35,12 @@ If the user says "turn on" or "enable" → run `touch`. If "turn off" or "disabl
 
 ## How it works
 
-`statusline-command.sh` checks for `~/.tyrion/statusline-enabled` on every statusline render. When present, it queries the tyrion DB via sqlite3 for the current in-progress story and epic progress, then appends the segment to the statusline output.
+`statusline-command.sh` checks for `~/.tyrion/statusline-enabled` on every statusline render. When present, it appends a `tyrion: <epic>/<story> (done/total)` segment.
+
+It resolves that segment lane-aware: it shells out to `tyrion statusline`, which uses the calling terminal's lane token (process identity) so two terminals on the same epic each show their own in-progress story. Only the segment-shaped line is kept, so the gem wrapper's `Resolving dependencies...` stdout noise (emitted in a Gemfile directory) is filtered out. If the `tyrion` CLI is not on `PATH`, it falls back to querying the shared `.tyrion/active-epic` + DB via sqlite3 (not lane-aware, but keeps the segment working).
+
+The canonical script lives in this repo at `skills/tyrion-statusline/statusline-command.sh`. Install it with:
+
+```bash
+cp skills/tyrion-statusline/statusline-command.sh ~/.claude/statusline-command.sh
+```

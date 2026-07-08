@@ -14,7 +14,7 @@ RSpec.describe 'tyrion status — LANES section' do
   before do
     allow(Tyrion::Commands).to receive(:current_lane_token).and_return(my_token)
     # Keep liveness deterministic — no real `ps` in specs.
-    allow(Tyrion::Repo).to receive(:lane_alive?).and_return(nil)
+    allow(Tyrion::Repo).to receive(:lane_liveness).and_return(:unknown)
   end
 
   def start_lane(slug, seq, claimed_by:)
@@ -52,9 +52,9 @@ RSpec.describe 'tyrion status — LANES section' do
       expect(out.lines.count { |l| l.include?('← you') }).to eq(1)
     end
 
-    it 'renders a live/dead/unknown marker from Repo.lane_alive?' do
-      allow(Tyrion::Repo).to receive(:lane_alive?).with(my_token).and_return(true)
-      allow(Tyrion::Repo).to receive(:lane_alive?).with('claude:222:otherstamp').and_return(false)
+    it 'renders a live/dead/unknown marker from Repo.lane_liveness' do
+      allow(Tyrion::Repo).to receive(:lane_liveness).with(my_token).and_return(:live)
+      allow(Tyrion::Repo).to receive(:lane_liveness).with('claude:222:otherstamp').and_return(:dead)
       out, = capture_io { Tyrion::Commands.cmd_status([], store) }
       expect(out).to match(/live/)
       expect(out).to match(/dead/)
