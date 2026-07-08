@@ -45,12 +45,30 @@ module Tyrion
       File.exist?(f) ? File.read(f).strip : nil
     end
 
+    # The 16-hex lane-directory name for a token (SHA256 prefix). The same
+    # function that maps a lane token to its on-disk state directory, exposed so
+    # callers can match an in-flight lane token against a worktree's lane dirs.
+    def self.lane_hash(token)
+      Digest::SHA256.hexdigest(token.to_s)[0, 16]
+    end
+
     # Returns the lane-specific subdirectory path for a given token.
     # Does not create the directory — callers must mkdir_p as needed.
     def self.lane_dir(token, root = nil)
       root ||= worktree_root
-      hash = Digest::SHA256.hexdigest(token)[0, 16]
-      "#{root}/.tyrion/lanes/#{hash}"
+      "#{root}/.tyrion/lanes/#{lane_hash(token)}"
+    end
+
+    # The lane-hash directory names present under <root>/.tyrion/lanes — i.e.
+    # which lanes have written state in that worktree. Empty when the worktree
+    # has no lane state (or the path is unreadable).
+    def self.lane_hashes(root = nil)
+      root ||= worktree_root
+      dir = "#{root}/.tyrion/lanes"
+      return [] unless File.directory?(dir)
+      Dir.children(dir).select { |c| File.directory?("#{dir}/#{c}") }
+    rescue SystemCallError
+      []
     end
 
     def self.active_epic(root = nil, token: nil)
@@ -212,6 +230,37 @@ module Tyrion
     def self.git_branch(path = nil)
       path ||= worktree_root
       `git -C #{path.shellescape} branch --show-current 2>/dev/null`.strip
+    end
+
+    # Raw `git worktree list --porcelain` output (seam — stubbed in specs).
+    # Empty string when git is unavailable or this isn't a repo.
+    def self.git_worktree_list(path = nil)
+      path ||= worktree_root
+      out = `git -C #{path.shellescape} worktree list --porcelain 2>/dev/null`
+      $?.success? ? out : ''
+    end
+
+    # Parse `git worktree list --porcelain` into [{path:, branch:, head:}].
+    # A detached worktree reports branch "(detached)". Empty array off-repo.
+    def self.worktrees(path = nil)
+      result = []
+      cur = nil
+      git_worktree_list(path).each_line do |raw|
+        line = raw.chomp
+        if line.start_with?('worktree ')
+          cur = { path: line.sub('worktree ', ''), branch: nil, head: nil }
+          result << cur
+        elsif cur.nil?
+          next
+        elsif line.start_with?('HEAD ')
+          cur[:head] = line.sub('HEAD ', '')
+        elsif line.start_with?('branch ')
+          cur[:branch] = line.sub(%r{\Abranch refs/heads/}, '')
+        elsif line == 'detached'
+          cur[:branch] = '(detached)'
+        end
+      end
+      result
     end
 
     def self.dirty_count(path = nil)
