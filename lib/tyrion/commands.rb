@@ -507,6 +507,12 @@ module Tyrion
 
       puts
 
+      # ── next-epic suggestion ─────────────────────────────────────────────
+      if epic_drained?(store, epic['id'])
+        print_next_epic_suggestion(store, epic)
+        puts
+      end
+
       # ── blocked lane ─────────────────────────────────────────────────────
       blocked = stories.select { |s| s['status'] == 'blocked' }
       unless blocked.empty?
@@ -793,6 +799,10 @@ module Tyrion
 
     def self.cmd_claim_next(args, store)
       _project, epic = resolve_project_epic(store)
+      if epic_drained?(store, epic['id'])
+        print_next_epic_suggestion(store, epic)
+        return
+      end
       story = resolve_my_story(store, epic, explicit_slug: nil, claim_if_none: true)
       die "No pending stories in this epic" unless story
       puts "Claimed: #{story['slug']} — #{story['title']}"
@@ -1489,6 +1499,7 @@ module Tyrion
       puts "#{Output.green('Done:')} #{slug} — #{story['title']}"
 
       maybe_prompt_epic_seal(store, epic, input: input, output: output)
+      print_next_epic_suggestion(store, epic, output: output) if epic_drained?(store, epic['id'])
     rescue RuntimeError => e
       die e.message
     end
@@ -1513,6 +1524,24 @@ module Tyrion
         output.puts "Epic #{epic['slug']} sealed as done."
       else
         output.puts "Tip: run `tyrion epic complete #{epic['slug']}` when ready to seal."
+      end
+    end
+
+    # True when the epic has no pending or in_progress stories left — the trigger
+    # for surfacing a next-epic suggestion (done/abandoned/blocked don't count as
+    # remaining work).
+    def self.epic_drained?(store, epic_id)
+      store.stories_for_epic(epic_id).none? { |s| %w[pending in_progress].include?(s['status']) }
+    end
+
+    # Renders the next-epic suggestion for a drained epic: the activate hint for
+    # the earliest-created epic with pending stories, or "All epics complete".
+    def self.print_next_epic_suggestion(store, epic, output: $stdout)
+      nxt = store.next_pending_epic(epic['project_id'], exclude_epic_id: epic['id'])
+      if nxt
+        output.puts "Epic '#{epic['slug']}' complete. Next: tyrion epic activate #{nxt['slug']}"
+      else
+        output.puts "All epics complete"
       end
     end
 
