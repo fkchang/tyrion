@@ -19,3 +19,6 @@ demo/
 docs/
 DISCOVERY_LAYER.md
 .playwright-cli/
+
+# agent-created git worktrees for isolated parallel dispatch
+.worktrees/
