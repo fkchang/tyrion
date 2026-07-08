@@ -611,13 +611,13 @@ module Tyrion
       end
     end
 
-    def unstart_story(story_id)
+    def unstart_story(story_id, note: 'Story reset to pending via tyrion unstart')
       t = now
       with_db do |db|
         db.execute('UPDATE stories SET status=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?', ['pending', t, story_id])
         db.execute(
           "INSERT INTO story_notes (id, story_id, kind, body, created_at) VALUES (?, ?, 'recovery', ?, ?)",
-          [uuid, story_id, 'Story reset to pending via tyrion unstart', t]
+          [uuid, story_id, note, t]
         )
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end
