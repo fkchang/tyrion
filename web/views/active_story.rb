@@ -73,8 +73,8 @@ module Views
     def render_nudges
       return unless @story && @story['status'] == 'in_progress'
       nudges = []
-      nudges << { field: 'next_action', msg: "Next Action is missing — agent won't know where to resume.", cmd: "tyrion next #{@story['slug']} \"...\"" } unless @story['next_action']&.strip&.length.to_i > 0
-      nudges << { field: 'current_context', msg: "Current Context is missing — agent will start cold.", cmd: "tyrion context #{@story['slug']} \"...\"" } unless @story['current_context']&.strip&.length.to_i > 0
+      nudges << { field: 'next_action', msg: "Next Action is missing — agent won't know where to resume.", cmd: "tyrion next #{@story['slug']} \"...\"" } if @story['next_action'].to_s.strip.empty?
+      nudges << { field: 'current_context', msg: "Current Context is missing — agent will start cold.", cmd: "tyrion context #{@story['slug']} \"...\"" } if @story['current_context'].to_s.strip.empty?
       return if nudges.empty?
 
       div(class: "as-nudge-block") do
@@ -179,7 +179,7 @@ module Views
         div(class: "as-block-label") { "Current Context" }
         div(style: "font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ink-faint);margin-top:-3px;margin-bottom:5px;") { "set by implementing agent" }
         form(action: "/stories/#{@story['id']}/context", method: "post") do
-          if @story['current_context']&.strip&.length.to_i > 0
+          if !@story['current_context'].to_s.strip.empty?
             div(class: "as-block-text", id: "ctx-display",
                 data: { action: "show-ctx-edit" },
                 style: "cursor:pointer;") do
@@ -214,7 +214,7 @@ module Views
         div(class: "as-block-label") { "Next Action" }
         div(style: "font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ink-faint);margin-top:-3px;margin-bottom:5px;") { "agent sets this before handing off" }
         form(action: "/stories/#{@story['id']}/next_action", method: "post") do
-          if @story['next_action']&.strip&.length.to_i > 0
+          if !@story['next_action'].to_s.strip.empty?
             div(class: "as-block-text", id: "na-display",
                 data: { action: "show-na-edit" },
                 style: "cursor:pointer;") do
@@ -270,7 +270,7 @@ module Views
           @notes.each do |note|
             div(class: TyrionWeb::Presenter.note_kind_css(note['kind'])) do
               div(class: "note-meta") { "#{note['kind']} · #{TyrionWeb::Presenter.time_ago(note['created_at'])}" }
-              div(class: "note-body") { note['body'] }
+              div(class: "note-body", data: { action: "expand-note" }) { note['body'] }
             end
           end
 
@@ -360,7 +360,6 @@ module Views
     end
 
     def render_js
-      story_id = @story&.[]('id')
       script do
         raw safe(<<~JS)
           document.addEventListener('click', function(e) {
@@ -382,6 +381,8 @@ module Views
             } else if (action === 'toggle-cmd') {
               var b = t.nextElementSibling;
               b.style.display = b.style.display === 'none' ? 'flex' : 'none';
+            } else if (action === 'expand-note') {
+              t.classList.toggle('expanded');
             }
           });
 
