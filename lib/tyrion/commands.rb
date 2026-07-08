@@ -510,6 +510,30 @@ module Tyrion
 
       puts
 
+      # ── lanes ────────────────────────────────────────────────────────────
+      # One row per in_progress story — an epic can have several, one per active
+      # lane. Surfaces owner token + liveness so a story silently held by a dead
+      # lane is visible instead of hidden behind a single-row query.
+      lanes = store.in_progress_stories(epic['id'])
+      unless lanes.empty?
+        my_token = current_lane_token
+        puts "  #{Output.bold('LANES')} (#{lanes.size} active)"
+        lanes.each do |s|
+          owner   = s['claimed_by']
+          owner_s = owner || Output.dim('(unclaimed)')
+          # An unclaimed lane has no pid to probe, so liveness reads "unknown".
+          live    = case Repo.lane_liveness(owner)
+                    when :live  then Output.green('live')
+                    when :dead  then Output.red('dead')
+                    else             Output.dim('unknown')
+                    end
+          age     = Output.time_ago(s['last_note_at'])
+          you     = owner && my_token && owner == my_token ? " #{Output.cyan('← you')}" : ''
+          puts "  #{s['slug'].ljust(slug_w)}  #{owner_s}  #{live}  #{Output.dim(age)}#{you}"
+        end
+        puts
+      end
+
       # ── next-epic suggestion ─────────────────────────────────────────────
       if epic_drained?(store, epic['id'])
         print_next_epic_suggestion(store, epic)

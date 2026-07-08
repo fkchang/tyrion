@@ -53,29 +53,13 @@ module Views
               end
             end
 
-            in_progress_story = @active.first
-            if in_progress_story
-              div(class: "wr-resume-strip") do
-                div(class: "wr-thread-card") do
-                  div(class: "wr-tc-label") { "⚡ Active" }
-                  div(class: "wr-tc-text") { in_progress_story['slug'] }
-                end
-                div(class: "wr-thread-card beacon-card") do
-                  div(class: "wr-tc-label") do
-                    img(src: "/assets/lantern.png", style: "height:22px;filter:drop-shadow(0 0 8px rgba(245,158,11,.8));")
-                    plain " Resume Point"
-                  end
-                  div(class: "wr-tc-title") { in_progress_story['slug'] }
-                  div(class: "wr-tc-meta") { "🕐 #{TyrionWeb::Presenter.time_ago(in_progress_story['last_note_at'])}" }
-                end
-                div(class: "wr-thread-card") do
-                  div(class: "wr-tc-label") { "→ Next Action" }
-                  div(class: "wr-tc-text") do
-                    na = in_progress_story['next_action']&.strip
-                    plain(na && na.length > 0 ? (na.length > 120 ? "#{na.slice(0, 120)}…" : na) : "(not set)")
-                  end
-                end
-              end
+            # The web has no process identity — it cannot know which lane is
+            # "mine". With one active lane a single Resume Point is honest; with
+            # several, listing every lane (never auto-picking .first) is.
+            if @active.size == 1
+              render_single_resume_strip(@active.first)
+            elsif @active.size > 1
+              render_multi_lane_strip(@active)
             end
           end
         end
@@ -83,6 +67,54 @@ module Views
     end
 
     private
+
+    def render_single_resume_strip(story)
+      return unless story
+      div(class: "wr-resume-strip") do
+        div(class: "wr-thread-card") do
+          div(class: "wr-tc-label") { "⚡ Active" }
+          div(class: "wr-tc-text") { story['slug'] }
+        end
+        div(class: "wr-thread-card beacon-card") do
+          div(class: "wr-tc-label") do
+            img(src: "/assets/lantern.png", style: "height:22px;filter:drop-shadow(0 0 8px rgba(245,158,11,.8));")
+            plain " Resume Point"
+          end
+          div(class: "wr-tc-title") { story['slug'] }
+          div(class: "wr-tc-meta") { "🕐 #{TyrionWeb::Presenter.time_ago(story['last_note_at'])}" }
+        end
+        div(class: "wr-thread-card") do
+          div(class: "wr-tc-label") { "→ Next Action" }
+          div(class: "wr-tc-text") { plain(next_action_display(story)) }
+        end
+      end
+    end
+
+    def next_action_display(story)
+      na = story['next_action']&.strip
+      return "(not set)" if na.nil? || na.empty?
+
+      na.length > 120 ? "#{na.slice(0, 120)}…" : na
+    end
+
+    # Multiple lanes are active at once — show them all, marked by owner lane,
+    # rather than singling one out as THE resume point (the web can't know which
+    # lane belongs to the viewer).
+    def render_multi_lane_strip(active)
+      div(class: "wr-resume-strip wr-resume-strip--multi") do
+        div(class: "wr-thread-card") do
+          div(class: "wr-tc-label") { "⚡ #{active.size} active lanes" }
+          div(class: "wr-tc-text") { "No single resume point — each lane owns its own story." }
+        end
+        active.each do |s|
+          div(class: "wr-thread-card") do
+            div(class: "wr-tc-label") { "🛤 #{s['claimed_by'] || '(unclaimed)'}" }
+            div(class: "wr-tc-title") { s['slug'] }
+            div(class: "wr-tc-meta") { "🕐 #{TyrionWeb::Presenter.time_ago(s['last_note_at'])}" }
+          end
+        end
+      end
+    end
 
     def render_col(title, sub, count, col_class, header_class: nil, show_dragon: false, &block)
       div(class: col_class) do
