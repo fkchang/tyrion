@@ -49,6 +49,7 @@ module Tyrion
       when 'notes'        then cmd_notes(args, store)
       when 'start'        then cmd_start(args, store)
       when 'assign'       then cmd_assign(args, store)
+      when 'claim'        then cmd_claim(args, store)
       when 'block'        then cmd_block(args, store)
       when 'unblock'      then cmd_unblock(args, store)
       when 'claim-next'   then cmd_claim_next(args, store)
@@ -717,6 +718,28 @@ module Tyrion
       store.assign_story(story['id'], lane)
       puts "Assigned: #{slug} → assigned:#{lane}"
       puts "Status: #{Output.dim('pending')} (agent running tyrion start #{slug} will adopt it)"
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # ── claim ──────────────────────────────────────────────────────────────
+    # Lead pre-claims a story for a lane that does not exist yet.
+    # tyrion claim <slug> --as <label> writes claimed_by="assigned:<label>";
+    # the story stays pending until the adopting lane (TYRION_LANE=<label>) starts it.
+
+    def self.cmd_claim(args, store)
+      label = extract_flag_value(args, '--as')
+      slug  = args.shift
+      die "Usage: tyrion claim <slug> --as <label>" unless slug && presence(label)
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug} in epic #{epic['slug']}" unless story
+      die "Story is not pending (status: #{story['status']})" unless story['status'] == 'pending'
+
+      store.assign_story(story['id'], label)
+      puts "Claimed: #{slug} → assigned:#{label}"
+      puts "Status: #{Output.dim('pending')} (agent running with TYRION_LANE=#{label} will adopt it)"
     rescue RuntimeError => e
       die e.message
     end
@@ -2121,6 +2144,7 @@ module Tyrion
           tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story with a reason
           tyrion unblock <slug>                    Unblock a story → back to pending
           tyrion claim-next                        Claim next pending story (transactional)
+          tyrion claim <slug> --as <label>         Pre-claim a story for a lane (adopts on TYRION_LANE=<label> start)
           tyrion resume [slug]                     Read-only context dump
           tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session|followup)
           tyrion context <slug> "text"             Update current_context
