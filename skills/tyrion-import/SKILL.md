@@ -30,7 +30,7 @@ tyrion status
 - Creates or refreshes the epic (name + intent from `Feature:` block)
 - If `features/<epic-slug>.context.md` exists alongside the `.feature`, reads it → `epics.context_md`
 - Creates stories from each `Scenario:` block
-- Creates criteria from `Given/When/Then/And/But` lines
+- Creates criteria from `Given/When/Then/And/But` lines (default); pass `--criteria=then` to make only Then/And-under-Then lines into checkable criteria — Given/When steps are stored as an observation note instead
 - Stories with `# TODO: criteria` markers get no criteria rows — step 4 of `/tyrion-implement` fills them
 
 ## Idempotency
