@@ -1,0 +1,34 @@
+* Project Identity
+:PROPERTIES:
+:UREGISTRY_SCHEMA_VERSION: 1
+:ID: tool:tyrion
+:KIND: tool
+:SCOPE: project
+:END:
+
+![Tyrion — Small. Excellent. Running the realm.](assets/tyrion_hero.png)
+
+* Purpose
+
+* Default Usage Guidance
+
+* Key Capabilities
+
+* Important Components
+
+* Inputs and Outputs
+** Inputs
+** Outputs
+** Streams / Artifacts
+
+* Conventions
+** Preferred Tools
+** Preferred Formats
+** Logging / Monitoring
+** Storage
+
+* Important Paths
+
+* How To Query This Project
+
+* Relationships
