@@ -41,10 +41,16 @@ module Tyrion
       end
 
       if existing && !confirm_abandon
-        in_prog = store.in_progress_story(existing['id'])
-        if in_prog
-          die "Epic '#{epic_slug}' has an in-progress story: #{in_prog['slug']}. " \
-              "Complete or unstart it before re-importing, or pass --confirm-abandon."
+        in_prog = store.in_progress_stories(existing['id'])
+        unless in_prog.empty?
+          slugs = in_prog.map { |s| s['slug'] }.join(', ')
+          if in_prog.length == 1
+            noun, pron = 'an in-progress story', 'it'
+          else
+            noun, pron = "#{in_prog.length} in-progress stories (one per lane)", 'them'
+          end
+          die "Epic '#{epic_slug}' has #{noun}: #{slugs}. " \
+              "Complete or unstart #{pron} before re-importing, or pass --confirm-abandon."
         end
       end
 

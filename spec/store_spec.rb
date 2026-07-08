@@ -975,6 +975,89 @@ RSpec.describe Tyrion::Store do
     end
   end
 
+  describe 'multi-lane in_progress queries' do
+    let(:epic) do
+      proj = make_project
+      make_epic(project_id: proj['id'])
+    end
+
+    # Start N in_progress stories, each claimed by a distinct token (or nil for
+    # the single legacy unclaimed slot the schema permits per epic).
+    def start_lane(slug, seq, claimed_by:)
+      s = store.create_story(epic_id: epic['id'], slug: slug, title: slug, sequence: seq)
+      store.start_story(s['id'], claimed_by: claimed_by)
+      store.find_story(epic['id'], slug)
+    end
+
+    describe '#in_progress_story (single row, kept for legacy callers)' do
+      it 'returns a single hash, not an array' do
+        start_lane('s1', 1, claimed_by: 'lane-A')
+        result = store.in_progress_story(epic['id'])
+        expect(result).to be_a(Hash)
+        expect(result['slug']).to eq 's1'
+      end
+
+      it 'returns nil when no story is in_progress' do
+        store.create_story(epic_id: epic['id'], slug: 'pending-one', title: 'P', sequence: 1)
+        expect(store.in_progress_story(epic['id'])).to be_nil
+      end
+    end
+
+    describe '#in_progress_stories (all lanes)' do
+      it 'returns every in_progress story in the epic — one per active lane' do
+        start_lane('s1', 1, claimed_by: 'lane-A')
+        start_lane('s2', 2, claimed_by: 'lane-B')
+        start_lane('s3', 3, claimed_by: 'lane-C')
+
+        slugs = store.in_progress_stories(epic['id']).map { |s| s['slug'] }
+        expect(slugs).to contain_exactly('s1', 's2', 's3')
+      end
+
+      it 'returns an empty array when no story is in_progress' do
+        store.create_story(epic_id: epic['id'], slug: 'pending-one', title: 'P', sequence: 1)
+        expect(store.in_progress_stories(epic['id'])).to eq([])
+      end
+
+      it 'sorts the unclaimed (legacy NULL claimed_by) lane first' do
+        start_lane('claimed', 1, claimed_by: 'lane-Z')
+        start_lane('unclaimed', 2, claimed_by: nil)
+
+        slugs = store.in_progress_stories(epic['id']).map { |s| s['slug'] }
+        expect(slugs.first).to eq 'unclaimed'
+      end
+
+      it 'excludes stories in other statuses' do
+        start_lane('active', 1, claimed_by: 'lane-A')
+        done = store.create_story(epic_id: epic['id'], slug: 'finished', title: 'F', sequence: 2)
+        store.start_story(done['id'], claimed_by: 'lane-B')
+        store.complete_story(done['id'], 'done', force: true)
+
+        slugs = store.in_progress_stories(epic['id']).map { |s| s['slug'] }
+        expect(slugs).to eq(['active'])
+      end
+    end
+
+    describe '#in_progress_story_for (named lane)' do
+      it 'returns the story owned by the given lane token' do
+        start_lane('mine', 1, claimed_by: 'lane-A')
+        start_lane('theirs', 2, claimed_by: 'lane-B')
+
+        result = store.in_progress_story_for(epic['id'], 'lane-A')
+        expect(result['slug']).to eq 'mine'
+      end
+
+      it 'returns nil when no in_progress story is owned by that token' do
+        start_lane('theirs', 1, claimed_by: 'lane-B')
+        expect(store.in_progress_story_for(epic['id'], 'lane-A')).to be_nil
+      end
+
+      it 'is aliased as story_in_progress_for_token (rung-2 resolver name)' do
+        start_lane('mine', 1, claimed_by: 'lane-A')
+        expect(store.story_in_progress_for_token(epic['id'], 'lane-A')['slug']).to eq 'mine'
+      end
+    end
+  end
+
   describe 'claimed_by is nulled on lifecycle transitions' do
     def start_with_lane(story_id, lane: 'lane-A')
       store.start_story(story_id, claimed_by: lane)

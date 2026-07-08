@@ -168,7 +168,7 @@ module TyrionWeb
 
     def self.load_war_room_view(project_slug: nil)
       project = project_slug ? store.find_project_by_slug(project_slug) : resolve_active_project
-      return { project: nil, queue: [], active: [], blocked: [], done: [] } unless project
+      return { project: nil, queue: [], active: [], active_count: 0, blocked: [], done: [] } unless project
 
       queue = []; active_stories = []; blocked = []; done = []
       store.list_epics(project['id']).each do |epic|
@@ -187,6 +187,7 @@ module TyrionWeb
         project: project,
         queue: queue,
         active: active_stories,
+        active_count: active_stories.size,
         blocked: blocked,
         done: done.last(8)
       }

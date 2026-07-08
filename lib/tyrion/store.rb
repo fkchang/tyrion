@@ -353,14 +353,32 @@ module Tyrion
       waves
     end
 
+    # Single-lane / legacy callers: the first in_progress story in the epic.
+    # In a multi-lane epic this hides the other lanes' active work — prefer
+    # in_progress_stories (all lanes) or in_progress_story_for (a named lane).
     def in_progress_story(epic_id)
-      with_db { |db| db.get_first_row("SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress'", [epic_id]) }
+      with_db { |db| db.get_first_row("SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress' ORDER BY sequence", [epic_id]) }
     end
 
-    # Rung 2: find the in_progress story owned by this exact lane token.
-    def story_in_progress_for_token(epic_id, token)
+    # Every in_progress story in the epic — one per active lane. Ordered so
+    # unclaimed (legacy, claimed_by NULL) sorts first, then by lane token, so
+    # the lane list renders stably.
+    def in_progress_stories(epic_id)
+      with_db do |db|
+        db.execute(
+          "SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress' " \
+          "ORDER BY claimed_by IS NOT NULL, claimed_by, sequence",
+          [epic_id]
+        )
+      end
+    end
+
+    # The in_progress story owned by this exact lane token (nil if that lane
+    # holds nothing). Also the story-resolver rung-2 lookup.
+    def in_progress_story_for(epic_id, token)
       with_db { |db| db.get_first_row("SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress' AND claimed_by = ?", [epic_id, token]) }
     end
+    alias_method :story_in_progress_for_token, :in_progress_story_for
 
     # Rung 3: find a story (any status) whose claimed_by is the pre-claim placeholder.
     def story_with_pre_claim(epic_id, assigned_label)

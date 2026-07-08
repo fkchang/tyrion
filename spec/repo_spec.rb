@@ -122,4 +122,62 @@ RSpec.describe Tyrion::Repo do
       expect(described_class.active_story(tmpdir)).to eq('old-story')
     end
   end
+
+  describe '.pid_alive?' do
+    it 'returns true for the current process' do
+      expect(described_class.pid_alive?(Process.pid)).to be true
+    end
+
+    it 'returns false for a pid that does not exist' do
+      # 2**30 is far above any real pid on macOS/Linux — guaranteed ESRCH.
+      expect(described_class.pid_alive?(2**30)).to be false
+    end
+
+    it 'treats EPERM (process owned by another user) as alive' do
+      allow(Process).to receive(:kill).and_raise(Errno::EPERM)
+      expect(described_class.pid_alive?(1)).to be true
+    end
+  end
+
+  describe '.lane_alive?' do
+    context 'pid-based tokens (label:pid:stamp)' do
+      it 'returns true when the pid is alive and its start stamp still matches' do
+        allow(described_class).to receive(:pid_alive?).with(4242).and_return(true)
+        allow(described_class).to receive(:pid_start_stamp).with(4242).and_return('stampX')
+        expect(described_class.lane_alive?('claude:4242:stampX')).to be true
+      end
+
+      it 'returns false when the pid is dead' do
+        allow(described_class).to receive(:pid_alive?).with(4242).and_return(false)
+        expect(described_class.lane_alive?('claude:4242:stampX')).to be false
+      end
+
+      it 'returns false when the pid was reused (start stamp no longer matches)' do
+        allow(described_class).to receive(:pid_alive?).with(4242).and_return(true)
+        allow(described_class).to receive(:pid_start_stamp).with(4242).and_return('different-stamp')
+        expect(described_class.lane_alive?('claude:4242:stampX')).to be false
+      end
+
+      it 'returns true (alive, cannot re-verify stamp) when ps cannot read lstart' do
+        allow(described_class).to receive(:pid_alive?).with(4242).and_return(true)
+        allow(described_class).to receive(:pid_start_stamp).with(4242).and_return(nil)
+        expect(described_class.lane_alive?('claude:4242:stampX')).to be true
+      end
+    end
+
+    context 'tokens without a pid+stamp (honest unknown)' do
+      it "returns nil for a codex thread token" do
+        expect(described_class.lane_alive?('codex:thread_abc123')).to be_nil
+      end
+
+      it 'returns nil for a custom TYRION_LANE string' do
+        expect(described_class.lane_alive?('lane-in-progress-plural')).to be_nil
+      end
+
+      it 'returns nil for a nil or blank token' do
+        expect(described_class.lane_alive?(nil)).to be_nil
+        expect(described_class.lane_alive?('   ')).to be_nil
+      end
+    end
+  end
 end

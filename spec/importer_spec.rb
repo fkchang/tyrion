@@ -211,6 +211,73 @@ RSpec.describe Tyrion::Importer do
       end
     end
 
+    # ── --confirm-abandon guard: block on ANY active lane ───────────────────
+
+    context 're-import guard with in-progress lanes' do
+      # A two-scenario feature so the epic can hold two active lanes at once.
+      TWO_STORY_FEATURE = <<~FEATURE
+        Feature: Two Story Epic
+
+          Scenario: story-a
+            Given a precondition
+            When an action occurs
+            Then an outcome is observed
+
+          Scenario: story-b
+            Given a precondition
+            When an action occurs
+            Then an outcome is observed
+      FEATURE
+
+      let(:two_story_path) do
+        path = File.join(ctx.tmpdir, 'two-story-epic.feature')
+        File.write(path, TWO_STORY_FEATURE)
+        path
+      end
+
+      def import_two(extra_args = [])
+        capture_io { Tyrion::Importer.run([two_story_path] + extra_args, store) }
+      end
+
+      def epic
+        store.find_epic(ctx.project['id'], 'two-story-epic')
+      end
+
+      def start(slug, token)
+        s = store.find_story(epic['id'], slug)
+        store.start_story(s['id'], claimed_by: token)
+      end
+
+      before { import_two } # first import creates the epic + both stories
+
+      it 'blocks re-import when one lane is active (no --confirm-abandon)' do
+        start('story-a', 'lane-A')
+        expect { Tyrion::Importer.run([two_story_path, '--force'], store) }
+          .to raise_error(SystemExit)
+          .and output(/story-a/).to_stderr
+      end
+
+      it 'names EVERY active lane when multiple lanes are in progress' do
+        start('story-a', 'lane-A')
+        start('story-b', 'lane-B')
+        expect { Tyrion::Importer.run([two_story_path, '--force'], store) }
+          .to raise_error(SystemExit)
+          .and output(/story-a.*story-b|story-b.*story-a/m).to_stderr
+      end
+
+      it 'proceeds when --confirm-abandon is passed despite active lanes' do
+        start('story-a', 'lane-A')
+        start('story-b', 'lane-B')
+        out, = import_two(['--force', '--confirm-abandon'])
+        expect(out).to match(/Import complete/)
+      end
+
+      it 'does not block when no lane is active' do
+        out, = import_two(['--force'])
+        expect(out).to match(/Import complete/)
+      end
+    end
+
     # ── --criteria=then flag ────────────────────────────────────────────────
 
     context '--criteria=then flag' do
