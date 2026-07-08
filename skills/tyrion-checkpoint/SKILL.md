@@ -45,3 +45,13 @@ tyrion note <slug> handoff "<key facts: files changed, approach taken, blockers,
 ## After checkpoint
 
 The next fresh agent runs `/tyrion-implement` with no slug — it will resume exactly from `current_context` and `next_action`.
+
+## Epic close → Timeline update
+
+When an agent closes the last story in an epic (or spawns a corrective epic after review), record the arc in the project ABOUT.md `## Timeline` section:
+
+```
+- YYYY-MM-DD | <epic-slug> shipped (N/N) | review: <one-line finding> | spawned: <slug>
+```
+
+This is how "why the next epic exists" survives a `/clear`. Without it, the next agent sees only the corrective epic and cannot understand the arc that created it.

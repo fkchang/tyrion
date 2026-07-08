@@ -17,18 +17,20 @@ tyrion status        # plan view: project + epic + story progress + git state
 If `tyrion status` shows an `in_progress` story:
 
 ```bash
-tyrion resume        # read-only context dump: current_context, next_action, recent notes, criteria
+tyrion resume        # full context dump: project north-star, epic intent, open threads, story state
 ```
 
-Read the resume output. That is the full agent context for the in-progress story — git branch, worktree path, dirty count, last known state.
+Read the resume output. It contains the complete agent context in one pass: project north star (first line of about_md), active epic name + intent + done/total count, open threads (other epics with pending stories), and story-level details (current_context, next_action, recent notes, criteria, git branch, worktree path, dirty count).
 
 ## Output
 
 After orient, you should know:
-- Which project and epic are active
+- Project north star (first line of about_md) and active project name
+- Active epic name, intent, and done/total story count
+- Open threads: other epics with pending stories (cross-epic drift is visible at a glance)
 - Which story is in_progress (if any) and whether it is stale
 - What was the last `next_action` recorded
-- How many stories remain
+- How many stories remain in the active epic
 
 ## Next steps
 
