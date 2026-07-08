@@ -285,7 +285,7 @@ module Tyrion
         puts "No epics for #{project['slug']}. Import one: tyrion import features/<epic>.feature"
         return
       end
-      active_slug = Repo.active_epic
+      active_slug = Repo.active_epic(token: current_lane_token)
       active, archived = epics.partition { |e| e['archived_at'].nil? }
 
       line = lambda do |e, extra_tag = ''|
@@ -360,7 +360,7 @@ module Tyrion
     end
 
     def self.cmd_epic_pause(args, store)
-      slug = args.shift || Repo.active_epic
+      slug = args.shift || Repo.active_epic(token: current_lane_token)
       die "Usage: tyrion epic pause <slug>" unless slug
       project = resolve_project(store)
       epic    = store.find_epic(project['id'], slug)
@@ -372,7 +372,7 @@ module Tyrion
 
     def self.cmd_epic_complete(args, store)
       force = args.delete('--force')
-      slug  = args.shift || Repo.active_epic
+      slug  = args.shift || Repo.active_epic(token: current_lane_token)
       die "Usage: tyrion epic complete <slug> [--force]" unless slug
       project = resolve_project(store)
       epic    = store.find_epic(project['id'], slug)
@@ -394,7 +394,7 @@ module Tyrion
     end
 
     def self.cmd_epic_archive(args, store)
-      slug = args.shift || Repo.active_epic
+      slug = args.shift || Repo.active_epic(token: current_lane_token)
       die "Usage: tyrion epic archive <slug>" unless slug
       project = resolve_project(store)
       epic    = store.find_epic(project['id'], slug)
@@ -424,7 +424,7 @@ module Tyrion
 
     def self.cmd_status(args, store)
       project_slug = Repo.active_project
-      epic_slug    = Repo.active_epic
+      epic_slug    = Repo.active_epic(token: current_lane_token)
 
       unless project_slug
         puts "No active project. Run:"

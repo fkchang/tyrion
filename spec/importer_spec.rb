@@ -14,6 +14,22 @@ FEATURE_CONTENT = <<~FEATURE
       Then an outcome is observed
 FEATURE
 
+CRITERIA_THEN_FEATURE_CONTENT = <<~FEATURE
+  Feature: Criteria Mode Epic
+
+    Scenario: then-only-story
+      As a developer
+      In order to get clean criteria
+      I want then-only import
+
+      Given first setup step
+      Given second setup step
+      When the trigger action
+      Then first outcome
+      Then second outcome
+      And third outcome continues
+FEATURE
+
 NARRATIVE_FEATURE_CONTENT = <<~FEATURE
   Feature: Narrative Epic
     Epic with Gherkin narrative format.
@@ -49,6 +65,11 @@ RSpec.describe Tyrion::Importer do
   let(:narrative_feature_path) do
     path = File.join(ctx.tmpdir, 'narrative-epic.feature')
     File.write(path, NARRATIVE_FEATURE_CONTENT)
+    path
+  end
+  let(:criteria_then_feature_path) do
+    path = File.join(ctx.tmpdir, 'criteria-mode-epic.feature')
+    File.write(path, CRITERIA_THEN_FEATURE_CONTENT)
     path
   end
 
@@ -187,6 +208,132 @@ RSpec.describe Tyrion::Importer do
         run_import
         output = run_import(['--force'])
         expect(output).to match(/first-story/)
+      end
+    end
+
+    # ── --criteria=then flag ────────────────────────────────────────────────
+
+    context '--criteria=then flag' do
+      def run_criteria_then_import
+        capture_io { Tyrion::Importer.run([criteria_then_feature_path, '--criteria=then'], store) }
+      end
+
+      def then_only_story
+        epic = store.find_epic(ctx.project['id'], 'criteria-mode-epic')
+        return nil unless epic
+        store.stories_for_epic(epic['id']).find { |s| s['slug'] == 'then-only-story' }
+      end
+
+      before { criteria_then_feature_path }
+
+      it 'creates only the 3 Then/And-under-Then steps as criteria' do
+        run_criteria_then_import
+        criteria = store.criteria_for_story(then_only_story['id'])
+        expect(criteria.length).to eq 3
+      end
+
+      it 'criteria contain only Then step texts' do
+        run_criteria_then_import
+        texts = store.criteria_for_story(then_only_story['id']).map { |c| c['text'] }
+        expect(texts).to include('first outcome')
+        expect(texts).to include('second outcome')
+        expect(texts).to include('third outcome continues')
+        expect(texts).not_to include('first setup step')
+        expect(texts).not_to include('the trigger action')
+      end
+
+      it 'stores Given/When lines in an observation note' do
+        run_criteria_then_import
+        story = then_only_story
+        notes = store.notes_for_story(story['id'], limit: 10)
+        obs = notes.find { |n| n['kind'] == 'observation' }
+        expect(obs).not_to be_nil
+        expect(obs['body']).to include('Given first setup step')
+        expect(obs['body']).to include('Given second setup step')
+        expect(obs['body']).to include('When the trigger action')
+      end
+
+      it 'does not clobber the narrative intent' do
+        run_criteria_then_import
+        story = then_only_story
+        expect(story['intent']).to include('As a developer')
+        expect(story['intent']).to include('In order to get clean criteria')
+      end
+
+      it 'default behavior (no flag) still creates all steps as criteria' do
+        capture_io { Tyrion::Importer.run([criteria_then_feature_path], store) }
+        criteria = store.criteria_for_story(then_only_story['id'])
+        expect(criteria.length).to eq 6
+      end
+    end
+
+    # ── .context.md sibling import ──────────────────────────────────────────
+
+    context '.context.md sibling file' do
+      let(:context_content) { "# My Context\n\nThis is the context." }
+      let(:context_path)    { File.join(ctx.tmpdir, 'sample-epic.context.md') }
+
+      def epic
+        store.find_epic(ctx.project['id'], 'sample-epic')
+      end
+
+      it 'loads context_md into the epic when sibling file exists' do
+        File.write(context_path, context_content)
+        run_import
+        expect(epic['context_md']).to eq context_content
+      end
+
+      it 'stores context_source_hash when sibling file exists' do
+        File.write(context_path, context_content)
+        run_import
+        expected_hash = Digest::SHA256.hexdigest(context_content)
+        expect(epic['context_source_hash']).to eq expected_hash
+      end
+
+      it 'is idempotent when neither feature nor context.md changes (hash match = no-op)' do
+        File.write(context_path, context_content)
+        run_import
+        output = run_import
+        expect(output).to match(/already up to date/)
+      end
+
+      it 'leaves context_md nil when no sibling .context.md file exists' do
+        run_import
+        expect(epic['context_md']).to be_nil
+      end
+
+      it 'leaves context_source_hash nil when no sibling .context.md file exists' do
+        run_import
+        expect(epic['context_source_hash']).to be_nil
+      end
+
+      it 're-imports when context.md changes even if feature hash is unchanged' do
+        File.write(context_path, context_content)
+        run_import
+        File.write(context_path, context_content + "\nAdded line.")
+        output = run_import
+        expect(output).to match(/Import complete/)
+        expect(epic['context_md']).to include('Added line.')
+      end
+
+      it 'clears context_md when sibling file is deleted after a prior import' do
+        File.write(context_path, context_content)
+        run_import
+        expect(epic['context_md']).to eq context_content
+
+        File.delete(context_path)
+        run_import
+        expect(epic['context_md']).to be_nil
+        expect(epic['context_source_hash']).to be_nil
+      end
+
+      it 'is idempotent after deleting the sibling file (third import is no-op)' do
+        File.write(context_path, context_content)
+        run_import
+        File.delete(context_path)
+        run_import
+        output = run_import
+        expect(output).to match(/already up to date/)
       end
     end
   end

@@ -42,9 +42,9 @@ Tyrion is a SQLite-backed resumability ledger. Its job is to answer "what was I 
 ### Module breakdown
 
 - **`Store`** — all DB access. Every public method returns a plain `Hash` (SQLite row with string keys) or `Array` of hashes. No ORM. Uses `with_db` which opens SQLite in WAL mode with FK enforcement and returns the result of the block. All write paths use `db.transaction(:immediate)` for atomicity.
-- **`Commands`** — all CLI logic. One `cmd_*` class method per command, dispatched from `Commands.run(ARGV)`. Commands receive `args` (dup'd ARGV slice) and a `Store` instance. Interactive commands accept `input:` and `output:` kwargs (default `$stdin`/`$stdout`) for testability.
-- **`Repo`** — git and worktree state. Reads `.tyrion/active-project` and `.tyrion/active-epic` files to know which project/epic is active. All methods are module-level (`self.`) and are stubbed in specs via rspec-mocks.
-- **`Importer`** — parses `.feature` files (Gherkin) and upserts epics/stories/criteria into the DB. `tyrion import features/<epic>.feature` is how feature files get into the DB. The `.feature` file is the source of truth; importing is idempotent by SHA256 hash.
+- **`Commands`** — all CLI logic. One `cmd_*` class method per command, dispatched from `Commands.run(ARGV)`. Commands receive `args` (dup'd ARGV slice) and a `Store` instance. Interactive commands accept `input:` and `output:` kwargs (default `$stdin`/`$stdout`) for testability. `resolve_my_story(store, epic, explicit_slug:, claim_if_none:)` is the 6-rung story resolver used by `cmd_resume`, `cmd_claim_next`, and `cmd_pocket` — explicit slug → lane-token match → pre-claim adopt → active-story pin → sole unclaimed → claim-next.
+- **`Repo`** — git and worktree state. Reads `.tyrion/active-project` and `.tyrion/active-epic` files to know which project/epic is active. Per-lane state lives under `.tyrion/lanes/<hash>/` (keyed by `SHA256(token)[0,16]`); `active_epic`/`write_active_epic`/`active_story`/`write_active_story` accept a `token:` kwarg — token present → lane file, nil → shared legacy file. `lane_dir(token, root)` returns the lane directory. All methods are module-level (`self.`) and are stubbed in specs via rspec-mocks.
+- **`Importer`** — parses `.feature` files (Gherkin) and upserts epics/stories/criteria into the DB. `tyrion import features/<epic>.feature` is how feature files get into the DB. The `.feature` file is the source of truth; importing is idempotent by SHA256 hash. If a sibling `features/<epic-slug>.context.md` exists, its content is loaded into `epics.context_md` and its SHA256 stored in `context_source_hash`; idempotency covers both files.
 - **`Output`** — terminal formatting helpers (`Output.green`, `Output.dim`, `Output.story_icon`, etc.).
 
 ### Web UI (`web/`)
@@ -88,6 +88,10 @@ Status aliases for `tyrion discovery list --status`: `active`→`active_spike`, 
 **Presence checks** — use `presence(str)` helper instead of `str && !str.empty? ? str : nil`.
 
 **Blocked stories** — `blocked` is a first-class story status (alongside `pending|in_progress|done|abandoned`). Use `tyrion block <slug> "reason" [--discovery disc-NNN]` / `tyrion unblock <slug>`. Blocking stores `blocked_on TEXT` (human reason) and optionally `blocked_on_discovery TEXT` (linked disc-id). `tyrion start` refuses a blocked story with the reason and the unblock command. `tyrion status` renders a distinct `BLOCKED` lane below the story list; if the linked discovery has resolved (`promoted_to_story|deferred|invalidated`), the lane shows `[disc-NNN resolved → unblock?]`.
+
+**Epic completion seal** — an epic's `status` is never auto-flipped to `done`. `tyrion done` on the last story prompts `Seal epic <slug> as complete? [y/N]` (skipped, with a tip printed, when stdin is not a tty). `tyrion epic complete [slug] [--force]` is the manual seal; it refuses unless every story is done (or `--force`). The web roadmap seal/glyph and the `project show` status key off `epic['status']`, so sealing makes a done epic read as DONE everywhere. Honesty flip: starting, claiming, blocking a story, or importing a new pending story into a sealed epic flips it back to `active` (`Store#reopen_epic_if_done!`).
+
+**Epic archive** — `tyrion epic archive <slug>` sets `archived_at` (via `Store#archive_epic`); `tyrion epic unarchive <slug>` clears it (`Store#unarchive_epic`). Archived epics drop out of the main `tyrion epic list` into a separate `Archived:` section (shown with an `[archived]` marker) and move to the collapsed Archived section on the web roadmap; the web split keys off `archived_at` (`active_epics`/`archived_epics` in `web/lib/tyrion_web/data.rb`). The `archived_at` column is added idempotently via `MIGRATIONS`.
 
 **Discovery IDs** — `disc-NNN` format, per-project sequential counter, zero-padded to 3 digits, generated inside `db.transaction(:immediate)`.
 
@@ -141,9 +145,14 @@ Scenario: user-login
 
 The importer parses these lines and stores them as the story's `intent` field. A `# Intent:` comment takes priority if both are present (for backward compatibility). The intent surfaces in `tyrion show` and `tyrion resume`, giving implementing agents the WHY without reading the full feature file.
 
+### Drift detection
+
+`tyrion drift` compares the SHA256 of each tracked feature file against the stored hash and reports: `up to date`, `feature file changed - run tyrion import <path>`, or `feature file missing`. `tyrion status` and `tyrion resume` also surface a one-line yellow warning automatically when the active epic's feature file has changed since import, so agents don't need to run `tyrion drift` explicitly.
+
 ### Workflow: feature file → DB
 
 1. Write/edit `features/<epic-slug>.feature` (Gherkin)
 2. `tyrion import features/<epic-slug>.feature` — upserts epic + stories + criteria
 3. Use `--force` to re-import when only non-story content changed (hash unchanged)
 4. `--confirm-abandon` required if an in-progress story exists in that epic
+5. Use `--criteria=then` to make only Then/And-under-Then steps into checkable criteria; Given/When steps are stored as an observation note on the story (useful when Given/When are setup context, not acceptance criteria)

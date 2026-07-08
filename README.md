@@ -165,11 +165,23 @@ tyrion pocket                    Compact briefing for agent handoff
 tyrion start <slug>              Claim a story
 tyrion block <slug> "reason"     Mark a story blocked (shows in war room BLOCKED lane)
 tyrion unblock <slug>            Clear the block — back to pending
-tyrion note <slug> <kind> "..."  Send a raven (kinds: plan|progress|decision|blocker|handoff)
+tyrion note <slug> <kind> "..."  Send a raven (kinds: plan|progress|decision|blocker|handoff|followup)
+tyrion notes <slug> [--kind <k>] Full note dump — untruncated bodies (complement to tyrion show)
 tyrion context <slug> "..."      Update what's currently understood
 tyrion next <slug> "..."         Update the next concrete action
+tyrion reconcile <slug> [flags]  Atomic sync: update context + next + add note (+ optional --check)
 tyrion check <slug> <n> "..."    Mark a criterion done with evidence
 tyrion done <slug> "summary"     Close the campaign
+
+tyrion followup list <slug>      Show open followup notes for a done story
+tyrion followup resolve <slug> N Mark followup #N resolved (removes from NEEDS FOLLOW-UP)
+
+tyrion depends add <slug> <dep>  Record that <slug> must run after <dep>
+tyrion depends rm <slug> <dep>   Remove a dependency
+tyrion wave show                 Show wave plan — topological layers derived from depends_on
+tyrion wave set <slug> <N> [why] Pin story to wave N regardless of topo sort (wave_source=user)
+tyrion wave next                 Print first fully-pending wave as newline-delimited slugs
+tyrion wave next --with-pocket   Same, with tyrion pocket briefing appended below each slug
 
 tyrion mark "desc"               Instant reconnaissance bookmark
 tyrion spike start "question"    Frame a known unknown
@@ -211,25 +223,44 @@ Tyrion is built on one principle: **if the tool requires discipline to use, it's
 
 The CLI is complete and scriptable — every command does one thing precisely. But remembering to run `tyrion note`, `tyrion context`, and `tyrion next` at the right moment is exactly the kind of discipline that evaporates at 2am mid-sprint. Every forgotten step is the ledger going stale.
 
-The answer is the **Claude Code skills** layer. Seven skills that orchestrate the CLI so you don't have to. The CLI is the engine. The skills are the driver. Every rough edge that surfaces in real use gets folded back in — Tyrion gets easier over time, which is the opposite of how most tools work.
+The answer is the **Claude Code skills** layer. Eight skills that orchestrate the CLI so you don't have to. The CLI is the engine. The skills are the driver. Every rough edge that surfaces in real use gets folded back in — Tyrion gets easier over time, which is the opposite of how most tools work.
 
 ---
 
 ## The skills
 
-Seven skills, one coherent workflow. Each one calls the CLI commands you'd otherwise forget.
+Eight skills, one coherent workflow. Each one calls the CLI commands you'd otherwise forget.
 
 ### The natural sequence
 
 ```
-/tyrion-orient     → start of any session — where are we?
-/tyrion-new        → bootstrap a project from scratch
-/tyrion-shape      → turn documents into stories
-/tyrion-import     → load a reviewed feature file into the DB
-/tyrion-add-story  → add one story mid-epic
-/tyrion-implement  → implement a story, start to finish
-/tyrion-checkpoint → save state before /compact or session end
+/tyrion-orient       → start of any session — where are we?
+/tyrion-new          → bootstrap a project from scratch
+/tyrion-shape        → turn documents into stories
+/tyrion-import       → load a reviewed feature file into the DB
+/tyrion-add-story    → add one story mid-epic
+/tyrion-implement    → implement a story, start to finish
+/tyrion-orchestrate  → fan out one subagent per story; advance waves until epic done
+/tyrion-checkpoint   → save state before /compact or session end
 ```
+
+### Starting from a rough idea? Use superpowers as the front-end
+
+Tyrion doesn't reimplement brainstorming or planning — if you have the
+[superpowers](https://github.com/obra/superpowers) plugin installed, the recommended flow for new
+work is:
+
+```
+superpowers:brainstorming    → collaborative design, spec written to docs/superpowers/specs/
+superpowers:writing-plans    → bite-sized TDD plan written to docs/superpowers/plans/
+/tyrion-shape --from <plan>  → plan ingested: tasks become stories, epic gets a Plan file: line
+/tyrion-implement            → tracked execution with the ledger, gates, and resumability
+```
+
+Superpowers owns the brainstorm/plan/TDD/review discipline. Tyrion owns what superpowers loses at
+session end: the durable ledger, resumability across `/clear`, and gate traceability (pre-push
+results, review verdicts, commits — see `tyrion gate`). `/tyrion-shape` recognizes superpowers
+plan documents natively, and strict-mode subagents run `superpowers:test-driven-development`.
 
 ---
 
@@ -429,13 +460,7 @@ The skill handles every step you'd forget: orient, plan, note, context, check, h
 
 ### More effort, better results
 
-**Save time between sessions** — claim the next story before `/clear`. The next session sees it already in progress and skips the orient reasoning entirely.
-
-```bash
-tyrion start next-story   # pre-claim while context is still warm
-/clear
-/tyrion-implement         # resumes instantly
-```
+**Save time between sessions** — `/tyrion-implement` pre-claims the next pending story automatically when it closes one out. The next session sees it already `in_progress` and resumes in two commands instead of reasoning about what to work on.
 
 **Shape it toward great** — `/tyrion-implement` pauses at UAT and waits for you. That pause is the quality gate. Review what the agent built. "This button is in the wrong place." "The error message is confusing." Each correction closes the gap between what the agent inferred and what you actually meant.
 
