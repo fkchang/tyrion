@@ -44,6 +44,7 @@ module Tyrion
       when 'epic'         then cmd_epic(args, store)
       when 'import'       then cmd_import(args, store)
       when 'status'       then cmd_status(args, store)
+      when 'statusline'   then cmd_statusline(args, store)
       when 'list'         then cmd_list(args, store)
       when 'show'         then cmd_show(args, store)
       when 'notes'        then cmd_notes(args, store)
@@ -594,6 +595,35 @@ module Tyrion
       dirty  = Repo.dirty_count
       dirty_s = dirty > 0 ? Output.yellow("#{dirty} dirty") : Output.green("clean")
       puts "  #{Output.dim('git:')} #{branch}  #{Output.dim(root.sub(Dir.home, '~'))}  #{dirty_s}"
+    end
+
+    # ── statusline ───────────────────────────────────────────────────────────
+
+    # One-line lane surface for the Claude Code statusline: "<epic>/<story> (done/total)".
+    # Resolves the lane via current_lane_token so each terminal sees its own epic/story.
+    # Prints nothing (exit 0) when this lane has no active epic. The in-progress story is
+    # the one claimed by this lane, falling back to any in_progress story in the epic.
+    def self.cmd_statusline(_args, store)
+      project_slug = Repo.active_project
+      return unless project_slug
+      project = store.find_project_by_slug(project_slug)
+      return unless project
+
+      token     = current_lane_token
+      epic_slug = Repo.active_epic(token: token)
+      return unless epic_slug
+      epic = store.find_epic(project['id'], epic_slug)
+      return unless epic
+
+      story   = token && store.story_in_progress_for_token(epic['id'], token)
+      story ||= store.in_progress_story(epic['id'])
+
+      stories = store.stories_for_epic(epic['id'])
+      done    = stories.count { |s| s['status'] == 'done' }
+      total   = stories.count { |s| s['status'] != 'abandoned' }
+
+      label = story ? "#{epic_slug}/#{story['slug']}" : epic_slug
+      puts "#{label} (#{done}/#{total})"
     end
 
     # ── list ───────────────────────────────────────────────────────────────
@@ -2255,6 +2285,7 @@ module Tyrion
 
         Status & navigation:
           tyrion status                            Plan view (the main command)
+          tyrion statusline                        One-line lane surface for the Claude Code statusline
           tyrion list [--status pending]           List stories
           tyrion show <slug>                       Full story detail
           tyrion notes <slug> [--kind <kind>]      All notes, untruncated (full body)
