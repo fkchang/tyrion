@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'digest'
 require 'fileutils'
 require 'json'
 require 'shellwords'
@@ -44,10 +45,17 @@ module Tyrion
       File.exist?(f) ? File.read(f).strip : nil
     end
 
-    def self.active_epic(root = nil)
+    # Returns the lane-specific subdirectory path for a given token.
+    # Does not create the directory — callers must mkdir_p as needed.
+    def self.lane_dir(token, root = nil)
       root ||= worktree_root
-      f = "#{root}/.tyrion/active-epic"
-      File.exist?(f) ? File.read(f).strip : nil
+      hash = Digest::SHA256.hexdigest(token)[0, 16]
+      "#{root}/.tyrion/lanes/#{hash}"
+    end
+
+    def self.active_epic(root = nil, token: nil)
+      root ||= worktree_root
+      read_state('active-epic', root, token)
     end
 
     def self.write_active_project(slug, root = nil)
@@ -56,10 +64,102 @@ module Tyrion
       File.write("#{root}/.tyrion/active-project", "#{slug}\n")
     end
 
-    def self.write_active_epic(slug, root = nil)
+    def self.write_active_epic(slug, root = nil, token: nil)
+      write_state('active-epic', slug, root || worktree_root, token)
+    end
+
+    def self.active_story(root = nil, token: nil)
       root ||= worktree_root
-      FileUtils.mkdir_p("#{root}/.tyrion")
-      File.write("#{root}/.tyrion/active-epic", "#{slug}\n")
+      read_state('active-story', root, token)
+    end
+
+    def self.write_active_story(slug, root = nil, token: nil)
+      write_state('active-story', slug, root || worktree_root, token)
+    end
+
+    def self.clear_active_story(root = nil, token: nil)
+      root ||= worktree_root
+      FileUtils.rm_f(state_path('active-story', root, token))
+    end
+
+    AGENT_BINARIES = %w[claude codex gemini].freeze
+    AGENT_WALK_DEPTH = 16
+
+    # Walk the process tree from +start_pid+ upward, returning the pid of the
+    # nearest ancestor whose binary basename is in AGENT_BINARIES. Returns nil
+    # if no such ancestor exists or if ps is unavailable/denied (e.g. sandboxed).
+    def self.agent_pid(start_pid = Process.pid)
+      pid = start_pid
+      AGENT_WALK_DEPTH.times do
+        row = ps_ppid_comm(pid)
+        return nil if row.nil?
+        ppid, comm = row
+        base = File.basename(comm.sub(/\A-/, ''))
+        return pid if AGENT_BINARIES.include?(base)
+        return nil if ppid.to_i <= 1
+        pid = ppid
+      end
+      nil
+    rescue StandardError
+      nil
+    end
+
+    # Return a locale/format-stable hash of the process start time for +pid+.
+    # Uses ps -o lstart= which is available on macOS (no /proc). Returns nil
+    # when ps is unavailable, denied, or the pid doesn't exist.
+    def self.pid_start_stamp(pid)
+      raw = ps_lstart(pid)
+      return nil if raw.nil? || raw.strip.empty?
+      Digest::SHA256.hexdigest(raw.strip.gsub(/\s+/, ' '))[0, 16]
+    end
+
+    # -- lane state file helpers (private) ------------------------------------
+
+    # Resolve the .tyrion state file path for +name+.
+    # Per-lane dir when token is given, shared .tyrion/ otherwise.
+    def self.state_path(name, root, token)
+      dir = token ? lane_dir(token, root) : "#{root}/.tyrion"
+      "#{dir}/#{name}"
+    end
+    private_class_method :state_path
+
+    # Read +name+ state: checks per-lane file first, falls back to shared file.
+    def self.read_state(name, root, token)
+      if token
+        lane = state_path(name, root, token)
+        return File.read(lane).strip if File.exist?(lane)
+      end
+      shared = "#{root}/.tyrion/#{name}"
+      File.exist?(shared) ? File.read(shared).strip : nil
+    end
+    private_class_method :read_state
+
+    # Write +value+ to the appropriate state file (per-lane or shared).
+    def self.write_state(name, value, root, token)
+      path = state_path(name, root, token)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "#{value}\n")
+    end
+    private_class_method :write_state
+
+    # -- ps seams (stubbed in specs so CI never needs a real ancestor) ----------
+
+    def self.ps_ppid_comm(pid)
+      out = `ps -o ppid=,comm= -p #{Integer(pid)} 2>/dev/null`.strip
+      return nil if out.empty? || !$?.success?
+      parts = out.split(' ', 2)
+      return nil if parts.length < 2
+      [Integer(parts[0]), parts[1]]
+    rescue StandardError
+      nil
+    end
+
+    def self.ps_lstart(pid)
+      out = `ps -o lstart= -p #{Integer(pid)} 2>/dev/null`.strip
+      return nil unless $?.success? && !out.empty?
+      out
+    rescue StandardError
+      nil
     end
 
     def self.init_marker(root = Dir.pwd)
