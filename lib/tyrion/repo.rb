@@ -113,6 +113,48 @@ module Tyrion
       Digest::SHA256.hexdigest(raw.strip.gsub(/\s+/, ' '))[0, 16]
     end
 
+    # -- lane liveness (tri-state) --------------------------------------------
+    # A pid-based lane token: "<label>:<pid>:<16-hex-start-stamp>". The stamp is
+    # a 16-hex slice of SHA256(ps -o lstart=), so a hand-set TYRION_LANE like
+    # "claude:99:abc" or an explicit label never parses as a pid token.
+    LANE_PID_TOKEN = /\A.+:(\d+):([0-9a-f]{16})\z/
+
+    # Parse a lane token into [pid, stamp], or nil when it is not a pid token
+    # (explicit labels, codex thread tokens — nothing to probe for liveness).
+    def self.parse_lane_pid_token(token)
+      m = LANE_PID_TOKEN.match(token.to_s)
+      m && [m[1].to_i, m[2]]
+    end
+
+    # Can we probe process liveness in this environment at all? Uses the current
+    # process as a canary: if ps yields our own start-stamp, ps works; if it is
+    # denied/sandboxed (as under the Codex sandbox), it does not.
+    def self.ps_available?
+      !pid_start_stamp(Process.pid).nil?
+    end
+
+    # Tri-state liveness of +pid+ whose expected start-stamp is +stamp+:
+    #   :live    — the pid exists and its start-stamp matches (same process)
+    #   :dead    — the pid is gone, or exists but with a different start-stamp
+    #              (the OS recycled the pid onto an unrelated process)
+    #   :unknown — ps is unavailable/denied, so liveness cannot be determined
+    # Distinguishing :dead from :unknown is the safety property: we only treat a
+    # lane as reclaimable when we can positively confirm its process is gone.
+    def self.pid_alive?(pid, stamp)
+      return :unknown unless ps_available?
+      actual = pid_start_stamp(pid)
+      return :dead if actual.nil?
+      actual == stamp ? :live : :dead
+    end
+
+    # Tri-state liveness of a lane +token+. Non-pid tokens (explicit labels,
+    # codex threads) are :unknown — there is no pid to probe.
+    def self.lane_liveness(token)
+      parsed = parse_lane_pid_token(token)
+      return :unknown unless parsed
+      pid_alive?(*parsed)
+    end
+
     # -- lane state file helpers (private) ------------------------------------
 
     # Resolve the .tyrion state file path for +name+.

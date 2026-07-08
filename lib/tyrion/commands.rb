@@ -54,6 +54,8 @@ module Tyrion
       when 'block'        then cmd_block(args, store)
       when 'unblock'      then cmd_unblock(args, store)
       when 'claim-next'   then cmd_claim_next(args, store)
+      when 'unclaim'      then cmd_unclaim(args, store)
+      when 'whoami'       then cmd_whoami(args, store)
       when 'pocket'       then cmd_pocket(args, store)
       when 'mark'         then cmd_mark(args, store)
       when 'discover'     then cmd_discover(args, store)
@@ -508,6 +510,12 @@ module Tyrion
 
       puts
 
+      # ── next-epic suggestion ─────────────────────────────────────────────
+      if epic_drained?(store, epic['id'])
+        print_next_epic_suggestion(store, epic)
+        puts
+      end
+
       # ── blocked lane ─────────────────────────────────────────────────────
       blocked = stories.select { |s| s['status'] == 'blocked' }
       unless blocked.empty?
@@ -526,6 +534,21 @@ module Tyrion
           end
           puts "  #{Output.red('⊘')} #{slug_col}  #{reason}#{disc_annot}"
           puts "    #{Output.dim('→ unblock:')} tyrion unblock #{s['slug']}"
+        end
+        puts
+      end
+
+      # ── stale lane (dead owning process) ─────────────────────────────────
+      stale_lanes = stories.select do |s|
+        s['status'] == 'in_progress' && presence(s['claimed_by']) &&
+          Repo.lane_liveness(s['claimed_by']) == :dead
+      end
+      unless stale_lanes.empty?
+        puts "  #{Output.red('STALE')}"
+        stale_lanes.each do |s|
+          slug_col = s['slug'].ljust(slug_w)
+          puts "  #{Output.red('✗')} #{slug_col}  lane dead (#{s['claimed_by']})"
+          puts "    #{Output.dim('→ unclaim:')} tyrion unclaim #{s['slug']}"
         end
         puts
       end
@@ -713,8 +736,9 @@ module Tyrion
     # ── start ──────────────────────────────────────────────────────────────
 
     def self.cmd_start(args, store)
-      slug = args.shift
-      die "Usage: tyrion start <slug>" unless slug
+      steal = !!args.delete('--steal')
+      slug  = args.shift
+      die "Usage: tyrion start <slug> [--steal]" unless slug
 
       _project, epic = resolve_project_epic(store)
       story = store.find_story(epic['id'], slug)
@@ -725,12 +749,85 @@ module Tyrion
         die "#{slug} is blocked: #{reason}\nRun: tyrion unblock #{slug}"
       end
 
+      # Hijack guard: an in_progress story owned by a *different* lane may be live
+      # work. Never silently re-stamp it to us — require explicit --steal, even
+      # when the owning lane is dead (the gentle path is `tyrion unclaim`).
+      owner = presence(story['claimed_by'])
+      if story['status'] == 'in_progress' && owner && owner != current_lane_token
+        unless steal
+          liveness = Repo.lane_liveness(owner)
+          die "#{slug} is already in_progress, claimed by #{owner} (lane #{liveness}).\n" \
+              "Release it:        tyrion unclaim #{slug}\n" \
+              "Or force takeover: tyrion start #{slug} --steal"
+        end
+        store.unstart_story(story['id'], note: "Stolen via tyrion start --steal (prior owner: #{owner})")
+        Repo.clear_active_story(token: owner)
+      end
+
       story = store.start_story(story['id'], claimed_by: current_lane_token)
       Repo.write_active_story(story['slug'], token: current_lane_token) if current_lane_token
       puts "Started: #{story['slug']} — #{story['title']}"
       puts "Status: #{Output.yellow('in_progress')}"
     rescue RuntimeError => e
       die e.message
+    end
+
+    # ── unclaim ────────────────────────────────────────────────────────────
+    # Release a lane's claim on a story: NULL claimed_by/claimed_at + reset to
+    # pending. A dead owning lane (pid gone/recycled) is free to release — this
+    # is the recovery path the STALE lane in `tyrion status` points at. A live
+    # or unverifiable OTHER lane requires --steal so we never yank active work.
+
+    def self.cmd_unclaim(args, store)
+      steal = !!args.delete('--steal')
+      slug  = args.shift
+      die "Usage: tyrion unclaim <slug> [--steal]" unless slug
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      owner = presence(story['claimed_by'])
+      if owner && owner != current_lane_token
+        liveness = Repo.lane_liveness(owner)
+        if liveness != :dead && !steal
+          label = liveness == :live ? 'a LIVE lane' : "a lane whose liveness can't be verified (#{liveness})"
+          die "#{slug} is claimed by #{label}: #{owner}\n" \
+              "Another agent may be working on it. Use --steal to force release."
+        end
+      end
+
+      Repo.clear_active_story(token: owner) if owner
+      store.unstart_story(story['id'], note: "Lane released via tyrion unclaim (prior owner: #{owner || 'none'})")
+      puts "#{Output.green('Unclaimed:')} #{slug} — reset to pending"
+      puts "Prior owner: #{owner}" if owner
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # ── whoami ─────────────────────────────────────────────────────────────
+    # Print the resolved lane token, its liveness, and the story this lane owns
+    # in the active epic. The zero-friction "which lane am I?" check.
+
+    def self.cmd_whoami(args, store)
+      token = current_lane_token
+      puts "Lane:  #{token || Output.dim('(none — legacy single-session)')}"
+      puts "State: #{Repo.lane_liveness(token)}" if token
+
+      story = nil
+      if (project_slug = Repo.active_project) &&
+         (project = store.find_project_by_slug(project_slug)) &&
+         (epic_slug = Repo.active_epic(token: token)) &&
+         (epic = store.find_epic(project['id'], epic_slug))
+        story = token ? store.story_in_progress_for_token(epic['id'], token)
+                      : store.story_in_progress_unclaimed(epic['id'])
+      end
+
+      if story
+        puts "Story: #{story['slug']} [#{Output.yellow(story['status'])}]"
+      else
+        puts "Story: #{Output.dim('(none claimed by this lane)')}"
+      end
     end
 
     # ── assign ─────────────────────────────────────────────────────────────
@@ -823,6 +920,10 @@ module Tyrion
 
     def self.cmd_claim_next(args, store)
       _project, epic = resolve_project_epic(store)
+      if epic_drained?(store, epic['id'])
+        print_next_epic_suggestion(store, epic)
+        return
+      end
       story = resolve_my_story(store, epic, explicit_slug: nil, claim_if_none: true)
       die "No pending stories in this epic" unless story
       puts "Claimed: #{story['slug']} — #{story['title']}"
@@ -1519,6 +1620,7 @@ module Tyrion
       puts "#{Output.green('Done:')} #{slug} — #{story['title']}"
 
       maybe_prompt_epic_seal(store, epic, input: input, output: output)
+      print_next_epic_suggestion(store, epic, output: output) if epic_drained?(store, epic['id'])
     rescue RuntimeError => e
       die e.message
     end
@@ -1543,6 +1645,24 @@ module Tyrion
         output.puts "Epic #{epic['slug']} sealed as done."
       else
         output.puts "Tip: run `tyrion epic complete #{epic['slug']}` when ready to seal."
+      end
+    end
+
+    # True when the epic has no pending or in_progress stories left — the trigger
+    # for surfacing a next-epic suggestion (done/abandoned/blocked don't count as
+    # remaining work).
+    def self.epic_drained?(store, epic_id)
+      store.stories_for_epic(epic_id).none? { |s| %w[pending in_progress].include?(s['status']) }
+    end
+
+    # Renders the next-epic suggestion for a drained epic: the activate hint for
+    # the earliest-created epic with pending stories, or "All epics complete".
+    def self.print_next_epic_suggestion(store, epic, output: $stdout)
+      nxt = store.next_pending_epic(epic['project_id'], exclude_epic_id: epic['id'])
+      if nxt
+        output.puts "Epic '#{epic['slug']}' complete. Next: tyrion epic activate #{nxt['slug']}"
+      else
+        output.puts "All epics complete"
       end
     end
 
@@ -2171,11 +2291,13 @@ module Tyrion
           tyrion notes <slug> [--kind <kind>]      All notes, untruncated (full body)
 
         Work:
-          tyrion start <slug>                      Claim a story (transactional)
+          tyrion start <slug> [--steal]            Claim a story (--steal to force takeover of another lane)
           tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story with a reason
           tyrion unblock <slug>                    Unblock a story → back to pending
           tyrion claim-next                        Claim next pending story (transactional)
           tyrion claim <slug> --as <label>         Pre-claim a story for a lane (adopts on TYRION_LANE=<label> start)
+          tyrion unclaim <slug> [--steal]          Release a claim → pending (frees a dead lane; --steal for a live one)
+          tyrion whoami                            Show this lane's token, liveness, and claimed story
           tyrion resume [slug]                     Read-only context dump
           tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session|followup)
           tyrion context <slug> "text"             Update current_context

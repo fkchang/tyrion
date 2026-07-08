@@ -122,4 +122,91 @@ RSpec.describe Tyrion::Repo do
       expect(described_class.active_story(tmpdir)).to eq('old-story')
     end
   end
+
+  describe '.parse_lane_pid_token' do
+    it 'parses a pid token "<label>:<pid>:<16-hex-stamp>" into [pid, stamp]' do
+      stamp = 'a1b2c3d4e5f60718'
+      expect(described_class.parse_lane_pid_token("claude:12345:#{stamp}")).to eq([12345, stamp])
+    end
+
+    it 'tolerates labels containing a hyphen or extra colons in the agent label' do
+      stamp = '0123456789abcdef'
+      expect(described_class.parse_lane_pid_token("my-agent:777:#{stamp}")).to eq([777, stamp])
+    end
+
+    it 'returns nil for an explicit label token (no pid segment)' do
+      expect(described_class.parse_lane_pid_token('lane-lane-liveness')).to be_nil
+    end
+
+    it 'returns nil for a codex thread token' do
+      expect(described_class.parse_lane_pid_token('codex:thread_abc123')).to be_nil
+    end
+
+    it 'returns nil when the stamp is not 16 hex chars (e.g. a hand-set TYRION_LANE)' do
+      expect(described_class.parse_lane_pid_token('claude:99999:abc123')).to be_nil
+    end
+
+    it 'returns nil for nil' do
+      expect(described_class.parse_lane_pid_token(nil)).to be_nil
+    end
+  end
+
+  describe '.pid_alive?' do
+    context 'when ps is available' do
+      before { allow(described_class).to receive(:ps_available?).and_return(true) }
+
+      it 'returns :live when the pid exists and its start-stamp matches' do
+        allow(described_class).to receive(:pid_start_stamp).with(123).and_return('matchingstamp000')
+        expect(described_class.pid_alive?(123, 'matchingstamp000')).to eq(:live)
+      end
+
+      it 'returns :dead when the pid no longer exists' do
+        allow(described_class).to receive(:pid_start_stamp).with(123).and_return(nil)
+        expect(described_class.pid_alive?(123, 'anystamp00000000')).to eq(:dead)
+      end
+
+      it 'returns :dead when the pid exists but its start-stamp differs (recycled pid)' do
+        allow(described_class).to receive(:pid_start_stamp).with(123).and_return('otherstamp000000')
+        expect(described_class.pid_alive?(123, 'matchingstamp000')).to eq(:dead)
+      end
+    end
+
+    context 'when ps is unavailable/denied' do
+      before { allow(described_class).to receive(:ps_available?).and_return(false) }
+
+      it 'returns :unknown without probing the target pid' do
+        expect(described_class).not_to receive(:pid_start_stamp).with(123)
+        expect(described_class.pid_alive?(123, 'matchingstamp000')).to eq(:unknown)
+      end
+    end
+  end
+
+  describe '.lane_liveness' do
+    it 'returns :unknown for a non-pid token without touching ps' do
+      expect(described_class).not_to receive(:ps_available?)
+      expect(described_class.lane_liveness('lane-lane-liveness')).to eq(:unknown)
+    end
+
+    it 'delegates to pid_alive? for a pid token' do
+      stamp = '0123456789abcdef'
+      allow(described_class).to receive(:pid_alive?).with(555, stamp).and_return(:dead)
+      expect(described_class.lane_liveness("claude:555:#{stamp}")).to eq(:dead)
+    end
+
+    it 'returns :unknown for a nil token' do
+      expect(described_class.lane_liveness(nil)).to eq(:unknown)
+    end
+  end
+
+  describe '.ps_available?' do
+    it 'is true when the current process start-stamp resolves' do
+      allow(described_class).to receive(:pid_start_stamp).with(Process.pid).and_return('somestamp0000000')
+      expect(described_class.ps_available?).to be true
+    end
+
+    it 'is false when ps yields nothing for the current process (denied/sandboxed)' do
+      allow(described_class).to receive(:pid_start_stamp).with(Process.pid).and_return(nil)
+      expect(described_class.ps_available?).to be false
+    end
+  end
 end

@@ -57,8 +57,19 @@ The RIGOR tag is the zero-friction path: when `/tyrion-shape` ingested the plan,
 
 ### 1. ORIENT
 
+**Derive your lane token FIRST — before any other tyrion call.**
+
+Every tyrion command self-identifies its lane through `Commands.current_lane_token`, which resolves in tiers: `TYRION_LANE` env (verbatim) → `CODEX_THREAD_ID` (→ `codex:<id>`, sandbox-safe) → process-walk (`claude:<pid>:<stamp>`) → `CMUX_CLAUDE_PID` accelerator → nil (legacy single-session). Ask the helper for the token once and export it so the whole shell reuses one stable, sandbox-safe identity:
+
 ```bash
-tyrion init          # idempotent — registers repo if needed
+export TYRION_LANE="$(ruby -rtyrion -e 'puts Tyrion::Commands.current_lane_token')"
+```
+
+This is idempotent: if `TYRION_LANE` is already set (a dispatcher or `/tyrion-orchestrate` set it), the helper returns it verbatim and the export is a no-op. If it is unset, the helper derives from process identity (or `CODEX_THREAD_ID` under Codex, where `ps` is denied) — the same OS process yields the same token across `/clear`, so re-running ORIENT after a clear re-derives an identical lane. There is no hardcoded session/JSONL path anymore; identity comes from the process, not a file.
+
+If your environment does not persist `export` across separate shell invocations (e.g. Claude Code, where each Bash tool call is a fresh shell), inline `TYRION_LANE=<token>` on every tyrion command instead — same token, just prefixed rather than exported.
+
+**Worktrees are optional.** A lane is identified by its token, not by its directory, so multiple lanes can share a single checkout. But same-directory lanes edit the same files: two agents implementing different stories in one working tree will collide on the filesystem even though the ledger keeps their ownership straight. Prefer a dedicated `git worktree` per lane when stories touch overlapping code; a shared directory is only safe when the lanes are read-only or you are certain their edits never overlap.
 tyrion status        # read the plan view; understand where things are
 tyrion project show  # read the project ABOUT.md — anchor on what this app/system *is*
 tyrion epic show     # read the epic intent + context_md if present
@@ -101,53 +112,50 @@ If `--review` mode: pause here and report what you found. Wait for user ok befor
 
 ### 2. CLAIM
 
+Your lane token is derived and exported (Step 1), so every `tyrion` command self-identifies your lane. Claiming is lane-aware — it resolves against *your* token, not global state.
+
 ```bash
-# If user supplied a slug:
-tyrion show <slug>       # find which epic owns this story
-# If that epic is not the active one:
-tyrion epic activate <epic-slug>   # activate it — never ask the user to do this manually
-tyrion start <slug>      # transactional; refuses if any in-epic story already in_progress
+# If the user supplied a slug — start that specific story:
+tyrion show <slug>                 # find which epic owns this story
+tyrion epic activate <epic-slug>   # only if that epic isn't already active — never ask the user to do this manually
+tyrion start <slug>                # transactional; stamps claimed_by = your lane token; refuses if any in-epic story is already in_progress
 
-# Else if tyrion status shows an in_progress story:
-# Story already claimed — use that slug for all subsequent steps.
-
-# Else:
-tyrion claim-next        # transactional claim of lowest-sequence pending story
+# Otherwise — no slug given:
+tyrion claim-next                  # no-arg, lane-aware (see below)
 ```
 
-**Auto-activate the right epic.** If the requested slug lives in a different epic than the currently active one, activate that epic before claiming. Never tell the user to run `tyrion epic activate` manually — that is the skill's job.
+**No-arg `tyrion claim-next` is the resume-safe claim.** It self-identifies your lane and resolves in two outcomes:
+
+- If your lane already owns an `in_progress` story (its `claimed_by` matches your token), claim-next returns that same story — **rung 2** of the resolver. This is what makes it idempotent across `/clear`: re-running ORIENT + `tyrion claim-next` in a fresh context re-adopts the story you were already on, because the token is derived from your process/env, not from your memory.
+- Otherwise it claims the lowest-sequence pending story and stamps `claimed_by = <your lane token>` — **rung 6**. That stamp is the ownership record.
+
+Never pass a slug to `claim-next` to "resume" — bare `tyrion claim-next` already returns your in-flight story. Use an explicit slug only to *start a specific new story* (via `tyrion start <slug>`, which also stamps `claimed_by`).
+
+**Auto-activate the right epic.** If a supplied slug lives in a different epic than the active one, activate that epic before claiming. Never tell the user to run `tyrion epic activate` manually — that is the skill's job.
 
 **Remember the slug for the rest of this session.** Every subsequent command uses it.
 
-**Capture session ID immediately after claiming:**
+**Ownership lives in `claimed_by`, not in a note.** Both `tyrion start` and `tyrion claim-next` stamp the story's `claimed_by` column with your lane token. That column is the authoritative record of who owns the story; it is what survives `/clear` and lets a resuming context re-adopt its own work (rung 2 above). You do not need to write anything to establish ownership — the claim already did it.
+
+**Optionally drop a session breadcrumb for postmortem** — a transcript pointer, nothing more:
 
 ```bash
-# Detect current agent session and record it on the story
-# Claude Code: find most recently modified JSONL for this project
-SESSION_FILE=$(ls -t ~/.claude/projects/-Users-fkchang-work-tyrion/*.jsonl 2>/dev/null | head -1)
-SESSION_ID=$(basename "$SESSION_FILE" .jsonl)
-tyrion note <slug> session "claude:${SESSION_ID} path:${SESSION_FILE}"
+tyrion note <slug> session "${TYRION_AGENT:-claude}:${TYRION_SESSION_ID:-$TYRION_LANE}"
 ```
 
-If `TYRION_SESSION_ID` env var is set (set by Codex, Gemini, or other agents), use that instead:
-```bash
-tyrion note <slug> session "${TYRION_AGENT:-claude}:${TYRION_SESSION_ID}"
-```
-
-This links the story to the transcript that built it. Postmortem: `tyrion show <slug>` → find the session note → read the JSONL for the full decision trail.
+This is a convenience for reading back the decision trail later (`tyrion show <slug>` → session note → open that transcript). It is *not* how ownership is tracked — `claimed_by` is — so skip it freely; the story is fully owned without it. There is no JSONL-path discovery here anymore: the breadcrumb carries the agent's own session id if it exports one (`TYRION_SESSION_ID`), else falls back to the lane token.
 
 **Name the session after the story (for badge visibility and GEA orientation):**
 
 ```bash
-# Claude Code — updates the session badge and triage UI
-/Users/fkchang/work/claude_code_history/bin/name-session \
-  --session-id "${SESSION_ID}" "tyrion: <slug>"
+# Claude Code — updates the session badge and triage UI (self-detects the current session)
+/Users/fkchang/work/claude_code_history/bin/name-session "tyrion: <slug>" 2>/dev/null || true
 
-# Codex / any terminal — set OS window title as fallback
+# Any terminal — set OS window title as fallback
 printf '\e]2;tyrion: <slug>\a' 2>/dev/null || true
 ```
 
-Run whichever applies. Both are safe no-ops if the target isn't available. The badge/title stays for the life of the session so GEA tab switching always shows which story is in flight.
+Both are safe no-ops if the target isn't available. The badge/title stays for the life of the session so GEA tab switching always shows which story is in flight.
 
 ---
 
