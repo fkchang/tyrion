@@ -48,6 +48,20 @@ cd tyrion && gem build tyrion.gemspec && gem install tyrion-*.gem
 
 Your ledger lives at `~/.tyrion/tyrion.db`. Override with `TYRION_DB_PATH`.
 
+### Codex (and other agents that read `~/.agents/skills`)
+
+The skills are plain SKILL.md files, so any agent with native skill discovery can use them
+directly. One command wires it up:
+
+```bash
+tyrion setup-codex        # symlinks the skills into ~/.agents/skills/tyrion
+```
+
+Restart the Codex CLI and `tyrion-shape`, `tyrion-implement`, `tyrion-orchestrate`, etc. appear
+as first-class skills. Re-running is safe (idempotent). Skill text that names Claude-Code-only
+helpers (`/pre-push`, `/design-review`) degrades to instructions the agent follows with its own
+tools — strict-mode TDD explicitly covers the no-Skill-tool case.
+
 ---
 
 ## Take the black

@@ -66,6 +66,19 @@ tyrion depends add <slug> <dep> / tyrion wave show / tyrion wave next
 
 `/tyrion-implement` is the heavy lifter: orient+claim -> resume+plan -> per-criterion subagent loop (continuous capture: log a progress note before responding to any new user request, and after every Write/Edit/Bash call) -> UAT runbook -> `/pre-push` (build/strict modes) -> `tyrion done`. Modes: default, `--spike` (no quality gate, exploration), `--tdd=strict` (failing test first), `--dark-factory` (agent runs UAT and closes without human review — pair with a `/goal` directive for unattended epics).
 
+## Non-Claude Agents (Codex, anything reading ~/.agents/skills)
+
+`tyrion setup-codex` symlinks `skills/` into `~/.agents/skills/tyrion` — Codex's native skill
+discovery (same convention obra/superpowers uses). After a Codex CLI restart the tyrion skills
+are directly invocable there. The tyrion CLI itself is agent-agnostic: set `TYRION_AGENT` and
+`TYRION_SESSION_ID` for session notes, and inline `TYRION_LANE=<token>` on every command when
+running parallel to other sessions. Skill references to Claude-Code-only helpers (`/pre-push`,
+`/design-review`, `superpowers:*` skill invocations) degrade to instructions — follow their
+intent with your own tools (run the test suite for the pre-push gate; record results with
+`tyrion gate <slug> pre-push pass|fail`). Install is from source until the gem is published
+(see README Install); once `gem install tyrion` exists, that plus `tyrion setup-codex` is the
+whole setup.
+
 ## Gotchas
 
 - **Sharp-criterion hard stop**: if any criterion is vague ("Then they see who engaged" instead of a verifiable assertion), `/tyrion-implement`'s plan step refuses to touch any file until the user approves a sharpened rewrite. Not overridable by any autonomy flag, including `--trivial`.
