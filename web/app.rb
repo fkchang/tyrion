@@ -69,7 +69,11 @@ end
 # ── Active Story (default) ─────────────────────────────────────────────────────
 
 get "/" do
-  d = TyrionWeb::Data.load_active_story_view(project_slug: params[:project])
+  project_param = params[:project]&.strip&.then { |s| s.empty? ? nil : s }
+  env_project   = ENV['TYRION_PROJECT']&.strip&.then { |s| s.empty? ? nil : s }
+  redirect "/global" if project_param.nil? && env_project.nil?
+
+  d = TyrionWeb::Data.load_active_story_view(project_slug: project_param, epic_slug: params[:epic])
   phlex Views::ActiveStory.new(
     project: d[:project], epic: d[:epic], story: d[:story],
     criteria: d[:criteria], notes: d[:notes],

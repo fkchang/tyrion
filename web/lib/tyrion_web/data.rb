@@ -38,13 +38,18 @@ module TyrionWeb
       ENV['TYRION_REPO_ROOT']&.then { |r| r.strip.empty? ? nil : r } || Dir.pwd
     end
 
-    def self.load_active_story_view(project_slug: nil)
+    def self.load_active_story_view(project_slug: nil, epic_slug: nil)
       project = project_slug ? store.find_project_by_slug(project_slug) : resolve_active_project
-      epic    = project ? resolve_active_epic(project) : nil
-      story   = epic ? store.in_progress_story(epic['id']) : nil
+
+      # Explicit ?epic= scope: pin to that exact epic and do NOT fall back to
+      # searching other epics. This is what keeps a tab scoped to its own epic
+      # instead of jumping to another epic's active story (multitab-url-scoping).
+      epic  = project ? (epic_slug ? store.find_epic(project['id'], epic_slug) : resolve_active_epic(project)) : nil
+      story = epic ? store.in_progress_story(epic['id']) : nil
 
       # Fall back to searching all epics if active epic has no in_progress story
-      if project && story.nil?
+      # (only when no explicit epic_slug was given — an explicit scope stays pinned)
+      if !epic_slug && project && story.nil?
         store.list_epics(project['id']).each do |e|
           found = store.in_progress_story(e['id'])
           if found

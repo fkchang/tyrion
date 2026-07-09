@@ -78,6 +78,8 @@ cd web && TYRION_PROJECT=<slug> bundle exec ruby app.rb
 
 **`GET /api/poll?story_id=<id>`** — returns `{token, slug, status, met, total}`. Token is `"#{last_note_at}:#{met}:#{status}"` — changes when a note, criterion check, or status change occurs.
 
+**Multi-tab URL scoping** — each browser tab stays pinned to its own project/epic via `?project=&epic=` query params rather than shared ambient state, so opening several tabs against different epics doesn't cause one tab's navigation to bleed into another. `Views::Layout#nav_href` threads both params into every topbar tab link and the sidebar's in-progress-story row whenever `@project_slug`/`@epic` are present. `TyrionWeb::Data.load_active_story_view(epic_slug:)` and `load_war_room_view(epic_slug:)` both pin to the exact epic named by the param (no cross-epic fallback) when one is given — the fallback-search-across-epics behavior only runs when no explicit epic scope was requested. `GET /` redirects to `/global` when neither `?project=` nor `TYRION_PROJECT` resolves a project — deliberately narrower than `resolve_active_project`'s full fallback chain (which also checks `.tyrion/active-project` and the DB's first project), so a bare tab with no scope lands on the project picker instead of silently guessing.
+
 ### Discovery layer
 
 `discoveries` table sits directly under `projects` (not epics). Two entry modes:

@@ -46,6 +46,13 @@ module Views
 
     private
 
+    def nav_href(path)
+      qs = []
+      qs << "project=#{@project_slug}" if @project_slug
+      qs << "epic=#{@epic['slug']}" if @epic
+      qs.empty? ? path : "#{path}?#{qs.join('&')}"
+    end
+
     def render_topbar
       div(class: "topbar") do
         div(class: "topbar-main") do
@@ -77,7 +84,7 @@ module Views
         div(class: "topbar-nav") do
           TABS.each do |tab|
             is_active = @active_tab == tab[:id]
-            href = @project_slug ? "#{tab[:path]}?project=#{@project_slug}" : tab[:path]
+            href = nav_href(tab[:path])
             a(class: is_active ? "demo-tab active" : "demo-tab",
               href: href,
               style: "text-decoration:none;") do
@@ -109,7 +116,7 @@ module Views
                          else 'var(--ink-faint)'
                          end
             icon_glyph = s_status == 'pending' ? '○' : '●'
-            href = s_status == 'in_progress' ? '/' : "/stories/#{s['id']}"
+            href = s_status == 'in_progress' ? nav_href('/') : "/stories/#{s['id']}"
 
             a(class: row_class, href: href, style: "text-decoration:none;") do
               span(class: s_status == 'in_progress' ? 's-icon s-icon-pulse' : 's-icon',
