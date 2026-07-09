@@ -49,14 +49,23 @@ Tyrion is a SQLite-backed resumability ledger. Its job is to answer "what was I 
 
 ### Web UI (`web/`)
 
-Sinatra 4 + Phlex + phlex-sinatra prototype. Runs separately from the CLI gem.
+Sinatra 4 + Phlex + phlex-sinatra prototype. Runs separately from the CLI gem — not packaged into the gemspec, so `tyrion web` only works from a source checkout.
 
 ```bash
-# Start (from repo root):
+# Start/restart/stop (from anywhere, dev checkout only):
+tyrion web              # start if needed, open browser (alias: tyrion dashboard)
+tyrion web restart      # pick up code changes
+tyrion web stop
+tyrion web status
+# --port N overrides; --no-open skips the browser; TYRION_PROJECT defaults to .tyrion/active-project
+
+# Equivalent manual invocation (what `tyrion web` shells out to):
 cd web && TYRION_PROJECT=<slug> bundle exec ruby app.rb
 # Default port 4579; override with TYRION_PORT
 # Binds 0.0.0.0 for Tailscale phone access
 ```
+
+`lib/tyrion/web_server.rb` owns process lifecycle (PID file under `~/.tyrion/`, port-scan fallback, HTTP health-check polling, cross-platform browser open). `stop`/`restart` only ever kill a PID confirmed to be a `web/app.rb` process (command line + cwd check) — never just "whatever is squatting the port."
 
 **Key files:**
 - **`web/app.rb`** — Sinatra routes. One route per view + `GET /api/poll` for live monitoring. Mutations use PRG (Post/Redirect/Get) with `session[:flash]`. `with_flash` helper in `helpers` block DRYs up all POST error handling.

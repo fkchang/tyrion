@@ -198,10 +198,12 @@ tyrion spike promote <disc-id>   Promote finding → story
 Once you have a project in Tyrion, start the web UI and monitor active work from your phone, a second monitor, or any device on your Tailscale network — without touching the Claude Code session.
 
 ```bash
-cd web
-TYRION_PROJECT=<your-project-slug> bundle exec ruby app.rb
-# → http://localhost:4579
+tyrion web
+# → starts (or reuses) the server, opens http://localhost:4579 in your browser
+# tyrion web restart / stop / status also work; alias: tyrion dashboard
 ```
+
+(Requires a source checkout — `web/` isn't packaged into the gem. Manual equivalent: `cd web && TYRION_PROJECT=<slug> bundle exec ruby app.rb`.)
 
 **War Room** — kanban across all four lanes (Queue · Active Campaign · Blocked Frontier · Shipped Keep). See what's pending, what's stuck, and what shipped.
 

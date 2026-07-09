@@ -57,6 +57,7 @@ module Tyrion
       when 'unclaim'      then cmd_unclaim(args, store)
       when 'whoami'       then cmd_whoami(args, store)
       when 'worktrees'    then cmd_worktrees(args, store)
+      when 'web', 'dashboard' then cmd_web(args, store)
       when 'pocket'       then cmd_pocket(args, store)
       when 'mark'         then cmd_mark(args, store)
       when 'discover'     then cmd_discover(args, store)
@@ -926,6 +927,81 @@ module Tyrion
 
     def self.pluralize(n, word)
       "#{n} #{word}#{'s' unless n == 1}"
+    end
+
+    # ── web ────────────────────────────────────────────────────────────────
+    # `tyrion web` / `tyrion dashboard` — launch the Sinatra field-ops UI.
+    # Default action is idempotent ("make sure it's up, take me there") so
+    # running it twice never interrupts a session in progress; `restart`
+    # is the explicit, deliberate action for picking up code changes.
+
+    def self.cmd_web(args, store)
+      sub     = args.first && !args.first.start_with?('--') ? args.shift : 'open'
+      port    = (extract_flag_value(args, '--port') || WebServer::DEFAULT_PORT).to_i
+      open    = !args.delete('--no-open')
+      project = Repo.active_project || 'tyrion'
+
+      case sub
+      when 'open', 'start' then web_ensure_running(port, project, open: open)
+      when 'restart'       then web_restart(port, project, open: open)
+      when 'stop'          then web_stop(port)
+      when 'status'        then web_print_status(port)
+      else
+        die "Usage: tyrion web [open|restart|stop|status] [--port N] [--no-open]"
+      end
+    end
+
+    def self.web_ensure_running(port, project, open:)
+      unless WebServer.web_root
+        die "Web UI not found — web/app.rb isn't packaged in this install. " \
+            "Run from a tyrion source checkout."
+      end
+
+      if WebServer.running_pid(port) && WebServer.healthy?(port)
+        puts "#{Output.green('✓')} tyrion web already running  #{Output.dim(WebServer.url(port))}"
+      else
+        WebServer.stop(port) if WebServer.running_pid(port)  # reap unresponsive instance first
+        web_boot(port, project)
+      end
+      WebServer.open_browser(port) if open
+    end
+
+    def self.web_restart(port, project, open:)
+      puts Output.dim("Restarting tyrion web…")
+      WebServer.stop(port)
+      web_boot(port, project)
+      WebServer.open_browser(port) if open
+    end
+
+    def self.web_boot(port, project)
+      print "Starting tyrion web (project=#{project}, port=#{port})… "
+      if WebServer.start(port: port, project: project)
+        puts Output.green('ready')
+        puts "  #{WebServer.url(port)}"
+      else
+        puts Output.red('failed')
+        die "tyrion web did not come up — check #{WebServer.log_file(port)}"
+      end
+    end
+
+    def self.web_stop(port)
+      if WebServer.stop(port)
+        puts "#{Output.green('✓')} stopped tyrion web (port #{port})"
+      else
+        puts Output.dim("tyrion web is not running (port #{port})")
+      end
+    end
+
+    def self.web_print_status(port)
+      pid = WebServer.running_pid(port)
+      if pid && WebServer.healthy?(port)
+        puts "#{Output.green('●')} running   pid=#{pid}  #{WebServer.url(port)}"
+      elsif pid
+        puts "#{Output.yellow('●')} unresponsive  pid=#{pid}  #{WebServer.url(port)}  " \
+             "(log: #{WebServer.log_file(port)})"
+      else
+        puts "#{Output.dim('○')} not running  (port #{port})"
+      end
     end
 
     # ── assign ─────────────────────────────────────────────────────────────
@@ -2387,6 +2463,8 @@ module Tyrion
           tyrion list [--status pending]           List stories
           tyrion show <slug>                       Full story detail
           tyrion notes <slug> [--kind <kind>]      All notes, untruncated (full body)
+          tyrion web [restart|stop|status]         Start (or open) the web UI — auto-opens browser
+                                                    (alias: tyrion dashboard; flags: --port N, --no-open)
 
         Work:
           tyrion start <slug> [--steal]            Claim a story (--steal to force takeover of another lane)
