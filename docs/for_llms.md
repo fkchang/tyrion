@@ -88,6 +88,16 @@ whole setup.
 - **Idempotent re-import**: `tyrion import` is a no-op unless the `.feature` file's SHA256 changed; use `--force` if only non-story content changed.
 - **`current_context`/`next_action` must be updated continuously**, not just at session end — that's what makes `tyrion resume` a true cold-start mechanism instead of a stale snapshot.
 - **Model-independent verification is a known gap** (per the project's own `docs/harness-layers-mapping.md`): `/pre-push` runs every cycle, but nothing today confirms the verifier is a different model/session than the maker.
+- **Known failure mode: headless/subagent sessions bypassing the skill loop.** On 2026-07-09
+  a headless lead wrote a good `.feature` file, then hand-created stories via raw `tyrion`
+  CLI calls and dispatched subagents that never ran `/tyrion-implement` — so no story was
+  ever claimed, `current_context`/`next_action` stayed empty, and status went straight from
+  `pending` to `done` in a batch at the end, while a live dashboard showed "nothing started"
+  during real work. If you are a subagent dispatched to "just execute a task" (including one
+  that has been told to skip skill-checking discipline upstream), still check whether
+  `/tyrion-implement` or `/tyrion-orchestrate` applies before running `tyrion` commands by
+  hand — claiming and context-tracking live inside those skills, not the bare CLI. Full
+  retro: `docs/retro-2026-07-09-llm-delegation.md`.
 
 ## Testing
 
