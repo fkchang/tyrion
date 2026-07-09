@@ -58,3 +58,34 @@ RSpec.describe 'TyrionWeb::Data.load_war_room_view — multi-lane' do
     end
   end
 end
+
+# Criterion warroom-scope-to-epic: an explicit epic_slug: narrows the board to
+# only that epic's stories, so the Queue and sidebar tell the same story.
+RSpec.describe 'TyrionWeb::Data.load_war_room_view — scoped to a single epic' do
+  let(:ctx)     { tyrion_worktree(project_slug: 'wr-proj', project_name: 'WR Test') }
+  let(:store)   { ctx.store }
+  let(:project) { ctx.project }
+  let(:epic_a)  { store.create_epic(project_id: project['id'], slug: 'ep-a', name: 'Epic A') }
+  let(:epic_b)  { store.create_epic(project_id: project['id'], slug: 'ep-b', name: 'Epic B') }
+
+  before do
+    TyrionWeb::Data.instance_variable_set(:@store, store)
+    store.create_story(epic_id: epic_a['id'], slug: 'a-one', title: 'A1', sequence: 1)
+    store.create_story(epic_id: epic_b['id'], slug: 'b-one', title: 'B1', sequence: 1)
+  end
+
+  after { TyrionWeb::Data.instance_variable_set(:@store, nil) }
+
+  it 'includes only the scoped epic\'s stories, excluding sibling epics' do
+    result = TyrionWeb::Data.load_war_room_view(project_slug: 'wr-proj', epic_slug: 'ep-a')
+    slugs  = result[:queue].map { |s| s['slug'] }
+    expect(slugs).to contain_exactly('a-one')
+    expect(result[:epic]['slug']).to eq 'ep-a'
+  end
+
+  it 'returns an empty board for an unknown epic_slug rather than falling back to the cross-epic view' do
+    result = TyrionWeb::Data.load_war_room_view(project_slug: 'wr-proj', epic_slug: 'no-such-epic')
+    expect(result[:epic]).to be_nil
+    expect(result[:queue]).to eq []
+  end
+end

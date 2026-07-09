@@ -166,30 +166,38 @@ module TyrionWeb
       { project: project, spike: spike, findings_ready: findings_ready, marks: marks }
     end
 
-    def self.load_war_room_view(project_slug: nil)
+    def self.load_war_room_view(project_slug: nil, epic_slug: nil)
       project = project_slug ? store.find_project_by_slug(project_slug) : resolve_active_project
-      return { project: nil, queue: [], active: [], active_count: 0, blocked: [], done: [] } unless project
+      return { project: nil, epic: nil, queue: [], active: [], active_count: 0, blocked: [], done: [] } unless project
 
-      queue = []; active_stories = []; blocked = []; done = []
-      store.list_epics(project['id']).each do |epic|
-        store.stories_for_epic(epic['id']).each do |s|
-          decorated = s.merge('epic_slug' => epic['slug'])
-          case s['status']
-          when 'pending'     then queue << decorated
-          when 'in_progress' then active_stories << decorated
-          when 'blocked'     then blocked << decorated
-          when 'done'        then done << decorated
-          end
-        end
+      # No explicit ?epic= scope: preserve the cross-epic "no lane hidden" view
+      # (the whole point of the live-lanes-board feature). An explicit but
+      # unknown epic_slug returns an empty board rather than silently falling
+      # back to the cross-epic view — a bad slug should read as "not found,"
+      # not "show everything."
+      if epic_slug
+        epic = store.find_epic(project['id'], epic_slug)
+        return { project: project, epic: nil, queue: [], active: [], active_count: 0, blocked: [], done: [] } unless epic
+
+        epics_to_scan = [epic]
+      else
+        epic = nil
+        epics_to_scan = store.list_epics(project['id'])
       end
 
+      stories = epics_to_scan.flat_map do |e|
+        store.stories_for_epic(e['id']).map { |s| s.merge('epic_slug' => e['slug']) }
+      end
+      by_status = stories.group_by { |s| s['status'] }
+
       {
-        project: project,
-        queue: queue,
-        active: active_stories,
-        active_count: active_stories.size,
-        blocked: blocked,
-        done: done.last(8)
+        project:      project,
+        epic:         epic,
+        queue:        by_status.fetch('pending', []),
+        active:       by_status.fetch('in_progress', []),
+        active_count: by_status.fetch('in_progress', []).size,
+        blocked:      by_status.fetch('blocked', []),
+        done:         by_status.fetch('done', []).last(8)
       }
     end
 

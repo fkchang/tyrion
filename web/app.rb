@@ -129,8 +129,8 @@ end
 # ── War Room ───────────────────────────────────────────────────────────────────
 
 get "/warroom" do
-  d    = TyrionWeb::Data.load_war_room_view(project_slug: params[:project])
-  epic = d[:project] ? TyrionWeb::Data.resolve_active_epic(d[:project]) : nil
+  d    = TyrionWeb::Data.load_war_room_view(project_slug: params[:project], epic_slug: params[:epic])
+  epic = d[:epic] || (d[:project] ? TyrionWeb::Data.resolve_active_epic(d[:project]) : nil)
   base = TyrionWeb::Data.load_sidebar_data(d[:project], epic)
   phlex Views::WarRoomView.new(
     project: d[:project], queue: d[:queue], active: d[:active],
