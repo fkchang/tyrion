@@ -2,12 +2,13 @@
 
 module Views
   class Layout < Phlex::HTML
-    def initialize(project:, epic:, stories: [], disc_summary: {}, active_tab: :active,
+    def initialize(project:, epic:, stories: [], disc_summary: {}, epic_switcher: [], active_tab: :active,
                    git_branch: 'main', dirty_count: 0, project_slug: nil)
       @project     = project
       @epic        = epic
       @stories     = stories
       @disc_summary = disc_summary
+      @epic_switcher = epic_switcher
       @active_tab  = active_tab
       @git_branch  = git_branch || 'unknown'
       @dirty_count = dirty_count.to_i
@@ -68,8 +69,7 @@ module Views
           end
           if @epic
             span(class: "topbar-sep") { "·" }
-            epic_label = @epic['slug'] || ''
-            span(class: "topbar-crumb active") { epic_label.length > 22 ? "#{epic_label[0..21]}…" : epic_label }
+            render_epic_switcher
           end
           div(class: "topbar-git") do
             branch = @git_branch.length > 28 ? "#{@git_branch[0..27]}…" : @git_branch
@@ -92,6 +92,38 @@ module Views
             end
           end
         end
+      end
+      render_epic_switcher_js
+    end
+
+    def render_epic_switcher
+      select(class: "topbar-crumb active", data: { action: "epic-switch" },
+             style: "font-family:inherit;background:transparent;border:none;color:inherit;cursor:pointer;") do
+        @epic_switcher.each do |e|
+          option(value: e['slug'], selected: e['slug'] == @epic['slug']) { epic_option_label(e) }
+        end
+      end
+    end
+
+    def epic_option_label(e)
+      badges = []
+      badges << '✓' if e['total'].positive? && e['done'] == e['total']
+      badges << '⚑' if e['cli_active']
+      ["#{e['slug']} (#{e['done']}/#{e['total']})", *badges].join(' ')
+    end
+
+    def render_epic_switcher_js
+      return if @epic_switcher.empty?
+      script do
+        raw safe(<<~JS)
+          document.addEventListener('change', function(e) {
+            var el = e.target.closest('[data-action="epic-switch"]');
+            if (!el) return;
+            var params = new URLSearchParams(window.location.search);
+            params.set('epic', el.value);
+            window.location.href = window.location.pathname + '?' + params.toString();
+          });
+        JS
       end
     end
 

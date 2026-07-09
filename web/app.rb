@@ -78,6 +78,7 @@ get "/" do
     project: d[:project], epic: d[:epic], story: d[:story],
     criteria: d[:criteria], notes: d[:notes],
     stories: d[:stories], disc_summary: d[:disc_summary],
+    epic_switcher: d[:epic_switcher],
     git_branch: d[:git_branch], dirty_count: d[:dirty_count],
     flash: session[:flash].tap { session.delete(:flash) },
     project_slug: params[:project]
@@ -94,6 +95,7 @@ get "/roadmap" do
     active_epic: d[:active_epic],
     active_story: d[:active_story], stories_by_epic: d[:stories_by_epic], criteria: d[:criteria],
     sidebar_stories: base[:stories], disc_summary: base[:disc_summary],
+    epic_switcher: base[:epic_switcher],
     project_slug: params[:project],
     flash: session.delete(:flash),
     **base_git
@@ -110,6 +112,7 @@ get "/global" do
   phlex Views::GlobalView.new(
     project_cards: d[:project_cards],
     project: proj, epic: epic, stories: base[:stories], disc_summary: base[:disc_summary],
+    epic_switcher: base[:epic_switcher],
     **base_git
   )
 end
@@ -125,6 +128,7 @@ get "/discoveries" do
     findings_ready: d[:findings_ready], marks: d[:marks],
     epic: epic,
     stories: base[:stories], disc_summary: base[:disc_summary],
+    epic_switcher: base[:epic_switcher],
     project_slug: params[:project],
     **base_git
   )
@@ -140,6 +144,7 @@ get "/warroom" do
     project: d[:project], queue: d[:queue], active: d[:active],
     blocked: d[:blocked], done: d[:done],
     epic: epic, stories: base[:stories], disc_summary: base[:disc_summary],
+    epic_switcher: base[:epic_switcher],
     project_slug: params[:project],
     **base_git
   )
@@ -157,6 +162,7 @@ get "/stories/:id" do
       message: "Story #{params[:id]} not found.",
       project: proj, epic: epic,
       stories: base[:stories], disc_summary: base[:disc_summary],
+      epic_switcher: base[:epic_switcher],
       **base_git
     ))
   end
@@ -165,6 +171,7 @@ get "/stories/:id" do
     project: d[:project], epic: d[:epic], story: d[:story],
     criteria: d[:criteria], notes: d[:notes],
     stories: d[:stories], disc_summary: d[:disc_summary],
+    epic_switcher: d[:epic_switcher],
     git_branch: d[:git_branch], dirty_count: d[:dirty_count],
     flash: nil, active_tab: story_tab
   )
@@ -196,6 +203,7 @@ get "/about" do
   phlex Views::AboutView.new(
     project: proj, epic: epic,
     stories: base[:stories], disc_summary: base[:disc_summary],
+    epic_switcher: base[:epic_switcher],
     **base_git
   )
 end

@@ -2,15 +2,16 @@
 
 module Views
   class WarRoomView < Phlex::HTML
-    def initialize(project:, queue:, active:, blocked:, done:, epic:, stories:, disc_summary:, git_branch: 'main', dirty_count: 0, project_slug: nil)
+    def initialize(project:, queue:, active:, blocked:, done:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0, project_slug: nil)
       @project = project; @queue = queue; @active = active; @blocked = blocked; @done = done
       @epic = epic; @stories = stories; @disc_summary = disc_summary
+      @epic_switcher = epic_switcher
       @git_branch = git_branch; @dirty_count = dirty_count; @project_slug = project_slug
     end
 
     def view_template
       render Views::Layout.new(project: @project, epic: @epic, stories: @stories,
-                                disc_summary: @disc_summary, active_tab: :warroom,
+                                disc_summary: @disc_summary, epic_switcher: @epic_switcher, active_tab: :warroom,
                                 git_branch: @git_branch, dirty_count: @dirty_count,
                                 project_slug: @project_slug) do
         div(class: "main-content visible", id: "s-warroom") do

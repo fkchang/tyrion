@@ -2,12 +2,13 @@
 
 module Views
   class NotFoundView < Phlex::HTML
-    def initialize(message:, project:, epic:, stories: [], disc_summary: {}, git_branch: 'main', dirty_count: 0)
+    def initialize(message:, project:, epic:, stories: [], disc_summary: {}, epic_switcher: [], git_branch: 'main', dirty_count: 0)
       @message     = message
       @project     = project
       @epic        = epic
       @stories     = stories
       @disc_summary = disc_summary
+      @epic_switcher = epic_switcher
       @git_branch  = git_branch
       @dirty_count = dirty_count
     end
@@ -15,7 +16,7 @@ module Views
     def view_template
       render Views::Layout.new(
         project: @project, epic: @epic, stories: @stories,
-        disc_summary: @disc_summary, active_tab: nil,
+        disc_summary: @disc_summary, epic_switcher: @epic_switcher, active_tab: nil,
         git_branch: @git_branch, dirty_count: @dirty_count
       ) do
         div(class: "main-content visible") do

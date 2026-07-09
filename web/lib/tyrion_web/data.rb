@@ -22,14 +22,10 @@ module TyrionWeb
 
     def self.resolve_active_epic(project)
       return nil unless project
-      base = project['primary_repo_identity'] || repo_root
-      root = Tyrion::Repo.tyrion_root(base)
-      if root
-        epic_slug = Tyrion::Repo.active_epic(root)
-        if epic_slug
-          epic = store.find_epic(project['id'], epic_slug)
-          return epic if epic
-        end
+      epic_slug = cli_active_epic_slug(project)
+      if epic_slug
+        epic = store.find_epic(project['id'], epic_slug)
+        return epic if epic
       end
       store.list_epics(project['id']).find { |e| e['status'] == 'active' }
     end
@@ -72,13 +68,14 @@ module TyrionWeb
         project: project, epic: epic, story: story,
         criteria: criteria, notes: notes, stories: stories,
         disc_summary: disc_summary,
+        epic_switcher: epic_switcher_epics(project),
         git_branch: git_branch, dirty_count: dirty_count
       }
     end
 
     def self.load_story_view(story_id:)
       story = store.find_story_by_id(story_id.to_s)
-      return { story: nil, project: nil, epic: nil, criteria: [], notes: [], stories: [], disc_summary: empty_disc_summary, git_branch: 'unknown', dirty_count: 0 } unless story
+      return { story: nil, project: nil, epic: nil, criteria: [], notes: [], stories: [], disc_summary: empty_disc_summary, epic_switcher: [], git_branch: 'unknown', dirty_count: 0 } unless story
 
       epic    = store.find_epic_by_id(story['epic_id'])
       project = epic ? store.find_project_by_id(epic['project_id']) : nil
@@ -89,6 +86,7 @@ module TyrionWeb
         notes:    store.notes_for_story(story['id'], limit: 10),
         stories:  epic ? store.stories_for_epic(epic['id']) : [],
         disc_summary: project ? load_discovery_summary(project['id']) : empty_disc_summary,
+        epic_switcher: epic_switcher_epics(project),
         git_branch:  safe_git_branch,
         dirty_count: safe_dirty_count
       }
@@ -207,10 +205,36 @@ module TyrionWeb
     end
 
     def self.load_sidebar_data(project, epic)
-      return { stories: [], disc_summary: empty_disc_summary } unless project && epic
+      return { stories: [], disc_summary: empty_disc_summary, epic_switcher: [] } unless project && epic
       stories = store.stories_for_epic(epic['id'])
       disc_summary = load_discovery_summary(project['id'])
-      { stories: stories, disc_summary: disc_summary }
+      { stories: stories, disc_summary: disc_summary, epic_switcher: epic_switcher_epics(project) }
+    end
+
+    # Epics for the topbar epic-switcher dropdown: every epic in the project,
+    # decorated with done/total story counts and whether it's the CLI's
+    # .tyrion/active-epic pointer (the raw file value, not resolve_active_epic's
+    # DB-status fallback) so the dropdown's ⚑ badge tracks the execution pointer
+    # exactly, not just "some active epic."
+    def self.epic_switcher_epics(project)
+      return [] unless project
+
+      cli_active_slug = cli_active_epic_slug(project)
+      store.list_epics(project['id']).reject { |e| e['archived_at'] }.map do |e|
+        counts = story_counts(store.stories_for_epic(e['id']))
+        {
+          'slug' => e['slug'],
+          'done' => counts[:done],
+          'total' => counts[:total],
+          'cli_active' => e['slug'] == cli_active_slug
+        }
+      end
+    end
+
+    def self.cli_active_epic_slug(project)
+      base = project['primary_repo_identity'] || repo_root
+      root = Tyrion::Repo.tyrion_root(base)
+      root ? Tyrion::Repo.active_epic(root) : nil
     end
 
     def self.load_discovery_summary(project_id)

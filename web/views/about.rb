@@ -2,14 +2,15 @@
 
 module Views
   class AboutView < Phlex::HTML
-    def initialize(project:, epic:, stories:, disc_summary:, git_branch: 'main', dirty_count: 0)
+    def initialize(project:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0)
       @project = project; @epic = epic; @stories = stories; @disc_summary = disc_summary
+      @epic_switcher = epic_switcher
       @git_branch = git_branch; @dirty_count = dirty_count
     end
 
     def view_template
       render Views::Layout.new(project: @project, epic: @epic, stories: @stories,
-                                disc_summary: @disc_summary, active_tab: :about,
+                                disc_summary: @disc_summary, epic_switcher: @epic_switcher, active_tab: :about,
                                 git_branch: @git_branch, dirty_count: @dirty_count) do
         div(class: "main-content visible", id: "s-about") do
           div(class: "ab-outer") do

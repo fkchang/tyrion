@@ -9,15 +9,16 @@ module Views
       done:   { label: "DONE",    css: "gv-status-done"    },
     }.freeze
 
-    def initialize(project_cards:, project:, epic:, stories:, disc_summary:, git_branch: 'main', dirty_count: 0)
+    def initialize(project_cards:, project:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0)
       @project_cards = project_cards
       @project = project; @epic = epic; @stories = stories; @disc_summary = disc_summary
+      @epic_switcher = epic_switcher
       @git_branch = git_branch; @dirty_count = dirty_count
     end
 
     def view_template
       render Views::Layout.new(project: @project, epic: @epic, stories: @stories,
-                                disc_summary: @disc_summary, active_tab: :global,
+                                disc_summary: @disc_summary, epic_switcher: @epic_switcher, active_tab: :global,
                                 git_branch: @git_branch, dirty_count: @dirty_count) do
         div(class: "main-content visible", id: "s-global") do
           div(class: "gv-outer") do

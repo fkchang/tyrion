@@ -6,7 +6,7 @@ module Views
     GAUGE_GLYPHS     = { ready: '✦', blocked: '✕', cold: '⚠', active: '●', paused: '‖', sealed: '✓' }.freeze
 
     def initialize(project:, active_epics:, archived_epics:, active_epic:, active_story:, stories_by_epic:, criteria:,
-                   sidebar_stories:, disc_summary:, git_branch: 'main', dirty_count: 0, project_slug: nil, flash: nil)
+                   sidebar_stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0, project_slug: nil, flash: nil)
       @project        = project
       @active_epics   = active_epics
       @archived_epics = archived_epics
@@ -16,6 +16,7 @@ module Views
       @criteria       = criteria
       @sidebar_stories = sidebar_stories
       @disc_summary   = disc_summary
+      @epic_switcher  = epic_switcher
       @git_branch     = git_branch
       @dirty_count    = dirty_count
       @project_slug   = project_slug
@@ -25,6 +26,7 @@ module Views
     def view_template
       render Views::Layout.new(project: @project, epic: @active_epic,
                                 stories: @sidebar_stories, disc_summary: @disc_summary,
+                                epic_switcher: @epic_switcher,
                                 active_tab: :roadmap, git_branch: @git_branch, dirty_count: @dirty_count,
                                 project_slug: @project_slug) do
         div(class: "main-content visible", id: "s-roadmap") do
