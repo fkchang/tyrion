@@ -125,3 +125,47 @@ Full timeline and DB evidence: `docs/retro-2026-07-09-llm-delegation.md`.
 ## Testing
 
 RSpec with `TyrionTestHelpers`; see `spec/`. Run `bundle exec rspec`.
+
+## Enforcement: the claim-gate PreToolUse hook
+
+`hooks/claim-gate.sh` turns "claim a story before you touch the ledger" from
+skill-prose convention into a mechanism. It is a Claude Code **PreToolUse** hook
+on the Bash tool: before any Bash command runs, the hook inspects it.
+
+- Command is not `tyrion note|check|done` → exit 0 (allow).
+- Command is one of those, and the active lane owns an `in_progress` story → exit 0.
+- Command is one of those, but the lane has no `in_progress` story → **exit 2**
+  (blocks the tool call and tells the agent to run `tyrion start <slug>` first).
+
+The gate honors a `TYRION_LANE=<token>` prefix on the command so it resolves the
+same lane the command will run under. It is **fail-open**: a non-tyrion command,
+a repo outside any Tyrion project, a missing `ruby`, or any internal error all
+exit 0. A claim gate that breaks unrelated Bash calls is worse than one that
+occasionally lets a ledger write through.
+
+This repo wires it in `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/hooks/claim-gate.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Install in another project** (one that has the `tyrion` gem on its PATH):
+
+1. Copy `hooks/claim-gate.sh` into the project (e.g. `hooks/claim-gate.sh`) and
+   `chmod +x` it. In a source checkout it finds the library at `../lib`; installed
+   as a gem it resolves `require 'tyrion'` from the load path.
+2. Add the `PreToolUse` block above to the project's `.claude/settings.json`,
+   pointing `command` at wherever you put the script.
+3. New sessions pick it up automatically; already-running sessions load hooks at
+   start, so restart to activate.
