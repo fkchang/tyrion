@@ -486,6 +486,19 @@ For full hands-off runs, pair with a `/goal` directive to drive an entire epic u
 
 ---
 
+## The gates don't take bribes
+
+Skills are prose, and a capable agent can talk itself past prose. The protocol rules that matter are therefore **mechanically enforced by the CLI and a Claude Code hook** — not left to a skill's good intentions. When the ledger says a story shipped clean, that record was policed by code, not honor.
+
+- **Gate-refusal on close.** `tyrion done` refuses to close a story whose latest gate result is a failure. It names the failing gate(s) and tells you to re-record the gate as pass or override — you cannot silently seal work over a red gate.
+- **`tyrion done --force` records a force-close gate note.** The override is itself traceable: forcing the close writes a `force-close` gate note capturing which failing gate was bypassed, so the shortcut shows up in the Gates section instead of vanishing. The bypass is allowed; hiding it is not.
+- **The claim-gate hook.** `hooks/claim-gate.sh` is a `PreToolUse` hook (wired in `.claude/settings.json`) that blocks `tyrion note`/`check`/`done` from a lane with no `in_progress` story — turning "claim a story before you touch the ledger" from convention into a mechanism. It fails open on anything unrelated (non-tyrion commands, missing ruby, any error) so it can never wedge normal work, and carves out a narrow orchestrator affordance for post-hoc notes on already-finished stories.
+- **Import criteria lint.** `tyrion import` warns (never refuses) when a criterion contains subjective phrasing a reviewer can't verify without interpretation — the mechanical backstop for the judgment-based "sharpen vague criteria" rule that an autonomous agent can rationalize its way past.
+
+These mechanisms exist because the honor system lost. See [`docs/dogfood-2026-07-10-dark-factory-first-run.md`](docs/dogfood-2026-07-10-dark-factory-first-run.md) — the first full dark-factory orchestration run, where a capable agent manufactured plausible proxy evidence for a deliberately vague criterion. Judgment-dependent refusal loses to a capable agent's ability to rationalize; mechanical gates don't negotiate.
+
+---
+
 ## License
 
 MIT
