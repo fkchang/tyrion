@@ -49,6 +49,8 @@ module Tyrion
       when 'show'         then cmd_show(args, store)
       when 'notes'        then cmd_notes(args, store)
       when 'start'        then cmd_start(args, store)
+      when 'dispatch'     then cmd_dispatch(args, store)
+      when 'violations'   then cmd_violations(args, store)
       when 'assign'       then cmd_assign(args, store)
       when 'claim'        then cmd_claim(args, store)
       when 'block'        then cmd_block(args, store)
@@ -687,6 +689,7 @@ module Tyrion
       puts "Status:  #{Output.status_label(story['status'])}#{stale_flag}"
       puts "Started: #{story['started_at'] || '—'}"
       puts "Done:    #{story['completed_at'] || '—'}" if story['completed_at']
+      puts "Completed by: #{story['completed_by']}" if story['status'] == 'done' && presence(story['completed_by'])
       puts
 
       if story['intent'] && !story['intent'].empty?
@@ -777,11 +780,16 @@ module Tyrion
         die "#{slug} is blocked: #{reason}\nRun: tyrion unblock #{slug}"
       end
 
+      # Adoption path: a story dispatched to this lane (claimed_by starts with
+      # "dispatched:") is ours to take over — no steal required. The dispatch
+      # command already started it; we just re-stamp claimed_by to our token.
+      owner = presence(story['claimed_by'])
+      is_dispatched_to_us = story['status'] == 'in_progress' && owner&.start_with?('dispatched:')
+
       # Hijack guard: an in_progress story owned by a *different* lane may be live
       # work. Never silently re-stamp it to us — require explicit --steal, even
       # when the owning lane is dead (the gentle path is `tyrion unclaim`).
-      owner = presence(story['claimed_by'])
-      if story['status'] == 'in_progress' && owner && owner != current_lane_token
+      if story['status'] == 'in_progress' && owner && owner != current_lane_token && !is_dispatched_to_us
         unless steal
           liveness = Repo.lane_liveness(owner)
           die "#{slug} is already in_progress, claimed by #{owner} (lane #{liveness}).\n" \
@@ -794,7 +802,11 @@ module Tyrion
 
       story = store.start_story(story['id'], claimed_by: current_lane_token)
       Repo.write_active_story(story['slug'], token: current_lane_token) if current_lane_token
-      puts "Started: #{story['slug']} — #{story['title']}"
+      if is_dispatched_to_us
+        puts "Adopted: #{story['slug']} — #{story['title']} (was #{owner})"
+      else
+        puts "Started: #{story['slug']} — #{story['title']}"
+      end
       puts "Status: #{Output.yellow('in_progress')}"
     rescue RuntimeError => e
       die e.message
@@ -1045,6 +1057,52 @@ module Tyrion
       puts "Status: #{Output.dim('pending')} (agent running with TYRION_LANE=#{label} will adopt it)"
     rescue RuntimeError => e
       die e.message
+    end
+
+    # ── dispatch ───────────────────────────────────────────────────────────
+    # Mechanically claims a story on behalf of a named lane by starting it
+    # immediately (in_progress) and recording an initial context event. The
+    # subagent that later runs `tyrion start <slug>` adopts ownership by
+    # re-stamping claimed_by to its real lane token — no story is ever
+    # "started" without a ledger entry at the moment of dispatch.
+
+    def self.cmd_dispatch(args, store)
+      label   = extract_flag_value(args, '--to')
+      slug    = args.shift
+      context = args.join(' ')
+      die "Usage: tyrion dispatch <slug> --to <label> [initial context]" unless slug && presence(label)
+      context = "dispatched for implementation" if context.empty?
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug} in epic #{epic['slug']}" unless story
+
+      store.dispatch_story(story['id'], label, context)
+      puts "Dispatched: #{slug} → dispatched:#{label}"
+      puts "Status: #{Output.yellow('in_progress')} (subagent on TYRION_LANE=#{label} adopts on start)"
+      puts "Context: #{context}"
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # ── violations ─────────────────────────────────────────────────────────
+    # Lists in_progress stories with no claimed_by — unclaimed-but-in-flight,
+    # which is a protocol violation when dispatch is the expected path.
+
+    def self.cmd_violations(args, store)
+      _project, epic = resolve_project_epic(store)
+      stories = store.violations_in_progress(epic['id'])
+      if stories.empty?
+        puts Output.green("No dispatch violations — all in_progress stories are claimed.")
+        return
+      end
+      puts Output.red("#{stories.length} unclaimed in_progress #{stories.length == 1 ? 'story' : 'stories'} (protocol violation):")
+      stories.each do |s|
+        age = Output.stale_label(s['started_at'])
+        puts "  #{Output.red('⊘')} #{s['slug'].ljust(30)}  started #{age}"
+        puts "    Fix: tyrion dispatch #{s['slug']} --to <lane>  (if mid-flight)"
+        puts "    Fix: tyrion unstart #{s['slug']}               (if not actually started)"
+      end
     end
 
     # ── block ──────────────────────────────────────────────────────────────

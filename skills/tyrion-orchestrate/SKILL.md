@@ -58,17 +58,17 @@ story-slug-B
 
 Parse: extract each slug and its criteria block. If output is "(no pending stories)", proceed to step 2f (termination check) — do NOT declare done yet.
 
-#### 2b. Pre-assign stories to lanes (makes dispatch visible in tyrion status)
+#### 2b. Dispatch stories to lanes (starts them immediately — ledger is never stale)
 
 ```bash
-tyrion assign story-slug-A lane-1
-tyrion assign story-slug-B lane-2
+tyrion dispatch story-slug-A --to lane-1
+tyrion dispatch story-slug-B --to lane-2
 # one per story, numbered sequentially
 ```
 
-`cmd_assign` requires the story to be `pending`. If it returns "Story is not pending" for a slug that `wave next` returned, that story was orphaned `in_progress` from a prior dispatch. Treat it as a stuck subagent (see **Stuck story recovery** below).
+`tyrion dispatch` starts each story immediately (`in_progress`, `claimed_by = "dispatched:lane-N"`) and records an initial context event. The War Room shows real in_progress stories from the moment of dispatch — the "nothing started during active work" violation this epic was born from is no longer possible. When the subagent later runs `tyrion start <slug>`, it adopts the story (re-stamps `claimed_by` to its real lane token) without requiring `--steal`.
 
-This stamps `claimed_by = "assigned:lane-N"` making the assignment visible in `tyrion status` during the wave. Note: `tyrion start` will overwrite `claimed_by` with the subagent's actual lane token when it runs — the placeholder is not "adopted" in a special sense, it is simply replaced.
+If `tyrion dispatch` returns "Story is not pending" for a slug that `wave next` returned, the story was orphaned `in_progress` from a prior dispatch. Treat it as a stuck subagent (see **Stuck story recovery** below).
 
 #### 2c. Dispatch subagents — one per story, all in parallel
 

@@ -89,4 +89,79 @@ RSpec.describe 'tyrion claim <slug> --as <label> (dispatch-pre-claim)' do
       expect(reloaded['status']).to eq 'pending'
     end
   end
+
+  describe 'cmd_dispatch (tyrion dispatch <slug> --to <label>)' do
+    it 'starts the story immediately in_progress with dispatched: prefix' do
+      make_story(slug: 'dispatch-me')
+
+      expect { Tyrion::Commands.cmd_dispatch(['dispatch-me', '--to', 'lane2', 'begin impl'], store) }
+        .to output(/Dispatched.*dispatch-me.*dispatched:lane2/m).to_stdout
+
+      story = store.find_story(epic['id'], 'dispatch-me')
+      expect(story['status']).to eq 'in_progress'
+      expect(story['claimed_by']).to eq 'dispatched:lane2'
+      expect(story['current_context']).to eq 'begin impl'
+    end
+
+    it 'records a progress note at dispatch time' do
+      make_story(slug: 'dispatch-me')
+      Tyrion::Commands.cmd_dispatch(['dispatch-me', '--to', 'lane2', 'start impl'], store)
+      story = store.find_story(epic['id'], 'dispatch-me')
+      notes = store.notes_for_story(story['id'], limit: 5)
+      expect(notes.map { |n| n['body'] }).to include(match(/dispatched to lane2/))
+    end
+
+    it 'dies with usage when --to is missing' do
+      make_story(slug: 'dispatch-me')
+      expect { Tyrion::Commands.cmd_dispatch(['dispatch-me'], store) }
+        .to raise_error(SystemExit).and output(/Usage: tyrion dispatch/).to_stderr
+    end
+
+    it 'dies when story not found' do
+      expect { Tyrion::Commands.cmd_dispatch(['nope', '--to', 'lane2'], store) }
+        .to raise_error(SystemExit).and output(/not found/).to_stderr
+    end
+
+    it 'dies when story is not pending' do
+      s = make_story(slug: 'already-going')
+      store.start_story(s['id'], claimed_by: 'claude:1:x')
+      expect { Tyrion::Commands.cmd_dispatch(['already-going', '--to', 'lane2'], store) }
+        .to raise_error(SystemExit).and output(/not pending/).to_stderr
+    end
+  end
+
+  describe 'cmd_start adopts dispatched story' do
+    let(:real_token) { 'claude:999:adoptstamp' }
+    before { allow(Tyrion::Commands).to receive(:current_lane_token).and_return(real_token) }
+
+    it 'adopts a dispatched story and re-stamps claimed_by to the real token' do
+      make_story(slug: 'adopt-me')
+      Tyrion::Commands.cmd_dispatch(['adopt-me', '--to', 'lane3', 'context'], store)
+
+      expect { Tyrion::Commands.cmd_start(['adopt-me'], store) }
+        .to output(/Adopted.*adopt-me/).to_stdout
+
+      story = store.find_story(epic['id'], 'adopt-me')
+      expect(story['status']).to eq 'in_progress'
+      expect(story['claimed_by']).to eq real_token
+    end
+  end
+
+  describe 'cmd_violations' do
+    it 'reports unclaimed in_progress stories as violations' do
+      s = make_story(slug: 'unclaimed-story')
+      store.start_story(s['id'], claimed_by: nil)
+
+      expect { Tyrion::Commands.cmd_violations([], store) }
+        .to output(/unclaimed.*in_progress.*protocol violation/i).to_stdout
+    end
+
+    it 'reports clean when all in_progress stories are claimed' do
+      s = make_story(slug: 'claimed-story')
+      store.start_story(s['id'], claimed_by: 'claude:1:x')
+
+      expect { Tyrion::Commands.cmd_violations([], store) }
+        .to output(/No dispatch violations/).to_stdout
+    end
+  end
 end

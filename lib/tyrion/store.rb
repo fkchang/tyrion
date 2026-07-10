@@ -426,20 +426,68 @@ module Tyrion
       end
     end
 
-    # Transactional claim — refuses if any story in epic is already in_progress.
-    def start_story(story_id, claimed_by: nil)
+    # Dispatch a story to a named lane: starts it immediately (in_progress) with
+    # claimed_by="dispatched:<label>" and records the initial context. The subagent
+    # that later runs `tyrion start` on this story adopts it (re-stamps claimed_by).
+    def dispatch_story(story_id, label, context_text)
+      t = Time.now.utc.iso8601(6)
       with_db do |db|
         db.transaction(:immediate) do
           story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
           raise "Story not found: #{story_id}" unless story
           raise "Story is not pending (status: #{story['status']})" unless story['status'] == 'pending'
 
-          claim_row!(db, story_id, claimed_by)
+          dispatched_label = "dispatched:#{label}"
+          db.execute(
+            'UPDATE stories SET status=?, started_at=?, last_note_at=?, claimed_by=?, claimed_at=?, current_context=?, updated_at=? WHERE id=?',
+            ['in_progress', t, t, dispatched_label, t, context_text, t, story_id]
+          )
+          note_id = SecureRandom.uuid
+          db.execute(
+            'INSERT INTO story_notes (id, story_id, kind, body, created_at) VALUES (?, ?, ?, ?, ?)',
+            [note_id, story_id, 'progress', "dispatched to #{label}: #{context_text}", t]
+          )
+          epic_id = db.get_first_value('SELECT epic_id FROM stories WHERE id = ?', [story_id])
+          reopen_epic_if_done!(db, epic_id)
         end
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end
     rescue SQLite3::ConstraintException
       raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
+    end
+
+    # Transactional claim — refuses if any story in epic is already in_progress.
+    # Exception: if the story is in_progress with a "dispatched:" prefix in claimed_by,
+    # this is an adoption — re-stamp claimed_by with the new token and return the story.
+    def start_story(story_id, claimed_by: nil)
+      with_db do |db|
+        db.transaction(:immediate) do
+          story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+          raise "Story not found: #{story_id}" unless story
+
+          if story['status'] == 'in_progress' && story['claimed_by']&.start_with?('dispatched:')
+            t = now
+            db.execute('UPDATE stories SET claimed_by=?, updated_at=? WHERE id=?', [claimed_by, t, story_id])
+          else
+            raise "Story is not pending (status: #{story['status']})" unless story['status'] == 'pending'
+            claim_row!(db, story_id, claimed_by)
+          end
+        end
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    rescue SQLite3::ConstraintException
+      raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
+    end
+
+    # Returns in_progress stories with NULL claimed_by — truly unclaimed, protocol violations
+    # when parallel dispatch is expected.
+    def violations_in_progress(epic_id)
+      with_db do |db|
+        db.execute(
+          "SELECT * FROM stories WHERE epic_id = ? AND status = 'in_progress' AND claimed_by IS NULL ORDER BY started_at",
+          [epic_id]
+        )
+      end
     end
 
     # Transactional claim of lowest-sequence pending story.
@@ -617,8 +665,10 @@ module Tyrion
           raise "#{pending_count} criteria still pending. Use --force to override." if pending_count > 0
         end
         t = now
+        # completed_by=claimed_by preserves closing-lane provenance; SQLite evaluates every
+        # RHS against the pre-update row, so claimed_by is captured before it is nulled below.
         db.execute(
-          'UPDATE stories SET status=?, completed_at=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?',
+          'UPDATE stories SET status=?, completed_at=?, completed_by=claimed_by, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?',
           ['done', t, t, story_id]
         )
         db.execute(
@@ -1244,6 +1294,10 @@ module Tyrion
           CREATE INDEX IF NOT EXISTS idx_notes_story_created ON story_notes(story_id, created_at);
           PRAGMA foreign_keys = ON;
         SQL
+      }],
+      ['add_completed_by_to_stories', lambda { |db|
+        cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
+        db.execute('ALTER TABLE stories ADD COLUMN completed_by TEXT') unless cols.include?('completed_by')
       }]
     ].freeze
 
