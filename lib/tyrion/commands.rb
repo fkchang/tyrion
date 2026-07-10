@@ -1782,6 +1782,25 @@ module Tyrion
         summary = evidence.empty? ? summary : "#{summary} | Evidence: #{evidence}"
       end
 
+      # Enforcement: never close over a failing gate. A gate whose latest result
+      # is fail blocks the close unless --force, which records the override as a
+      # force-close gate note so the bypass is itself traceable in the Gates section.
+      failing = latest_failing_gates(store, story['id'])
+      if failing.any?
+        if force
+          store.add_note(story['id'], 'gate', 'force-close: PASS',
+                         metadata: JSON.dump('gate' => 'force-close', 'result' => 'pass',
+                                             'detail' => "overrode failing: #{failing.join(', ')}"))
+        else
+          $stderr.puts "Refusing to close #{slug}: #{failing.length} gate(s) have a failing latest result:"
+          failing.each { |name| $stderr.puts "  ✗ #{name}" }
+          $stderr.puts ""
+          $stderr.puts "Re-record the gate as pass, or override with:"
+          $stderr.puts "  tyrion done #{slug} \"#{summary}\" --force"
+          exit 1
+        end
+      end
+
       # Auto-capture the commit record before sealing the story. Never let a git
       # hiccup block the close — write_commit_note is raise-free and returns nil
       # when git is unavailable, in which case we skip silently (with a note).
@@ -2563,6 +2582,36 @@ module Tyrion
         lines[1..].each { |line| puts "    #{line}" }
       end
       puts
+    end
+
+    # Gate names whose most-recent gate note has a failing result. Prefers the
+    # metadata {gate,result}, falling back to the body regex that
+    # print_gates_section uses — cmd_gate keeps the two in lockstep, so the
+    # enforcement decision matches what the Gates section renders. Returns names
+    # in first-seen order; [] when clean.
+    def self.latest_failing_gates(store, story_id)
+      store.gate_notes_for_story(story_id)
+           .select { |n| n['kind'] == 'gate' }
+           .group_by { |n| gate_name_of(n) }
+           .filter_map { |name, runs| name if gate_result_of(runs.last) == 'fail' }
+    end
+
+    def self.gate_name_of(note)
+      meta = parse_gate_metadata(note)
+      (meta && presence(meta['gate'])) || note['body'][/\A(.+?): (?:PASS|FAIL)/, 1] || note['body']
+    end
+
+    def self.gate_result_of(note)
+      meta = parse_gate_metadata(note)
+      return meta['result'].to_s.downcase if meta && presence(meta['result'])
+
+      note['body'][/\A.+?: (PASS|FAIL)/, 1]&.downcase
+    end
+
+    def self.parse_gate_metadata(note)
+      JSON.parse(note['metadata']) if presence(note['metadata'])
+    rescue JSON::ParserError
+      nil
     end
 
     # Removes "--flag value" from args in place and returns the value.
