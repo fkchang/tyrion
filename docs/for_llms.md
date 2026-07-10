@@ -134,8 +134,22 @@ on the Bash tool: before any Bash command runs, the hook inspects it.
 
 - Command is not `tyrion note|check|done` → exit 0 (allow).
 - Command is one of those, and the active lane owns an `in_progress` story → exit 0.
+- Command is `tyrion note` targeting a story that is already `done` or `blocked`,
+  from a lane with no `in_progress` story → exit 0 (the **orchestrator affordance**:
+  an unclaimed coordinator session may record a post-hoc note on a story its
+  subagents already finished, without weakening the gate for live mutations).
 - Command is one of those, but the lane has no `in_progress` story → **exit 2**
   (blocks the tool call and tells the agent to run `tyrion start <slug>` first).
+  This covers `tyrion check`/`tyrion done` always, and `tyrion note` on a
+  `pending` or `in_progress` story.
+
+The gate only fires on a tyrion command in **command position** — the `tyrion`
+(or `.../bin/tyrion`) token at the start of a command segment or after a shell
+separator, following only optional `VAR=value` env assignments and plain
+interpreter words (`ruby`, `bundle exec`, ...), with the gated verb as a complete
+immediate subcommand. A tyrion-ending path buried in an argument or a quoted
+string does not match, so `git -C ~/work/tyrion check-ignore ...` and
+`git commit -m "tyrion note: ..."` pass through untouched.
 
 The gate honors a `TYRION_LANE=<token>` prefix on the command so it resolves the
 same lane the command will run under. It is **fail-open**: a non-tyrion command,
