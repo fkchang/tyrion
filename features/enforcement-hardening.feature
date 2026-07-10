@@ -52,3 +52,4 @@ Scenario: hook-orchestrator-notes
   And tyrion check and tyrion done from an unclaimed lane still exit 2
   And tyrion note targeting a pending or in_progress story from an unclaimed lane still exits 2
   And a lane with an in_progress story remains unaffected for all three commands
+  And a non-tyrion command whose text merely embeds a tyrion-ending path before a gated word, such as git -C ~/work/tyrion check-ignore, exits 0
