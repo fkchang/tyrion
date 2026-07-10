@@ -483,11 +483,13 @@ module Tyrion
       ip_n    = stories.count { |s| s['status'] == 'in_progress' }
       pend_n  = stories.count { |s| s['status'] == 'pending' }
       blk_n   = stories.count { |s| s['status'] == 'blocked' }
+      claimed_n = stories.count { |s| s['status'] == 'pending' && s['claimed_by'].to_s.start_with?('assigned:') }
 
       counts = []
       counts << Output.green("#{done_n} done")
-      counts << Output.yellow("#{ip_n} in_progress") if ip_n > 0
+      counts << Output.yellow("#{ip_n} in_progress")
       counts << "#{pend_n} pending"
+      counts << Output.yellow("#{claimed_n} pre-claimed") if claimed_n > 0
       counts << Output.red("#{blk_n} blocked") if blk_n > 0
       puts "  #{counts.join(' · ')}"
       puts
