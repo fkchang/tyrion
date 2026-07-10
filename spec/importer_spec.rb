@@ -132,6 +132,41 @@ RSpec.describe Tyrion::Importer do
       end
     end
 
+    # ── Thin-scenario warning ───────────────────────────────────────────────
+
+    context 'thin scenario (bare title, no Given/When/Then)' do
+      let(:mixed_feature_path) do
+        path = File.join(ctx.tmpdir, 'mixed-epic.feature')
+        File.write(path, <<~FEATURE)
+          Feature: Mixed Epic
+
+            Scenario: full-story
+              Given a precondition
+              When an action occurs
+              Then an outcome is observed
+
+            Scenario: bare-story
+        FEATURE
+        path
+      end
+
+      def run_mixed_import
+        out, _err = capture_io { Tyrion::Importer.run([mixed_feature_path], store) }
+        out
+      end
+
+      it 'prints a visible warning line for the zero-criteria story' do
+        output = run_mixed_import
+        expect(output).to match(/⚠ Story: bare-story imported with 0 criteria/)
+        expect(output).to match(/full Given\/When\/Then scenario body included/)
+      end
+
+      it 'still prints the normal Story line with count for the story with criteria' do
+        output = run_mixed_import
+        expect(output).to match(/  Story: full-story \(3 criteria\)/)
+      end
+    end
+
     # ── Hash-unchanged skip ─────────────────────────────────────────────────
 
     context 'second import with unchanged file hash' do

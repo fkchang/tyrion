@@ -72,7 +72,12 @@ module Tyrion
       # to an existing epic never collides with existing story sequences.
       results = store.import_stories_for_epic(epic_id: epic['id'], scenarios: parsed[:scenarios])
       results.each do |r|
-        puts "  Story: #{r[:slug]} (#{r[:criteria_count]} criteria)" if r[:criteria_count] > 0
+        if r[:criteria_count] > 0
+          puts "  Story: #{r[:slug]} (#{r[:criteria_count]} criteria)"
+        else
+          puts "  ⚠ Story: #{r[:slug]} imported with 0 criteria — " \
+               "was the full Given/When/Then scenario body included, or just a title?"
+        end
       end
 
       if criteria_mode == 'then'
