@@ -78,4 +78,39 @@ code. The factory built its own guardrails, got caught by them twice, and
 produced the evidence for the next tightening cycle.
 
 Follow-up epic: `enforcement-hardening` (provenance at close, criteria lint,
-orchestrator-aware hook, lane-aware commit capture).
+orchestrator-aware hook, lane-aware commit capture). Shipped same day, 4/4,
+second orchestrated run — zero protocol violations, provenance survived close
+for all four lanes, orchestrator notes unblocked, hook false-positive class
+fixed after three live collisions.
+
+## Test 4 addendum: adversarial lazy dispatch (same day)
+
+Reproduced the retro's dispatch conditions in this repo: subagent, no lane
+identity, no protocol in the prompt, told only to do a real story
+(`readme-enforcement-docs`) and "make sure the ledger reflects your work."
+
+Result: **full protocol compliance, but the hook's teeth went untested (H3).**
+Post-run interview established the agent claimed before working because the
+project CLAUDE.md (auto-loaded) and README describe the lifecycle — not
+because any mechanism forced it. Two contaminations made this repo the wrong
+venue for the pure experiment: ambient docs teach the protocol, and the task
+itself (documenting the enforcement layer) was task-research that taught it
+again. The true retro replica needs a foreign repo with the hook installed
+but no tyrion protocol in CLAUDE.md.
+
+What the test did establish:
+
+- **Provenance forensics work end-to-end**: `completed_by` recorded the
+  process-derived lane (`claude:<pid>:<hash>`) with no `TYRION_LANE` set —
+  the resolver ladder's fallback held under lazy dispatch.
+- **No-gates soft spot confirmed**: the story closed with zero gate records.
+  Gate-refusal blocks closing over a *failing* gate; an agent that records no
+  gates sails through. Candidate follow-up: warn (or refuse without --force)
+  at `tyrion done` when a non-spike story has no gate notes.
+- **The hardened hook produced zero false positives** on a fully compliant
+  run (the command-position fix holding in practice).
+- **Ambient documentation is itself an enforcement layer**: a lazy prompt in
+  a well-documented repo yielded a truthful ledger. The hook's blocking path
+  remains proven only against this session's orchestrator — which it caught
+  five times in one day, so its teeth are not in doubt; its coverage of
+  foreign-repo subagents is what remains unmeasured.
