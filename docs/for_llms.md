@@ -88,16 +88,39 @@ whole setup.
 - **Idempotent re-import**: `tyrion import` is a no-op unless the `.feature` file's SHA256 changed; use `--force` if only non-story content changed.
 - **`current_context`/`next_action` must be updated continuously**, not just at session end — that's what makes `tyrion resume` a true cold-start mechanism instead of a stale snapshot.
 - **Model-independent verification is a known gap** (per the project's own `docs/harness-layers-mapping.md`): `/pre-push` runs every cycle, but nothing today confirms the verifier is a different model/session than the maker.
-- **Known failure mode: headless/subagent sessions bypassing the skill loop.** On 2026-07-09
-  a headless lead wrote a good `.feature` file, then hand-created stories via raw `tyrion`
-  CLI calls and dispatched subagents that never ran `/tyrion-implement` — so no story was
-  ever claimed, `current_context`/`next_action` stayed empty, and status went straight from
-  `pending` to `done` in a batch at the end, while a live dashboard showed "nothing started"
-  during real work. If you are a subagent dispatched to "just execute a task" (including one
-  that has been told to skip skill-checking discipline upstream), still check whether
-  `/tyrion-implement` or `/tyrion-orchestrate` applies before running `tyrion` commands by
-  hand — claiming and context-tracking live inside those skills, not the bare CLI. Full
-  retro: `docs/retro-2026-07-09-llm-delegation.md`.
+
+## Known Failure Modes
+
+Real incidents that have already happened once. Read these before orienting — the point is to recognize the setup before you repeat it, not to rediscover it on the next collision.
+
+### Headless/subagent sessions bypassing the skill loop (2026-07-09)
+
+**What happened.** A headless lead session was told "tyrion spec-first." It wrote a good
+7-scenario `.feature` file — then hand-created the stories with raw `tyrion` CLI calls and
+dispatched subagents that never invoked `/tyrion-implement`. The `.feature` file looked right,
+so nothing obvious was wrong.
+
+**How it showed up (the symptoms to recognize).**
+
+- No story was ever claimed — every completed story had `claimed_by = NULL` the whole time.
+- `current_context` and `next_action` stayed empty throughout.
+- Status jumped straight from `pending` to `done` in one 33-second batch at the end, instead of tracking work as it happened.
+- A live dashboard reading the ledger showed "nothing started" while two subagents were mid-flight on real implementation. A human caught it by eyeballing the dashboard against known active work — the ledger itself surfaced nothing.
+
+**Why it happened.** Claiming a story (`tyrion start <slug>`) and continuous context-tracking
+live *inside* `/tyrion-implement` and `/tyrion-orchestrate` — they were documented protocol, not
+anything the bare CLI enforced. A subagent that treats itself as "dispatched to execute a
+specific task" and skips skill-checking entirely has nothing in `tyrion` itself nudging it to
+claim before writing code.
+
+**How to avoid it.** If you are a subagent dispatched to "just execute a task" — *including one
+told to skip skill-checking discipline upstream* — still check whether `/tyrion-implement` or
+`/tyrion-orchestrate` applies **before** running `tyrion` commands by hand. Claiming, context
+updates, and continuous capture live inside those skills, not the raw CLI. If you find yourself
+about to hand-create stories or mark work `done` without ever having run `tyrion start`, stop:
+that is this failure mode beginning.
+
+Full timeline and DB evidence: `docs/retro-2026-07-09-llm-delegation.md`.
 
 ## Testing
 
