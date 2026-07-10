@@ -167,6 +167,53 @@ RSpec.describe Tyrion::Importer do
       end
     end
 
+    # ── Criteria lint (subjective phrasing) ──────────────────────────────────
+
+    context 'criteria containing subjective phrasing' do
+      let(:lint_feature_path) do
+        path = File.join(ctx.tmpdir, 'lint-epic.feature')
+        File.write(path, <<~FEATURE)
+          Feature: Lint Epic
+
+            Scenario: vague-story
+              Given a precondition
+              When an action occurs
+              Then readers find the guidance helpful and easy to understand
+
+            Scenario: sharp-story
+              Given a precondition
+              When an action occurs
+              Then GET /status returns HTTP 200 with a body containing "ok"
+        FEATURE
+        path
+      end
+
+      def run_lint_import
+        out, _err = capture_io { Tyrion::Importer.run([lint_feature_path], store) }
+        out
+      end
+
+      it 'prints a per-criterion warning naming the flagged phrase and suggesting a rewrite' do
+        output = run_lint_import
+        expect(output).to match(/⚠ vague-story: criterion/)
+        expect(output).to match(/subjective phrase 'helpful'/)
+        expect(output).to match(/rewrite as an observable check/)
+      end
+
+      it 'produces no warning for a criterion without flagged phrasing' do
+        output = run_lint_import
+        expect(output).not_to match(/⚠ sharp-story/)
+      end
+
+      it 'still imports the story so the lint warns rather than refuses' do
+        run_lint_import
+        epic = store.find_epic(ctx.project['id'], 'lint-epic')
+        story = store.find_story(epic['id'], 'vague-story')
+        expect(story).not_to be_nil
+        expect(store.criteria_for_story(story['id']).length).to eq 3
+      end
+    end
+
     # ── Hash-unchanged skip ─────────────────────────────────────────────────
 
     context 'second import with unchanged file hash' do

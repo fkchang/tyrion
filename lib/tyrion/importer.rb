@@ -6,6 +6,17 @@ module Tyrion
   module Importer
     NARRATIVE_PREFIXES = ['As a ', 'As an ', 'In order to ', 'I want ', 'I would like '].freeze
 
+    # Subjective/unverifiable phrases that make an acceptance criterion impossible
+    # to check without interpretation — the exact opening an autonomous agent uses
+    # to manufacture proxy evidence instead of blocking. Linted (warned, never
+    # refused) at import time. Extend this list as new weasel-words surface.
+    SUBJECTIVE_PHRASES = [
+      'clearly', 'easily', 'helpful', 'easy to understand', 'intuitive',
+      'user-friendly', 'user friendly', 'readers find', 'properly',
+      'appropriately', 'robust', 'seamless', 'seamlessly', 'nicely',
+      'good', 'better', 'best', 'as expected', 'makes sense'
+    ].freeze
+
     def self.run(args, store)
       confirm_abandon = args.delete('--confirm-abandon')
       force           = args.delete('--force')
@@ -80,6 +91,8 @@ module Tyrion
         end
       end
 
+      lint_criteria(parsed[:scenarios])
+
       if criteria_mode == 'then'
         parsed[:scenarios].each do |scenario|
           next if scenario[:setup_context].empty?
@@ -91,6 +104,30 @@ module Tyrion
       end
 
       puts "Import complete: #{parsed[:scenarios].length} story/stories."
+    end
+
+    # ── Criteria lint ─────────────────────────────────────────────────────────
+    # Warn (never refuse) when a criterion contains subjective phrasing a human or
+    # script can't verify without interpretation. This is the mechanical backstop
+    # for the judgment-based SHARPEN refusal, which an autonomous agent can talk
+    # itself past.
+
+    def self.lint_criteria(scenarios)
+      scenarios.each do |scenario|
+        scenario[:criteria].each do |criterion|
+          flagged_phrases(criterion[:text]).each do |phrase|
+            puts "  ⚠ #{scenario[:slug]}: criterion \"#{criterion[:text]}\" contains " \
+                 "subjective phrase '#{phrase}' — rewrite as an observable check " \
+                 "(a command, output match, or page behavior a reviewer can verify)."
+          end
+        end
+      end
+    end
+
+    def self.flagged_phrases(text)
+      SUBJECTIVE_PHRASES.select do |phrase|
+        text.match?(/\b#{Regexp.escape(phrase)}\b/i)
+      end
     end
 
     # ── Parser ──────────────────────────────────────────────────────────────
