@@ -113,6 +113,75 @@ RSpec.describe 'tyrion commits' do
     end
   end
 
+  describe 'lane-aware exclusion of sibling commits' do
+    let(:sibling) do
+      store.create_story(epic_id: ctx.epic['id'], slug: 'sibling-story', title: 'Sibling')
+      store.find_story(ctx.epic['id'], 'sibling-story')
+    end
+
+    before do
+      sibling
+      # Sibling already recorded its own commits.
+      stub_repo(commits_since: ['abc1234 sibling: work', 'def5678 sibling: more'])
+      Tyrion::Commands.cmd_commits(['sibling-story'], store)
+    end
+
+    it 'excludes hashes already present in another story\'s commit note' do
+      # test-story's git window sees the sibling's commits plus its own new one.
+      stub_repo(commits_since: ['abc1234 sibling: work', 'def5678 sibling: more', 'ghi9012 mine: new'])
+      Tyrion::Commands.cmd_commits(['test-story'], store)
+      meta = JSON.parse(commit_notes.last['metadata'])
+      expect(meta['shas']).to eq(%w[ghi9012])
+    end
+
+    it 'still captures commits not recorded in any other story\'s commit note' do
+      stub_repo(commits_since: ['ghi9012 mine: new', 'jkl3456 mine: also'])
+      expect { Tyrion::Commands.cmd_commits(['test-story'], store) }
+        .to output(/Commits recorded: 2 — test-story/).to_stdout
+      expect(JSON.parse(commit_notes.last['metadata'])['shas']).to eq(%w[ghi9012 jkl3456])
+    end
+
+    it 'records the no-changes body when every commit belongs to a sibling' do
+      stub_repo(commits_since: ['abc1234 sibling: work', 'def5678 sibling: more'])
+      Tyrion::Commands.cmd_commits(['test-story'], store)
+      expect(commit_notes.last['body']).to eq('no commits — no changes required')
+      expect(JSON.parse(commit_notes.last['metadata'])).to eq('shas' => [], 'count' => 0)
+    end
+
+    it 'does not exclude a story\'s own previously-recorded commits from itself' do
+      stub_repo(commits_since: ['ghi9012 mine: new'])
+      Tyrion::Commands.cmd_commits(['test-story'], store)
+      # Re-running still captures ghi9012 — self-notes are not part of "other stories".
+      stub_repo(commits_since: ['ghi9012 mine: new'])
+      Tyrion::Commands.cmd_commits(['test-story'], store)
+      expect(JSON.parse(commit_notes.last['metadata'])['shas']).to eq(%w[ghi9012])
+    end
+  end
+
+  describe 'Store#commit_shas_in_other_stories' do
+    it 'reads short SHAs from another story\'s commit note metadata' do
+      store.add_note(sibling_id, 'commit', 'commits since t:', metadata: JSON.dump('shas' => %w[aaa1111 bbb2222], 'count' => 2))
+      expect(store.commit_shas_in_other_stories(story['id'])).to contain_exactly('aaa1111', 'bbb2222')
+    end
+
+    it 'falls back to SHA tokens in the body when metadata is absent' do
+      store.add_note(sibling_id, 'commit', "commits since t:\nccc3333 legacy note\nnot-a-sha line", metadata: nil)
+      expect(store.commit_shas_in_other_stories(story['id'])).to contain_exactly('ccc3333')
+    end
+
+    it 'ignores the querying story\'s own commit notes' do
+      store.add_note(story['id'], 'commit', 'x', metadata: JSON.dump('shas' => %w[ddd4444], 'count' => 1))
+      expect(store.commit_shas_in_other_stories(story['id'])).to be_empty
+    end
+
+    def sibling_id
+      @sibling_id ||= begin
+        store.create_story(epic_id: ctx.epic['id'], slug: 'other-story', title: 'Other')
+        store.find_story(ctx.epic['id'], 'other-story')['id']
+      end
+    end
+  end
+
   describe 'GATES rendering of a multi-line commit note' do
     it 'indents continuation lines under the header' do
       stub_repo(commits_since: ['abc1234 feat: thing', 'def5678 fix: bug'])

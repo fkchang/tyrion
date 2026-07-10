@@ -1612,11 +1612,23 @@ module Tyrion
       end
       return nil if commits.nil?
 
+      sha_of = ->(line) { line.split(' ', 2).first }
+
+      # In a shared repo, commits_since also returns sibling lanes' commits. Drop any
+      # SHA already recorded in another story's commit note so it isn't double-attributed
+      # (dogfood 2026-07-10 finding 5). Raise-free: a query hiccup just skips the filter.
+      claimed = begin
+        store.commit_shas_in_other_stories(story['id'])
+      rescue StandardError
+        []
+      end
+      commits = commits.reject { |line| claimed.include?(sha_of[line]) }
+
       if commits.empty?
         body = 'no commits — no changes required'
         metadata = { 'shas' => [], 'count' => 0 }
       else
-        shas = commits.map { |line| line.split(' ', 2).first }
+        shas = commits.map(&sha_of)
         body = (["commits since #{since}:"] + commits).join("\n")
         metadata = { 'shas' => shas, 'count' => shas.length }
       end

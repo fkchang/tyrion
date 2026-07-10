@@ -552,6 +552,21 @@ module Tyrion
       end
     end
 
+    # Short commit SHAs already recorded in OTHER stories' kind='commit' notes.
+    # The auto commit-capture excludes these so a sibling lane's commit (visible to
+    # `git log` in a shared repo) isn't misattributed to this story. Prefers the
+    # note's structured metadata['shas']; falls back to parsing SHA tokens out of
+    # the body for legacy notes with no metadata. Returns unique short SHAs.
+    def commit_shas_in_other_stories(story_id)
+      rows = with_db do |db|
+        db.execute(
+          "SELECT body, metadata FROM story_notes WHERE kind = 'commit' AND story_id != ?",
+          [story_id]
+        )
+      end
+      rows.flat_map { |row| commit_shas_from_note(row) }.uniq
+    end
+
     def done_stories_with_followup_notes(project_id)
       with_db do |db|
         db.execute(<<~SQL, [project_id])
@@ -1055,6 +1070,25 @@ module Tyrion
     end
 
     private
+
+    SHORT_SHA_RE = /\A[0-9a-f]{7,40}\z/
+
+    # Short SHAs recorded in one commit note — metadata['shas'] if present and well
+    # formed, otherwise the first token of each body line that looks like a SHA.
+    def commit_shas_from_note(row)
+      if row['metadata']
+        parsed = begin
+          JSON.parse(row['metadata'])
+        rescue JSON::ParserError
+          nil
+        end
+        return Array(parsed['shas']) if parsed.is_a?(Hash) && parsed['shas']
+      end
+      row['body'].to_s.lines.filter_map do |line|
+        token = line.strip.split(' ', 2).first
+        token if token&.match?(SHORT_SHA_RE)
+      end
+    end
 
     # claimed_at tracks claimed_by: both set together, or both NULL for an unclaimed claim.
     def claim_row!(db, story_id, claimed_by)
