@@ -14,7 +14,7 @@ Tyrion is a resumability ledger for coding agents: a spec-driven, evidence-gated
 projects (slug, name, about_md)
   epics (slug, name, intent, feature_source_path + hash)
     stories (slug, title, intent, current_context, next_action, status,
-             claimed_by, depends_on, born_from_discovery)
+             claimed_by, completed_by, depends_on, born_from_discovery)
       criteria (Given/When/Then/And/But, status: pending|met|not_applicable, evidence)
       story_notes (kind: plan|progress|decision|blocker|test|handoff|recovery|
                     session|followup|observation)
