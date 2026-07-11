@@ -162,3 +162,23 @@ Findings staged + live (F-numbered continuing from the run-1 list):
   doc-naive agent isn't constructible here. But the retro's failing agents
   had the same skills available and bypassed them; what changed the outcome
   this time was the mechanism, which is the point.
+
+## Run 3 addendum: hook-hardening-2 (2026-07-11 morning)
+
+Third orchestrated run, 4/4 (lanes 10-13, waves 2-1-1 per lesson-025 chaining
+of hook mutations). Landed: F4 quote-safe lane extraction, F5 dirty-tree +
+zero-gate warnings at `tyrion done`, F1 cd-prefix target-project resolution,
+F2 `--check` armed/fail-open reporting + corrected install snippet. Suite
+655/0; `claim-gate.sh --check` printed `armed` live from this repo at close.
+
+New findings, because every run buys the next list:
+
+- **First-closer commit bleed**: lane-8's dedup only excludes commits already
+  recorded in a sibling's note, so the first story to close still captures
+  in-flight siblings' commits (lane-10's note swept lane-11's commit).
+- **Gate-name coverage is unchecked**: lane-12 recorded a single gate named
+  `rspec` instead of the protocol's `pre-push` + `uat`; gate-refusal (failing
+  gates only) and the new zero-gate warning (count only) both passed it. Gate
+  presence is mechanical; gate coverage is still honor-system. A prose patch
+  (explicit gate-name instruction in later dispatch prompts) held for lane-13
+  — the mechanical fix would check for the protocol pair at close.
