@@ -45,6 +45,23 @@ RSpec.describe 'hooks/claim-gate.sh' do
     story
   end
 
+  # Seed a SECOND project into the same DB, rooted at +dir+ (its own .tyrion/
+  # marker + active-project/active-epic). Used to prove a cd-prefixed gated
+  # command is judged against the TARGET repo's ledger, not the hook's cwd.
+  def seed_project_at(dir, project_slug:, epic_slug:, story_slug:, started_by: nil)
+    store   = Tyrion::Store.new(db_path: @db)
+    project = store.create_project(slug: project_slug, name: project_slug)
+    epic    = store.create_epic(project_id: project['id'], slug: epic_slug, name: epic_slug)
+    story   = store.create_story(epic_id: epic['id'], slug: story_slug, title: story_slug)
+
+    FileUtils.mkdir_p(File.join(dir, '.tyrion'))
+    File.write(File.join(dir, '.tyrion', 'marker'), '')
+    File.write(File.join(dir, '.tyrion', 'active-project'), "#{project_slug}\n")
+    File.write(File.join(dir, '.tyrion', 'active-epic'), "#{epic_slug}\n")
+    store.start_story(story['id'], claimed_by: started_by) if started_by
+    story
+  end
+
   it 'exits 2 and tells the agent to claim first when the lane has no in_progress story' do
     seed_project # story left pending
     _out, err, status = run_hook(
@@ -257,6 +274,82 @@ RSpec.describe 'hooks/claim-gate.sh' do
     seed_project # pending, unclaimed
     _out, _err, status = run_hook(
       command: 'echo starting; tyrion note story-a progress x',
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 2
+  end
+
+  # --- hook-target-project-resolution: a `cd <dir> &&` prefix retargets the ---
+  # ledger the gate judges. Claude Code runs hooks with cwd = the session's
+  # project dir, so a subagent doing `cd /other/repo && tyrion done slug` was
+  # policed against the WRONG ledger (F1, dogfood 2026-07-10 test 4b). The gate
+  # now resolves project/epic/lane state from the cd target instead of cwd.
+
+  # Criterion 1: lane state is resolved from <dir>. The cwd project is claimed by
+  # a DIFFERENT lane (so cwd-resolution would block), but the cd target is owned
+  # by THIS lane — so the command is allowed. Only target-resolution yields 0.
+  it 'exits 0 when a cd-prefixed gated command targets a project this lane owns' do
+    seed_project(started_by: 'other-lane') # cwd project: not ours
+    other = File.join(@dir, 'proj-b')
+    seed_project_at(other, project_slug: 'proj-b', epic_slug: 'epic-b',
+                           story_slug: 'story-b', started_by: LANE)
+    _out, _err, status = run_hook(
+      command: "cd #{other} && TYRION_LANE=#{LANE} ruby bin/tyrion done story-b 'summary'",
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 0
+  end
+
+  # Criterion 1 (mirror): the cwd project IS owned by this lane, but the cd
+  # target is unclaimed — the gate must block on the TARGET, not fall back to the
+  # (satisfied) cwd ledger. Proves resolution is from <dir>, not the hook's cwd.
+  it 'exits 2 when a cd-prefixed gated command targets an unclaimed project despite a cwd claim' do
+    seed_project(started_by: LANE) # cwd project: ours (would allow)
+    other = File.join(@dir, 'proj-b')
+    seed_project_at(other, project_slug: 'proj-b', epic_slug: 'epic-b', story_slug: 'story-b')
+    _out, err, status = run_hook(
+      command: "cd #{other} && TYRION_LANE=#{LANE} ruby bin/tyrion done story-b 'summary'",
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 2
+    expect(err).to match(/tyrion start/)
+  end
+
+  # Quoted target dir (spaces) resolves the same way — the cd path parser strips
+  # a surrounding quote pair. Target is unclaimed, cwd is claimed: blocking proves
+  # the quoted path resolved to the target, not the cwd fallback.
+  it 'exits 2 for a cd-prefixed command whose double-quoted target dir contains spaces' do
+    seed_project(started_by: LANE) # cwd project: ours (would allow)
+    other = File.join(@dir, 'other repo')
+    seed_project_at(other, project_slug: 'proj-b', epic_slug: 'epic-b', story_slug: 'story-b')
+    _out, _err, status = run_hook(
+      command: %(cd "#{other}" && TYRION_LANE=#{LANE} ruby bin/tyrion done story-b 'summary'),
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 2
+  end
+
+  # Criterion 2: a gated command WITHOUT a cd prefix resolves from the hook's
+  # working directory exactly as before — cwd owns the story, so it is allowed.
+  it 'exits 0 for a gated command with no cd prefix — resolves from cwd as before' do
+    seed_project(started_by: LANE)
+    _out, _err, status = run_hook(
+      command: "TYRION_LANE=#{LANE} ruby bin/tyrion done story-a 'summary'",
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 0
+  end
+
+  # A cd inside a subshell does NOT change the invocation's cwd, so it must not
+  # retarget resolution. Here the cwd project is unclaimed and the subshell points
+  # at a project this lane owns — the gate must still block on cwd.
+  it 'exits 2 when the only cd is inside a subshell (does not hijack resolution)' do
+    seed_project(started_by: 'other-lane') # cwd project: not ours
+    other = File.join(@dir, 'proj-b')
+    seed_project_at(other, project_slug: 'proj-b', epic_slug: 'epic-b',
+                           story_slug: 'story-b', started_by: LANE)
+    _out, _err, status = run_hook(
+      command: "(cd #{other}); TYRION_LANE=#{LANE} ruby bin/tyrion done story-a 'summary'",
       cwd: @dir, db_path: @db
     )
     expect(status.exitstatus).to eq 2

@@ -76,6 +76,30 @@ exit 0 unless m
 verb        = m[1]
 target_slug = m[2]
 
+# Claude Code runs this hook with cwd = the SESSION's project dir, so a gated
+# command that targets a DIFFERENT repo via a `cd <dir> &&` (or `cd <dir>;`)
+# prefix would otherwise be judged against the session ledger, not the one it
+# actually mutates. Resolve the cwd the tyrion invocation will really run under:
+# the last top-level `cd <dir>` in the command chain that leads up to it. No cd
+# prefix -> current cwd-based behavior is unchanged. Quote chars are 34.chr /
+# 39.chr (double / single) so this embedded Ruby stays quote-balanced for the
+# bash 3.2 command substitution, per the note further down.
+head  = cmd[0...m.begin(0)]
+cd_re = %r{
+  (?:^|[\n;&|])                              # segment boundary before cd
+  \s*
+  cd\s+
+  (?:
+    #{34.chr}([^#{34.chr}]*)#{34.chr} |      # double-quoted dir (may hold spaces)
+    #{39.chr}([^#{39.chr}]*)#{39.chr} |      # single-quoted dir
+    ([^\s;&|]+)                              # bare dir
+  )
+  \s*
+  (?=$|[\n;&|])                              # cd must be a complete segment
+}x
+cd_dir = nil
+head.scan(cd_re) { cd_dir = Regexp.last_match(1) || Regexp.last_match(2) || Regexp.last_match(3) }
+
 begin
   require 'tyrion'
 rescue LoadError
@@ -83,7 +107,10 @@ rescue LoadError
 end
 
 begin
-  root = Tyrion::Repo.tyrion_root
+  # A cd prefix (if any) is the base for resolution; otherwise the hook's cwd.
+  # A bad/nonexistent cd dir raises in tyrion_root and the outer rescue
+  # fail-opens (exit 0) rather than block against the wrong ledger.
+  root = Tyrion::Repo.tyrion_root(cd_dir || Dir.pwd)
   exit 0 unless root # outside a Tyrion project — fail open
 
   # Resolve the lane the command will actually run under: an explicit
