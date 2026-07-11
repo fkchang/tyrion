@@ -112,3 +112,73 @@ RSpec.describe 'tyrion done gate refusal' do
     end
   end
 end
+
+# tyrion done honesty warnings: warn (never block) when the working tree is dirty
+# or the story has zero recorded gates, so an autonomous close can't silently drop
+# uncommitted work or leave no evidence trail (dogfood 2026-07-10 findings).
+RSpec.describe 'tyrion done close warnings' do
+  let(:ctx)   { tyrion_worktree(epic_slug: 'my-epic') }
+  let(:store) { ctx.store }
+  let(:epic)  { ctx.epic }
+
+  before do
+    allow(Tyrion::Commands).to receive(:current_lane_token).and_return(nil)
+    allow(Tyrion::Repo).to receive(:clear_active_story)
+    # Commit capture shells out to git; keep it deterministic and off the real repo.
+    allow(Tyrion::Repo).to receive(:commits_since).and_return([])
+  end
+
+  def create_story(slug)
+    store.create_story(epic_id: epic['id'], slug: slug, title: slug)
+    store.find_story(epic['id'], slug)
+  end
+
+  def gate(slug, name, result)
+    capture_io { Tyrion::Commands.cmd_gate([slug, name, result], store) }
+  end
+
+  def status_of(slug)
+    store.find_story(epic['id'], slug)['status']
+  end
+
+  describe 'criterion 1 — dirty working tree warns but still closes' do
+    # dirty_count is stubbed to 0 by tyrion_worktree's REPO_DEFAULTS — override it here.
+    let(:ctx) { tyrion_worktree(epic_slug: 'my-epic', dirty_count: 3) }
+
+    it 'closes the story and warns that uncommitted work will be missing from the commit record' do
+      create_story('dirty')
+      out, = capture_io { Tyrion::Commands.cmd_done(['dirty', 'shipped'], store) }
+      expect(status_of('dirty')).to eq('done')
+      expect(out).to match(/uncommitted work.*missing from the commit record/i)
+    end
+  end
+
+  describe 'criterion 2 — zero gate notes warns and names the gate command' do
+    # tyrion_worktree defaults dirty_count to 0 — clean tree isolates the gate warning.
+    it 'prints a warning naming tyrion gate <slug> <name> pass|fail' do
+      create_story('ungated')
+      out, = capture_io { Tyrion::Commands.cmd_done(['ungated', 'shipped'], store) }
+      expect(out).to match(/tyrion gate ungated <name> pass\|fail/)
+    end
+
+    it 'still counts as zero gates when only an auto-captured commit note exists' do
+      create_story('ungated2')
+      # A commit note is a kind='commit' note, not a gate — it must not suppress the warning.
+      allow(Tyrion::Repo).to receive(:commits_since).and_return(['abc123 did a thing'])
+      out, = capture_io { Tyrion::Commands.cmd_done(['ungated2', 'shipped'], store) }
+      expect(out).to match(/No gates recorded/)
+    end
+  end
+
+  describe 'criterion 3 — clean tree with a gate note prints neither warning' do
+    # tyrion_worktree defaults dirty_count to 0 — a clean tree plus a gate note.
+    it 'prints neither the dirty-tree nor the zero-gate warning' do
+      create_story('pristine')
+      gate('pristine', 'pre-push', 'pass')
+      out, = capture_io { Tyrion::Commands.cmd_done(['pristine', 'shipped'], store) }
+      expect(status_of('pristine')).to eq('done')
+      expect(out).not_to match(/uncommitted work/i)
+      expect(out).not_to match(/No gates recorded/)
+    end
+  end
+end

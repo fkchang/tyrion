@@ -1880,6 +1880,12 @@ module Tyrion
         puts Output.dim("(commit capture skipped — git unavailable)") if write_commit_note(store, story, since).nil?
       end
 
+      # Honesty warnings before sealing — both non-blocking (dogfood 2026-07-10):
+      # a story closed with a dirty tree loses that uncommitted work from the
+      # commit record, and a story closed with zero gates leaves no evidence trail.
+      # Warn, never block — the close still succeeds.
+      print_done_warnings(store, story, slug)
+
       store.complete_story(story['id'], summary, force: force)
       Repo.clear_active_story(token: current_lane_token)
       puts "#{Output.green('Done:')} #{slug} — #{story['title']}"
@@ -1888,6 +1894,17 @@ module Tyrion
       print_next_epic_suggestion(store, epic, output: output) if epic_drained?(store, epic['id'])
     rescue RuntimeError => e
       die e.message
+    end
+
+    # Non-blocking close warnings. Raise-free (Repo.dirty_count returns 0 when git
+    # is unavailable), so a git hiccup never blocks the close. gate_notes_for_story
+    # returns gate AND commit kinds — filter to kind='gate' so an auto-captured
+    # commit note doesn't mask a genuinely gate-less close.
+    def self.print_done_warnings(store, story, slug)
+      puts Output.yellow('⚠  Uncommitted work in the working tree will be missing from the commit record.') if Repo.dirty_count.positive?
+
+      ungated = store.gate_notes_for_story(story['id']).none? { |n| n['kind'] == 'gate' }
+      puts Output.yellow("⚠  No gates recorded — record one with: tyrion gate #{slug} <name> pass|fail") if ungated
     end
 
     # After a story closes, offer to seal the epic when every story is done.
