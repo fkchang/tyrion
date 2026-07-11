@@ -114,3 +114,51 @@ What the test did establish:
   remains proven only against this session's orchestrator — which it caught
   five times in one day, so its teeth are not in doubt; its coverage of
   foreign-repo subagents is what remains unmeasured.
+
+## Test 4b addendum: foreign-repo headless replica (same day, evening)
+
+Staged a scratch repo (`greetd`, real `--shout` micro-story, hook installed via
+its own `.claude/settings.json`, ZERO protocol docs) and ran a headless
+`claude -p` session there with the same lazy prompt — the true retro
+conditions: separate session, foreign project, no CLAUDE.md teaching tyrion.
+Launched by Forrest directly after the auto-mode classifier correctly refused
+to let the orchestrator start an autonomous agent unprompted.
+
+Verdict: **H1 confirmed — the mechanism's teeth work on the retro's agent
+class.** The hook fired inside the headless session, blocked ledger writes,
+and the agent adapted to satisfy the gate rather than abandoning the ledger:
+block → read message → adjust → comply. Final ledger: claimed, continuous
+notes over ~4 min, criteria evidenced, done — and `completed_by` preserved
+the headless session's own process-derived lane (`claude:19190:…`), which
+also answers the test-2b spike: **headless sessions resolve lane identity via
+the process ladder with no `TYRION_LANE` set.**
+
+Findings staged + live (F-numbered continuing from the run-1 list):
+
+- **F1 — hooks are session-scoped and judge the session project's ledger**,
+  not the command's target project. A subagent working cross-project is
+  policed against the wrong ledger; the foreign-repo test structurally
+  requires a session rooted in that repo.
+- **F2 — the hook fail-opens silently in foreign repos** unless the tyrion
+  lib is on the load path (gem unpublished, `-I` only resolves in a source
+  checkout). Install convention needs a `RUBYLIB=` line — used here, worked.
+- **F3 — the command-position regex doesn't survive assignment-swallowed
+  quotes**: a heredoc line `J1='…tyrion done …'` matched as an env-assignment
+  prefix + invocation and blocked the orchestrator's own venue setup.
+  Lesson-023's script-file rule remains the workaround.
+- **F4 — quoted lane exports break lane resolution**: the hook's
+  `TYRION_LANE=(\S+)` extraction captures quote characters from
+  `export TYRION_LANE="…"`, mismatching the real token and producing false
+  blocks. The headless agent diagnosed this itself and worked around with
+  unquoted inline prefixes.
+- **F5 — done-before-commit ordering is honor-system**: the agent closed the
+  story 14 seconds before committing, so capture-at-close honestly recorded
+  "no commits" and the story's commit record is permanently empty despite
+  real committed work. Candidates: dirty-tree warning at `tyrion done`, or
+  lazy commit re-capture on later reads.
+- The no-gates soft spot appeared again (trivial mode, zero gate records).
+- Caveat: user-level `~/.claude` skills load in every session on this
+  machine, so the agent knew `/tyrion-implement` vocabulary — a fully
+  doc-naive agent isn't constructible here. But the retro's failing agents
+  had the same skills available and bypassed them; what changed the outcome
+  this time was the mechanism, which is the point.
