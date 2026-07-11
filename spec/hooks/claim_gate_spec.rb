@@ -354,4 +354,51 @@ RSpec.describe 'hooks/claim-gate.sh' do
     )
     expect(status.exitstatus).to eq 2
   end
+
+  # --- hook-armed-check: `--check` reports whether the gate is actually armed ---
+  # from the current directory (F2, dogfood 2026-07-10 test 4b: a foreign install
+  # where require 'tyrion' can't resolve silently fail-opens, so an install that
+  # looks wired can be unenforced). --check takes no stdin JSON and ALWAYS exits 0
+  # — it reports, never blocks.
+
+  # Run --check in +cwd+ with +env+ overrides; no JSON payload on stdin.
+  def run_check(cwd:, env: {})
+    Open3.capture3(env, HOOK, '--check', chdir: cwd, stdin_data: '')
+  end
+
+  it 'prints armed when the tyrion lib loads and a tyrion project resolves' do
+    seed_project # a .tyrion/ marker + project exist under @dir
+    out, _err, status = run_check(cwd: @dir, env: { 'TYRION_DB_PATH' => @db })
+    expect(status.exitstatus).to eq 0
+    expect(out).to match(/\barmed\b/)
+  end
+
+  it 'prints fail-open with the no-project reason outside any Tyrion project' do
+    # @dir has no .tyrion/marker — the lib loads (source checkout -I ../lib) but no
+    # project resolves from here.
+    out, _err, status = run_check(cwd: @dir, env: { 'TYRION_DB_PATH' => @db })
+    expect(status.exitstatus).to eq 0
+    expect(out).to match(/fail-open: no \.tyrion project found/)
+  end
+
+  it 'prints fail-open naming RUBYLIB when the tyrion lib is not loadable' do
+    seed_project # project resolves fine; only the lib is unreachable
+    # Model the F2 foreign install: a copy of the hook whose sibling ../lib has NO
+    # tyrion.rb, so it adds no source-checkout -I fallback. tyrion is gem-installed
+    # on the dev host, so also disable gems (empty RUBYLIB, no compensation) to
+    # reproduce the unpublished-gem condition where require 'tyrion' can't resolve.
+    foreign = File.join(@dir, 'foreign')
+    FileUtils.mkdir_p(foreign)
+    hook_copy = File.join(foreign, 'claim-gate.sh')
+    FileUtils.cp(HOOK, hook_copy)
+    FileUtils.chmod('+x', hook_copy)
+
+    out, _err, status = Open3.capture3(
+      { 'TYRION_DB_PATH' => @db, 'RUBYOPT' => '--disable-gems', 'RUBYLIB' => '' },
+      hook_copy, '--check', chdir: @dir, stdin_data: ''
+    )
+    expect(status.exitstatus).to eq 0
+    expect(out).to match(/fail-open: tyrion lib not loadable/)
+    expect(out).to match(/RUBYLIB/)
+  end
 end

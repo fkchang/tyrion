@@ -27,9 +27,26 @@
 #
 # The command's own `TYRION_LANE=<token>` prefix (if present) is honored so the
 # gate resolves the same lane the command will run under.
+#
+# `--check`: a diagnostic mode (no stdin JSON needed) that reports whether the
+# gate is actually armed from the current directory, printing `armed` when ruby
+# is available, the tyrion lib loads, and a tyrion project resolves — otherwise
+# `fail-open: <reason>`. It ALWAYS exits 0 (it reports, never blocks). Installs
+# use it to prove enforcement is live: a foreign repo where `require 'tyrion'`
+# can't resolve silently fail-opens (F2, dogfood 2026-07-10), so an install that
+# looks wired can be unenforced. `--check` surfaces that before it bites.
 
-# Fail open if ruby is unavailable — nothing to enforce with.
-command -v ruby >/dev/null 2>&1 || exit 0
+# --check reports arming status instead of gating; every other invocation is the
+# normal PreToolUse gate whose behavior below is unchanged.
+check_mode=""
+[ "$1" = "--check" ] && check_mode=1
+
+# Fail open if ruby is unavailable — nothing to enforce with. In --check mode say
+# so out loud (the gate is not armed); the normal gate stays silent and allows.
+if ! command -v ruby >/dev/null 2>&1; then
+  [ -n "$check_mode" ] && echo "fail-open: no ruby on PATH — install ruby to arm the claim gate"
+  exit 0
+fi
 
 hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 lib_dir="$hook_dir/../lib"
@@ -39,6 +56,34 @@ lib_dir="$hook_dir/../lib"
 # path and this -I is simply absent.
 ruby_opts=()
 [ -f "$lib_dir/tyrion.rb" ] && ruby_opts=(-I "$lib_dir")
+
+if [ -n "$check_mode" ]; then
+  check=$(cat <<'RUBY'
+begin
+  require 'tyrion'
+rescue LoadError
+  # The gem is unpublished and the hook's -I only resolves in a source checkout,
+  # so a foreign install must put the lib on the load path itself.
+  puts 'fail-open: tyrion lib not loadable — set RUBYLIB=<path-to-tyrion>/lib'
+  exit 0
+end
+
+begin
+  root = Tyrion::Repo.tyrion_root(Dir.pwd)
+rescue StandardError
+  root = nil
+end
+unless root
+  puts 'fail-open: no .tyrion project found from this directory'
+  exit 0
+end
+
+puts 'armed'
+exit 0
+RUBY
+)
+  exec ruby "${ruby_opts[@]}" -e "$check"
+fi
 
 decide=$(cat <<'RUBY'
 require 'json'

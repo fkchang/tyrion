@@ -174,12 +174,45 @@ This repo wires it in `.claude/settings.json`:
 }
 ```
 
-**Install in another project** (one that has the `tyrion` gem on its PATH):
+**Install in another project.** The hook resolves the tyrion library one of two
+ways: in a **source checkout** it finds it at `../lib` relative to the script; a
+**gem-installed** tyrion resolves via `require 'tyrion'` on the load path. In a
+foreign repo you get **neither** for free — the `../lib` fallback only exists in
+a checkout, and the gem is unpublished — so `require 'tyrion'` fails, the hook
+**silently fail-opens, and the gate is not actually enforced** (F2, dogfood
+2026-07-10 test 4b). Put the library on the load path with a `RUBYLIB=` prefix:
 
 1. Copy `hooks/claim-gate.sh` into the project (e.g. `hooks/claim-gate.sh`) and
-   `chmod +x` it. In a source checkout it finds the library at `../lib`; installed
-   as a gem it resolves `require 'tyrion'` from the load path.
-2. Add the `PreToolUse` block above to the project's `.claude/settings.json`,
-   pointing `command` at wherever you put the script.
-3. New sessions pick it up automatically; already-running sessions load hooks at
+   `chmod +x` it.
+2. Add the `PreToolUse` block to the project's `.claude/settings.json`, pointing
+   `command` at wherever you put the script and prefixing it with
+   `RUBYLIB=<path-to-tyrion>/lib` so `require 'tyrion'` resolves:
+
+   ```json
+   {
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "Bash",
+           "hooks": [
+             { "type": "command", "command": "RUBYLIB=<path-to-tyrion>/lib \"$CLAUDE_PROJECT_DIR\"/hooks/claim-gate.sh" }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+3. **Verify the gate is armed.** Run the script's `--check` mode from the repo
+   root (it reports arming status, takes no input, and never blocks):
+
+   ```bash
+   RUBYLIB=<path-to-tyrion>/lib hooks/claim-gate.sh --check
+   ```
+
+   Confirm it prints `armed`. Anything else means the gate is **not** enforcing:
+   `fail-open: tyrion lib not loadable` (fix the `RUBYLIB` path),
+   `fail-open: no .tyrion project found from this directory` (run from a Tyrion
+   project root), or `fail-open: no ruby on PATH` (install ruby).
+4. New sessions pick it up automatically; already-running sessions load hooks at
    start, so restart to activate.
