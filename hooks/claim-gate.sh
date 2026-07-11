@@ -88,7 +88,24 @@ begin
 
   # Resolve the lane the command will actually run under: an explicit
   # TYRION_LANE=<token> in the command wins, else the ambient lane identity.
-  token = cmd[/\bTYRION_LANE=(\S+)/, 1] || Tyrion::Commands.current_lane_token
+  # An agent may write the prefix quoted, e.g. TYRION_LANE= followed by a double-
+  # or single-quoted lane token. \S+ then captures the surrounding quote
+  # characters, which are not part of the lane the command runs under. Strip a
+  # matched surrounding quote pair; the unquoted form has no pair and is
+  # unchanged. Quote chars are referenced as 34.chr / 39.chr so this embedded
+  # Ruby introduces no literal quotes — bash 3.2 mis-parses odd quote counts
+  # inside the $(cat <<RUBY ...) command substitution around this script.
+  raw_lane = cmd[/\bTYRION_LANE=(\S+)/, 1]
+  if raw_lane
+    q = raw_lane[0]
+    if q == 34.chr || q == 39.chr
+      # Quoted: take the content up to the matching close quote, dropping the
+      # quotes and anything glued after them (e.g. a `;` in `export VAR="x"; cmd`).
+      close    = raw_lane.index(q, 1)
+      raw_lane = close ? raw_lane[1...close] : raw_lane[1..-1]
+    end
+  end
+  token = raw_lane || Tyrion::Commands.current_lane_token
 
   store        = Tyrion::Store.new
   project_slug = Tyrion::Repo.active_project(root)

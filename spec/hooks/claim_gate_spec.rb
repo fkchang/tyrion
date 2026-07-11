@@ -64,6 +64,53 @@ RSpec.describe 'hooks/claim-gate.sh' do
     expect(status.exitstatus).to eq 0
   end
 
+  # --- hook-lane-quote-fix: quoted TYRION_LANE prefixes resolve like unquoted ---
+  # \S+ used to capture the surrounding quote characters, so a lane written
+  # `TYRION_LANE="lane-test"` resolved to `"lane-test"` (quotes included), missed
+  # the owning lane, and false-blocked. The three quoted forms must now behave
+  # exactly like the unquoted prefix already asserted above.
+  it 'exits 0 when a double-quoted TYRION_LANE prefix names the owning lane' do
+    seed_project(started_by: LANE)
+    _out, _err, status = run_hook(
+      command: %(TYRION_LANE="#{LANE}" ruby bin/tyrion note story-a progress 'x'),
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 0
+  end
+
+  it 'exits 0 when a single-quoted TYRION_LANE prefix names the owning lane' do
+    seed_project(started_by: LANE)
+    _out, _err, status = run_hook(
+      command: %(TYRION_LANE='#{LANE}' ruby bin/tyrion note story-a progress 'x'),
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 0
+  end
+
+  # Glued separator: `export VAR="lane"; cmd` — the close quote is followed by a
+  # `;`, so \S+ captures `"lane-test";`. The strip must find the matching close
+  # quote and drop everything after it.
+  it 'exits 0 when an export + double-quoted TYRION_LANE prefix names the owning lane' do
+    seed_project(started_by: LANE)
+    _out, _err, status = run_hook(
+      command: %(export TYRION_LANE="#{LANE}"; ruby bin/tyrion note story-a progress 'x'),
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 0
+  end
+
+  # Regression guard: a quoted prefix must not become a skeleton key. A
+  # double-quoted lane that does NOT own the story still blocks — the fix strips
+  # quotes, it does not weaken ownership matching.
+  it 'exits 2 when a double-quoted TYRION_LANE prefix names a non-owning lane' do
+    seed_project(started_by: 'other-lane')
+    _out, _err, status = run_hook(
+      command: %(TYRION_LANE="#{LANE}" ruby bin/tyrion note story-a progress 'x'),
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 2
+  end
+
   it 'exits 0 for a non-tyrion Bash command regardless of lane state' do
     seed_project # pending story, no in_progress
     _out, _err, status = run_hook(
