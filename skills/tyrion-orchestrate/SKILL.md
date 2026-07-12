@@ -13,7 +13,7 @@ Fan out one Claude subagent per ready story, collect 1-2 sentence summaries, adv
 
 - You have a Tyrion epic with a wave plan (`tyrion wave show` shows waves)
 - You want to run multiple stories in parallel without babysitting each one
-- Stories in the current wave don't have overlapping file conflicts (or each runs in its own worktree)
+- Overlapping files within a wave are fine — every lane runs in its own git worktree on its own `story/<slug>` branch (standard since the worktree-lanes epic), so lanes cannot sweep each other's uncommitted work, and enforcement-config changes (hooks, settings) stay lane-local until merged
 
 ## Protocol
 
@@ -70,15 +70,31 @@ tyrion dispatch story-slug-B --to lane-2
 
 If `tyrion dispatch` returns "Story is not pending" for a slug that `wave next` returned, the story was orphaned `in_progress` from a prior dispatch. Treat it as a stuck subagent (see **Stuck story recovery** below).
 
+#### 2b-2. Create and seed one worktree per lane
+
+Every lane gets its own git worktree on its own branch. From the main checkout, per story:
+
+```bash
+# Fail fast if the main checkout isn't a seedable tyrion root:
+test -f .tyrion/marker && test -f .tyrion/active-project || { echo "not a seedable tyrion root — aborting dispatch"; }
+
+git worktree add .worktrees/lane-<N> -b story/<slug> main
+mkdir -p .worktrees/lane-<N>/.tyrion
+cp .tyrion/marker .tyrion/active-project .worktrees/lane-<N>/.tyrion/
+cd .worktrees/lane-<N> && TYRION_LANE=lane-<N> tyrion epic activate <epic-slug>
+```
+
+Why the seed matters: `.tyrion/` is gitignored, so a fresh worktree checkout has none — and `Repo.tyrion_root` looks for the `.tyrion/marker` FILE, walking upward from cwd. Without the seed, lane state silently lands in the main checkout's `.tyrion/lanes/` (breaking the `tyrion worktrees` dashboard mapping and per-lane git resolution). With it, the worktree is a real tyrion root: lane state is worktree-local, `tyrion worktrees` maps each lane to its own tree, and git helpers (dirty count, commit capture) resolve to the lane's branch. The epic activation at seed time writes the lane-scoped active-epic under the worktree's own `.tyrion/lanes/<hash>/`, so the subagent's first `tyrion start` just works.
+
 #### 2c. Dispatch subagents — one per story, all in parallel
 
 Send a **single message** with N Agent tool calls (one per story). For wide waves (> 8 stories), chunk into batches of 6-8 to avoid saturating the concurrency pool.
 
 Each subagent receives:
-- The **active epic slug** (captured in step 1) — they must activate it immediately
+- Their **worktree path** (`.worktrees/lane-<N>` under the main checkout) — every command runs there via a `cd` prefix; the epic is already activated for their lane (seeded in 2b-2)
 - Their **lane identity**: `TYRION_LANE=lane-N` inlined on every tyrion command
 - The **pocket briefing** for their story (criteria block from step 2a output)
-- Implementation instructions (see template below)
+- Implementation instructions (see template below) — including the READY contract: subagents do NOT close their own story; the orchestrator closes after merge
 
 **Return constraint**: subagents must return only a 1-2 sentence summary. No file contents, test output, or large code blocks. Context must not flow back through the main session.
 
@@ -88,18 +104,13 @@ Each subagent receives:
 
 > You are implementing Tyrion story `<slug>` in a parallel orchestration session.
 >
-> **Lane identity**: Your lane is `lane-<N>`. Prefix EVERY tyrion command with `TYRION_LANE=lane-<N>`:
-> ```bash
-> TYRION_LANE=lane-<N> tyrion epic activate <epic-slug>
-> TYRION_LANE=lane-<N> tyrion start <slug>
-> # and so on for every tyrion command
-> ```
-> Do NOT use `export` — it will not persist across tool calls.
+> **Your worktree**: `<main-checkout>/.worktrees/lane-<N>` — an isolated git worktree on branch `story/<slug>`. ALL work happens there. Prefix EVERY command (tyrion, git, tests, file inspection) with `cd <main-checkout>/.worktrees/lane-<N> && `, and use paths relative to the worktree. Never edit files in the main checkout.
 >
-> **Step 1 — activate epic and claim:**
+> **Lane identity**: Your lane is `lane-<N>`. Prefix EVERY tyrion command with `TYRION_LANE=lane-<N>` (unquoted). Do NOT use `export` — it will not persist across tool calls.
+>
+> **Step 1 — claim** (your epic is already activated for this lane):
 > ```bash
-> TYRION_LANE=lane-<N> tyrion epic activate <epic-slug>
-> TYRION_LANE=lane-<N> tyrion start <slug>
+> cd <main-checkout>/.worktrees/lane-<N> && TYRION_LANE=lane-<N> tyrion start <slug>
 > ```
 >
 > **Your pocket briefing:**
@@ -112,36 +123,79 @@ Each subagent receives:
 > ```
 >
 > **Step 2 — implement:**
-> Invoke `/tyrion-implement <slug> --dark-factory` — follow the full protocol (orient, plan, implement, pre-push gate, self-run UAT recorded as a uat gate, close). Dark-factory mode is required: you have no human to answer prompts. Commit your work BEFORE `tyrion done` so the auto commit-capture includes it. Do NOT pre-claim a next story — the orchestrator manages waves.
-> All tyrion commands inside that skill must also carry `TYRION_LANE=lane-<N>`.
+> Invoke `/tyrion-implement <slug> --dark-factory` — follow the full protocol (orient, plan, implement, pre-push gate, self-run UAT recorded as a uat gate) **with one override: do NOT run `tyrion done` and do NOT pre-claim a next story.** The orchestrator merges your branch and closes the story — a close before merge would record work that main cannot yet see. Commit your work on your branch as you go.
+> All commands inside that skill must also carry the `cd` prefix and `TYRION_LANE=lane-<N>`.
 >
-> **Step 3 — return your result:**
+> **Step 3 — hand off for merge** (after your uat gate is recorded as pass):
+> ```bash
+> cd <main-checkout>/.worktrees/lane-<N> && TYRION_LANE=lane-<N> tyrion commits <slug>
+> cd <main-checkout>/.worktrees/lane-<N> && TYRION_LANE=lane-<N> tyrion gate <slug> merge-ready pass --detail "awaiting orchestrator merge"
+> ```
+> The commits capture is branch-scoped (runs from your worktree, pre-merge) — it is the authoritative commit record for your story. The merge-ready gate makes your readiness a ledger fact.
+>
+> **Step 4 — return your result:**
 >
 > Return EXACTLY one of:
-> - `DONE: <slug> — <1-2 sentence summary of what was built and any key decision>`
+> - `READY: <slug> — <1-2 sentence summary of what was built and any key decision>`
 > - `BLOCKED: <slug> — <1-2 sentence description of what blocks it>`
 >
 > Nothing else. No file contents. No test output. No long explanations.
 
 ---
 
-#### 2d. Collect summaries and record progress
+#### 2d. MERGE PHASE — merge, validate, close, clean up (strictly sequential)
 
-After all subagents in the wave complete, for each result:
+After all subagents in the wave return, process each `READY: <slug>` **one at a time** — never merge two lanes concurrently. For each, from the main checkout:
 
-For `DONE: <slug> — <summary>`:
+**1. Merge the lane branch:**
 ```bash
-tyrion note <slug> progress "orchestrated: <summary>"
+git merge --no-ff story/<slug> -m "merge: <slug> (lane-<N>)"
+```
+
+On **conflict**: abort and block — the wave is over:
+```bash
+git merge --abort
+tyrion block <slug> "merge conflict with earlier-merged work: <conflicting files>"
+# keep the worktree at .worktrees/lane-<N> for human inspection — do NOT remove it
+```
+
+**2. Integration validation** — the lane's gates ran against dispatch-time main; verify the *merged* result:
+```bash
+bundle exec rspec   # or the project's suite command
+# pass:
+tyrion gate <slug> integration pass --detail "<verbatim: suite command + summary line>"
+# fail:
+tyrion gate <slug> integration fail --detail "<verbatim failures>"
+git reset --hard ORIG_HEAD   # safe: merges are sequential; orchestrator owns main during this phase
+tyrion block <slug> "integration failure after merge: <summary> — worktree kept at .worktrees/lane-<N>"
+# keep the worktree; full-stop the wave
+```
+
+**3. Close — from INSIDE the lane worktree** (lane-local state must resolve; the lane token preserves `completed_by` provenance):
+```bash
+cd .worktrees/lane-<N> && TYRION_LANE=lane-<N> tyrion done <slug> "<summary>" --require-gates=pre-push,uat,merge-ready,integration
+```
+The pre-merge branch-scoped commit capture (subagent step 3) is authoritative; `tyrion done` skips auto-capture when a commit note already exists, so the post-merge time window never pollutes the record.
+
+**4. Clean up the merged lane** — the seeded `.tyrion/` is protocol-created, not work; exclude it from the dirt check:
+```bash
+git -C .worktrees/lane-<N> status --porcelain | grep -v '^?? .tyrion/'   # must output nothing
+# clean (only the seed remains — --force is required because the seed is untracked
+# in repos where .tyrion/ isn't gitignored; it is always safe to delete post-close):
+git worktree remove --force .worktrees/lane-<N> && git branch -d story/<slug>
+# real dirt (anything the grep let through):
+tyrion note <slug> progress "worktree kept: .worktrees/lane-<N> has leftover files: <list> — remove manually after inspection"
 ```
 
 For `BLOCKED: <slug> — <reason>`:
 ```bash
 tyrion note <slug> blocker "reported by subagent: <reason>"
+# keep the worktree for inspection
 ```
 
-For any result that is **neither `DONE:` nor `BLOCKED:`**:
+For any result that is **neither `READY:` nor `BLOCKED:`** — including a bare completion/idle with no message: **read the ledger before assuming failure** (`tyrion show <slug>` — a story with uat + merge-ready gates recorded is READY regardless of what the subagent said). If the ledger shows it isn't ready:
 ```bash
-tyrion note <slug> blocker "subagent did not return expected format — treat as blocked; manual review required"
+tyrion note <slug> blocker "subagent did not return expected format and ledger shows no merge-ready gate — treat as blocked; manual review required"
 ```
 
 #### 2e. Check status and surface blocks
@@ -200,14 +254,20 @@ tyrion note <slug> recovery "orchestration session found story stuck in_progress
 # wave next will return it again. Simply re-dispatch.
 ```
 
+**Worktree recovery:** a stuck lane's worktree at `.worktrees/lane-<N>` holds its uncommitted state — inspect before removing. A story with `merge-ready` + `uat` gates recorded but still `in_progress` crashed between handoff and merge: run the 2d merge phase for it manually. Stale worktrees from dead lanes: `git worktree list` + `tyrion worktrees` show them; after salvaging any work, `git worktree remove --force .worktrees/lane-<N>` and delete the `story/<slug>` branch if unmerged work is confirmed disposable.
+
 ## Constraints
 
 | Constraint | Why |
 |---|---|
-| Activate epic before tyrion start | Fresh subagent lanes have no per-lane active-epic file; start fails with "No active epic" without it |
+| Seed `.tyrion/marker` + active-project into every worktree, activate the epic at seed time | `.tyrion/` is gitignored; without the marker FILE, `Repo.tyrion_root` walks up to the main checkout and lane state lands in the wrong tree (breaks `tyrion worktrees` mapping and per-lane git resolution) |
+| Subagents never run `tyrion done` | Close happens after merge — closing pre-merge records work main cannot see. Readiness = the `merge-ready` gate, a ledger fact |
+| Merges are strictly sequential, integration-validated, from the main checkout | Parallel merges race; a clean textual merge can still be behaviorally broken against earlier-merged siblings — the integration gate catches it, and `git reset --hard ORIG_HEAD` is only safe when nothing else advances main |
+| Close from inside the lane worktree with the lane's token | `resolve_project_epic` needs the lane-local active-epic; the token preserves `completed_by` provenance |
+| Pre-merge `tyrion commits` from the worktree is the authoritative capture | Post-merge time-window capture on main sweeps sibling merges + the merge commit; branch-scoped capture cannot |
+| Keep the worktree on any block (conflict, integration failure, subagent blocker) | It is the human's forensic evidence; only merged-and-closed lanes get removed |
 | Inline `TYRION_LANE=` on every command | Env exports do not persist across separate Bash tool calls; inline is the only reliable form |
 | Termination = all stories done (not just wave-next empty) | Crashed subagent leaves story in_progress with no pending siblings; wave-next returns empty but epic is not done |
-| Pre-assign before dispatch | Makes dispatch visible in tyrion status during the wave; note that start overwrites claimed_by with the real token |
 | Subagents return summaries only | Main session context stays lean; large context collapses orchestration |
 | Blocked = full stop | Dispatching the next wave on top of a blocked story creates unresolvable dependency tangles |
 | Chunk wide waves (> 8 stories) | Avoid saturating the Agent concurrency pool — batch 6-8 per dispatch |

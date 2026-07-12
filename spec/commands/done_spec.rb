@@ -291,3 +291,53 @@ RSpec.describe 'tyrion done close warnings' do
     end
   end
 end
+
+# Close-time auto-capture defers to an existing commit note: a pre-merge
+# branch-scoped `tyrion commits` capture (worktree-lanes orchestration) is
+# authoritative — cmd_done must not stack a second note whose post-merge time
+# window would sweep sibling merges and merge commits.
+RSpec.describe 'tyrion done commit-capture skip' do
+  let(:ctx)   { tyrion_worktree(epic_slug: 'my-epic') }
+  let(:store) { ctx.store }
+  let(:epic)  { ctx.epic }
+
+  before do
+    allow(Tyrion::Commands).to receive(:current_lane_token).and_return(nil)
+    allow(Tyrion::Repo).to receive(:clear_active_story)
+    allow(Tyrion::Repo).to receive(:commits_since).and_return(['fffffff post-merge noise'])
+  end
+
+  def create_story(slug)
+    store.create_story(epic_id: epic['id'], slug: slug, title: slug)
+    store.find_story(epic['id'], slug)
+  end
+
+  def commit_notes(slug)
+    story = store.find_story(epic['id'], slug)
+    store.notes_for_story(story['id'], limit: 100).select { |n| n['kind'] == 'commit' }
+  end
+
+  it 'skips auto-capture when a commit note already exists' do
+    create_story('pre-captured')
+    story = store.find_story(epic['id'], 'pre-captured')
+    store.add_note(story['id'], 'commit', "commits since claim:\nabc1234 lane work",
+                   metadata: JSON.dump({ 'shas' => ['abc1234'] }))
+
+    capture_io { Tyrion::Commands.cmd_done(['pre-captured', 'closed'], store) }
+
+    notes = commit_notes('pre-captured')
+    expect(notes.length).to eq 1
+    expect(notes.first['body']).to include('abc1234 lane work')
+    expect(notes.first['body']).not_to include('post-merge noise')
+  end
+
+  it 'still auto-captures when no commit note exists' do
+    create_story('uncaptured')
+
+    capture_io { Tyrion::Commands.cmd_done(['uncaptured', 'closed'], store) }
+
+    notes = commit_notes('uncaptured')
+    expect(notes.length).to eq 1
+    expect(notes.first['body']).to include('post-merge noise')
+  end
+end

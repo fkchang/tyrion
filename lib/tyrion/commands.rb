@@ -1928,7 +1928,11 @@ module Tyrion
       # Auto-capture the commit record before sealing the story. Never let a git
       # hiccup block the close — write_commit_note is raise-free and returns nil
       # when git is unavailable, in which case we skip silently (with a note).
-      if (since = commit_capture_since(story))
+      # An existing commit note (e.g. a pre-merge branch-scoped `tyrion commits`
+      # capture from a lane worktree) is authoritative — don't stack a second
+      # note whose time window would sweep sibling merges and merge commits.
+      has_commit_note = store.gate_notes_for_story(story['id']).any? { |n| n['kind'] == 'commit' }
+      if !has_commit_note && (since = commit_capture_since(story))
         puts Output.dim("(commit capture skipped — git unavailable)") if write_commit_note(store, story, since).nil?
       end
 
