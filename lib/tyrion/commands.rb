@@ -1630,11 +1630,34 @@ module Tyrion
       else
         shas = commits.map(&sha_of)
         body = (["commits since #{since}:"] + commits).join("\n")
+        # Shared-branch honesty (dogfood 2026-07-10 run-3): commits_since sweeps
+        # in siblings' in-flight commits, and the dedup above only drops SHAs a
+        # sibling has ALREADY recorded — a not-yet-closed sibling's commits still
+        # land here. When other stories in this project are in_progress at capture
+        # time, caveat the list. Raise-free: a query hiccup skips the caveat.
+        if (caveat = shared_branch_caveat(store, story))
+          body = "#{body}\n#{caveat}"
+        end
         metadata = { 'shas' => shas, 'count' => shas.length }
       end
 
       store.add_note(story['id'], 'commit', body, metadata: JSON.dump(metadata))
       commits.length
+    end
+
+    # Caveat line for a commit note captured while sibling stories are live on the
+    # same branch, or nil when this story is the sole in_progress story in its
+    # project. Byte-identical-to-legacy path is nil (no siblings). Raise-free.
+    def self.shared_branch_caveat(store, story)
+      n = begin
+        store.concurrent_in_progress_count(story['id'])
+      rescue StandardError
+        0
+      end
+      return nil if n.nil? || n.zero?
+
+      noun = n == 1 ? 'story' : 'stories'
+      "⚠ shared-branch capture: #{n} concurrent in_progress #{noun} — some commits may belong to another lane"
     end
 
     # ── context ────────────────────────────────────────────────────────────

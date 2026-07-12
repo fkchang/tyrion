@@ -158,6 +158,52 @@ RSpec.describe 'tyrion commits' do
     end
   end
 
+  describe 'shared-branch caveat (concurrent in_progress siblings)' do
+    def started_sibling(slug)
+      store.create_story(epic_id: ctx.epic['id'], slug: slug, title: slug)
+      s = store.find_story(ctx.epic['id'], slug)
+      # Distinct lane token so the partial-unique in_progress-per-lane index
+      # permits a second live story in the same epic (the parallel-lane case).
+      store.start_story(s['id'], claimed_by: "lane-#{slug}")
+      s
+    end
+
+    it 'appends a caveat naming the concurrent story count when a sibling is in_progress' do
+      started_sibling('sibling-a')
+      stub_repo(commits_since: ['ghi9012 mine: new'])
+      Tyrion::Commands.cmd_commits(['test-story'], store)
+      body = commit_notes.last['body']
+      expect(body).to include('ghi9012 mine: new')
+      expect(body).to match(/⚠ shared-branch capture: 1 concurrent in_progress story — some commits may belong to another lane/)
+    end
+
+    it 'pluralizes the count with two or more in_progress siblings' do
+      started_sibling('sibling-a')
+      started_sibling('sibling-b')
+      stub_repo(commits_since: ['ghi9012 mine: new'])
+      Tyrion::Commands.cmd_commits(['test-story'], store)
+      expect(commit_notes.last['body']).to match(/2 concurrent in_progress stories/)
+    end
+
+    it 'produces a caveat-free note (byte-identical to legacy) with no concurrent siblings' do
+      stub_repo(commits_since: ['ghi9012 mine: new'])
+      Tyrion::Commands.cmd_commits(['test-story'], store)
+      expect(commit_notes.last['body']).to eq("commits since #{story['started_at']}:\nghi9012 mine: new")
+    end
+
+    it 'does not caveat when the note has no commits even if siblings are in_progress' do
+      started_sibling('sibling-a')
+      stub_repo(commits_since: [])
+      Tyrion::Commands.cmd_commits(['test-story'], store)
+      expect(commit_notes.last['body']).to eq('no commits — no changes required')
+    end
+
+    it 'excludes the closing story itself from the concurrent count' do
+      # test-story is in_progress; with no other in_progress story the count is 0.
+      expect(store.concurrent_in_progress_count(story['id'])).to eq(0)
+    end
+  end
+
   describe 'Store#commit_shas_in_other_stories' do
     it 'reads short SHAs from another story\'s commit note metadata' do
       store.add_note(sibling_id, 'commit', 'commits since t:', metadata: JSON.dump('shas' => %w[aaa1111 bbb2222], 'count' => 2))

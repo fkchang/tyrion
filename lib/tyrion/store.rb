@@ -567,6 +567,27 @@ module Tyrion
       rows.flat_map { |row| commit_shas_from_note(row) }.uniq
     end
 
+    # Count of OTHER in_progress stories in the same PROJECT as story_id
+    # (excludes the story itself). At commit-capture time the closing story is
+    # still in_progress, so a positive count means live siblings share the branch
+    # and their in-flight commits may bleed into this capture (dogfood 2026-07-10
+    # run-3 "first-closer commit bleed").
+    def concurrent_in_progress_count(story_id)
+      with_db do |db|
+        db.get_first_value(<<~SQL, [story_id, story_id])
+          SELECT COUNT(*) FROM stories s
+          JOIN epics e ON s.epic_id = e.id
+          WHERE e.project_id = (
+            SELECT e2.project_id FROM stories s2
+            JOIN epics e2 ON s2.epic_id = e2.id
+            WHERE s2.id = ?
+          )
+            AND s.status = 'in_progress'
+            AND s.id != ?
+        SQL
+      end
+    end
+
     def done_stories_with_followup_notes(project_id)
       with_db do |db|
         db.execute(<<~SQL, [project_id])
