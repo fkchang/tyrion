@@ -355,6 +355,66 @@ RSpec.describe 'hooks/claim-gate.sh' do
     expect(status.exitstatus).to eq 2
   end
 
+  # --- hook-assignment-quote-regex: a quote in an env-assignment value ends the ---
+  # prefix chain. The value pattern used to be `\S*`, which swallowed quote
+  # characters, so a heredoc line like `J1='… tyrion done …'` (F3, dogfood
+  # 2026-07-10 test 4b) matched as env-assignment prefix + command-position
+  # invocation and false-blocked the orchestrator's own venue setup. The value
+  # now stops at a quote, so quoted text is not command position — while genuine
+  # unquoted `VAR=value` prefixes still gate exactly as before.
+
+  # Criterion 1: the assignment-swallowed quote no longer reads as command
+  # position. Lane is unclaimed, so a REAL gated `tyrion done` here would block —
+  # exit 0 proves the quoted value did NOT match the gate.
+  it 'exits 0 when a gated verb sits inside a single-quoted assignment value (F3)' do
+    seed_project # pending, unclaimed — a real tyrion done would exit 2
+    _out, _err, status = run_hook(
+      command: %(J1='setup harness tyrion done story-a here'),
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 0
+  end
+
+  it 'exits 0 when a gated verb sits inside a double-quoted assignment value (F3)' do
+    seed_project # pending, unclaimed
+    _out, _err, status = run_hook(
+      command: %(J1="setup harness tyrion done story-a here"),
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 0
+  end
+
+  it 'exits 0 for a single-quoted JSON assignment value embedding a gated command' do
+    seed_project # pending, unclaimed
+    _out, _err, status = run_hook(
+      command: %(SETUP='{"cmd": "tyrion done story-a"}'),
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 0
+  end
+
+  # Criterion 2: genuine gated invocations with unquoted VAR=value prefixes still
+  # match. Unclaimed lane, so gating means exit 2. A single ordinary assignment
+  # and a multi-assignment chain both still resolve to command position.
+  it 'exits 2 for a gated command behind an unquoted single VAR=value prefix' do
+    seed_project # pending, unclaimed
+    _out, err, status = run_hook(
+      command: 'FOO=bar tyrion done story-a summary',
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 2
+    expect(err).to match(/tyrion start/)
+  end
+
+  it 'exits 2 for a gated command behind an unquoted multi VAR=value prefix' do
+    seed_project # pending, unclaimed
+    _out, _err, status = run_hook(
+      command: 'FOO=bar BAZ=qux tyrion done story-a summary',
+      cwd: @dir, db_path: @db
+    )
+    expect(status.exitstatus).to eq 2
+  end
+
   # --- hook-armed-check: `--check` reports whether the gate is actually armed ---
   # from the current directory (F2, dogfood 2026-07-10 test 4b: a foreign install
   # where require 'tyrion' can't resolve silently fail-opens, so an install that

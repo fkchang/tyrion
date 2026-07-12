@@ -107,7 +107,14 @@ cmd = data.dig('tool_input', 'command').to_s
 gate_re = %r{
   (?:^|[\n;&|])            # start of a command segment
   \s*
-  (?:\w+=\S*\s+)*          # optional VAR=value env assignments
+  # optional VAR=value env assignments. The value is a balanced single- or
+  # double-quoted string, or a bare unquoted token — an OPEN quote (a heredoc
+  # value like J1='… tyrion done …') no longer swallows only its first word and
+  # leaves the rest reading as command position (F3). A balanced quoted value
+  # (TYRION_LANE="lane") still lets the prefix chain continue to a real command.
+  # Quotes are 34.chr / 39.chr so this embedded Ruby stays quote-balanced for the
+  # bash 3.2 command substitution.
+  (?:\w+=(?:#{39.chr}[^#{39.chr}]*#{39.chr}|#{34.chr}[^#{34.chr}]*#{34.chr}|[^\s#{39.chr}#{34.chr}]*)\s+)*
   (?:[A-Za-z0-9_.]+\s+)*   # optional plain interpreter words (ruby, bundle, exec)
   (?:\S*/)?                # optional path prefix on the executable (bin/, /path/bin/)
   tyrion\s+
