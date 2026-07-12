@@ -182,3 +182,32 @@ New findings, because every run buys the next list:
   presence is mechanical; gate coverage is still honor-system. A prose patch
   (explicit gate-name instruction in later dispatch prompts) held for lane-13
   — the mechanical fix would check for the protocol pair at close.
+
+## Run 4 addendum: enforcement-polish (2026-07-12)
+
+Fourth orchestrated run, 4/4 (lanes 14-17), fully serial by design (three
+stories share commands.rb; hook mutation pinned last). One workflow drift
+found at close: waves 3-4 committed to an unprompted `story/` branch while
+waves 1-2 used main (fast-forwarded back; branch strategy is worktree-lanes
+design input). No ledger violations. Landed:
+`tyrion done --require-gates=<names>` (dark-factory close now passes
+`pre-push,uat`, closing the gate-name coverage soft spot — and waves 2-4
+closed under the mechanism wave 1 built), shared-branch capture caveat
+(first-closer bleed now announces itself), `tyrion list <epic>` honors its
+argument (oldest filed bug, day one), and the F3 assignment-swallowed-quote
+regex fix. Suite 677/0; `--check` printed `armed` at close.
+
+Shaping-time finding #18 (from the day before, recorded here): the claim
+gate correctly blocks `tyrion note <slug> plan` on a PENDING story from an
+unclaimed lane — but that is exactly what the shaping protocol does with
+RIGOR plan notes post-import. Legitimate-use conflict; candidate fix is
+allowing plan-kind notes on pending stories, or shaping writing RIGOR only
+into the feature file (the current workaround).
+
+Micro-artifact: one story's Gates section rendered a duplicate empty
+"commits since" line — likely a second empty commit note at close; harmless,
+unfiled.
+
+Remaining open: `worktree-lanes` (attended + Codex-vetted — the root fix for
+all shared-branch findings), and the escalation dials (warnings → refusals)
+left deliberately loose.
