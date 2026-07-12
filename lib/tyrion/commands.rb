@@ -659,8 +659,21 @@ module Tyrion
     # ── list ───────────────────────────────────────────────────────────────
 
     def self.cmd_list(args, store)
-      status_filter = args.include?('--status') ? args[args.index('--status') + 1] : nil
-      _project, epic = resolve_project_epic(store)
+      status_idx = args.index('--status')
+      status_filter = status_idx ? args[status_idx + 1] : nil
+      # First positional arg (not a flag, not the --status value) names an epic to list.
+      epic_slug = args.each_with_index.find { |a, i|
+        !a.start_with?('--') && !(status_idx && i == status_idx + 1)
+      }&.first
+
+      epic =
+        if epic_slug
+          project = resolve_project(store)
+          store.find_epic(project['id'], epic_slug) || die("Epic not found: #{epic_slug}")
+        else
+          resolve_project_epic(store).last
+        end
+
       stories = store.stories_for_epic(epic['id'])
       stories = stories.select { |s| s['status'] == status_filter } if status_filter
       stories.each do |s|
