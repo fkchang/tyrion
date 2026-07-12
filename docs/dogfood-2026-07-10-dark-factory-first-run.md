@@ -211,3 +211,32 @@ unfiled.
 Remaining open: `worktree-lanes` (attended + Codex-vetted — the root fix for
 all shared-branch findings), and the escalation dials (warnings → refusals)
 left deliberately loose.
+
+## Run 5 addendum: worktree-lanes design session + live dry run (2026-07-12)
+
+The one attended story. Codex vet arc: RETHINK (4 criticals) → SIMPLIFY (2
+fixes) → SHIP IT. Materially better design out of the vet: the marker-file
+seed bug would have shipped broken (MARKER is `.tyrion/marker`, a file — the
+no-seed and dir-only-seed variants both silently misroute lane state);
+readiness became a ledger fact (`merge-ready` gate) instead of prose; an
+`integration` gate now validates the merged combination, not just the lane's
+dispatch-time snapshot. Close-after-merge means "done in ledger" ⇔
+"reachable from main" for orchestrated stories.
+
+Live 2-story dry run (scratch repo, real subagents, seeded worktrees): 5/5
+criteria, and the dry run caught one protocol gap live — the seeded
+`.tyrion/` itself trips the cleanup porcelain check and `git worktree remove`
+in repos where `.tyrion/` isn't gitignored; fixed in the skill (seed-aware
+grep + remove --force with rationale). Supporting mechanisms verified in the
+same run: branch-scoped pre-merge capture recorded exactly the lane's own
+commit; the close-time capture-skip held; the shared-branch concurrency
+caveat fired honestly.
+
+Session micro-findings: dashboard shows dispatched-but-unadopted lanes as
+orphans until `tyrion start` re-stamps the token (expected, documented);
+the claim-gate hook cannot resolve shell-variable lane prefixes
+(`TYRION_LANE=$L` reads as literal `$L`) — always inline the literal token.
+
+**Campaign status: complete.** Every finding from the 2026-07-09 retro and
+all five runs now has either a shipped mechanism or a documented, deliberate
+deferral.
