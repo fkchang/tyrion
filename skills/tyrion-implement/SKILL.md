@@ -508,7 +508,13 @@ tyrion gate <slug> uat pass --detail "<per-check ✅ results, one line each>"
 tyrion gate <slug> uat fail --detail "<per-check ✅/❌ results — ❌ lines say what was seen instead>"
 ```
 
-3. All checks ✅ → proceed to `tyrion done` below, then claim the next pending story with `tyrion start <next-slug>` automatically — no pre-claim question.
+3. All checks ✅ → close with gate coverage enforced, then claim the next pending story with `tyrion start <next-slug>` automatically — no pre-claim question:
+
+```bash
+tyrion done <slug> "<completion summary>" --require-gates=pre-push,uat
+```
+
+   `--require-gates=pre-push,uat` refuses the close (exit 1) unless both the `pre-push` gate (Step 8) and the `uat` gate (step 2 above) have a recorded note — gate coverage is otherwise honor-system, so a dark-factory run that skipped or misnamed either gate must not silently seal. Use the generic `tyrion done` form below only in interactive modes where a human ran the gates.
 4. Any check ❌ → fix and re-run UAT (recording each run), or if unfixable, `tyrion note <slug> blocker` + `tyrion block` and stop. Never close a story whose latest uat gate is fail.
 
 Everything below that is phrased as a question to the user ("Want me to run...?", "Pre-claim...?", "re-run any of the above?") is skipped in dark-factory mode — the answers are hardwired to: run everything, report results, pre-claim on success.

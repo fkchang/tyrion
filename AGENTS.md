@@ -33,9 +33,12 @@ Every work session on a story follows this sequence:
    with concrete evidence (command output, file path, test name). Use
    **`tyrion uncheck <slug> <position>`** to revert if evidence turns out
    wrong.
-6. **`tyrion done <slug> "summary" [--force]`** — complete the story once all
-   criteria are checked. `--force` overrides unmet-criteria protection; avoid
-   it unless you have a documented reason (record it in a note first).
+6. **`tyrion done <slug> "summary" [--force] [--require-gates=<n1,n2>]`** —
+   complete the story once all criteria are checked. `--force` overrides
+   unmet-criteria protection; avoid it unless you have a documented reason
+   (record it in a note first). `--require-gates=pre-push,uat` refuses the
+   close (exit 1) unless each named gate has at least one recorded note —
+   gate coverage is otherwise honor-system; the dark-factory close uses this.
 
 Supporting commands used within that loop:
 - **`tyrion context <slug> "text"`** — update `current_context` (what state
@@ -153,7 +156,7 @@ tyrion context <slug> "text"               Update current_context (mutating)
 tyrion next <slug> "text"                  Update next_action (mutating)
 tyrion check <slug> <position> "evidence"  Mark criterion met (mutating)
 tyrion uncheck <slug> <position>           Revert a checked criterion (mutating)
-tyrion done <slug> "summary" [--force]     Complete story (mutating)
+tyrion done <slug> "summary" [--force] [--require-gates=<n1,n2>]  Complete story; --require-gates refuses unless each named gate has a note (mutating)
 tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story (mutating)
 tyrion unblock <slug>                      Unblock a story (mutating)
 tyrion project activate <slug>             Sequencing boundary (mutating)

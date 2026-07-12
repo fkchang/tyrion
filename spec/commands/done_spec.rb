@@ -113,6 +113,115 @@ RSpec.describe 'tyrion done gate refusal' do
   end
 end
 
+# --require-gates=<names> enforces gate coverage: each named gate must have at
+# least one recorded gate note, else the close refuses (exit 1). This closes the
+# honor-system hole where a lane records a differently-named gate (e.g. 'rspec'
+# instead of 'pre-push') and the failing-gate/zero-gate checks both pass it.
+RSpec.describe 'tyrion done --require-gates coverage' do
+  let(:ctx)   { tyrion_worktree(epic_slug: 'my-epic') }
+  let(:store) { ctx.store }
+  let(:epic)  { ctx.epic }
+
+  before do
+    allow(Tyrion::Commands).to receive(:current_lane_token).and_return(nil)
+    allow(Tyrion::Repo).to receive(:clear_active_story)
+  end
+
+  def create_story(slug)
+    store.create_story(epic_id: epic['id'], slug: slug, title: slug)
+    store.find_story(epic['id'], slug)
+  end
+
+  def gate(slug, name, result)
+    capture_io { Tyrion::Commands.cmd_gate([slug, name, result], store) }
+  end
+
+  def status_of(slug)
+    store.find_story(epic['id'], slug)['status']
+  end
+
+  describe 'refuses with exit 1 and names each missing gate' do
+    before do
+      create_story('partial')
+      gate('partial', 'pre-push', 'pass') # uat is missing
+    end
+
+    it 'exits 1 without closing the story' do
+      expect { Tyrion::Commands.cmd_done(['partial', 'summary', '--require-gates=pre-push,uat'], store) }
+        .to raise_error(SystemExit).and output(/Refusing to close partial/).to_stderr
+      expect(status_of('partial')).not_to eq('done')
+    end
+
+    it 'names the missing gate on stderr and not the present one' do
+      _out, err = capture_io do
+        expect { Tyrion::Commands.cmd_done(['partial', 'summary', '--require-gates=pre-push,uat'], store) }
+          .to raise_error(SystemExit)
+      end
+      expect(err).to match(/uat/)
+      expect(err).to match(/no recorded note/)
+    end
+
+    it 'names every missing gate when several are absent' do
+      create_story('bare')
+      _out, err = capture_io do
+        expect { Tyrion::Commands.cmd_done(['bare', 'summary', '--require-gates=pre-push,uat'], store) }
+          .to raise_error(SystemExit)
+      end
+      expect(err).to match(/pre-push/)
+      expect(err).to match(/uat/)
+    end
+
+    it 'counts a mis-named gate as missing (the honor-system hole)' do
+      create_story('misnamed')
+      gate('misnamed', 'rspec', 'pass') # recorded a gate, just not the required name
+      _out, err = capture_io do
+        expect { Tyrion::Commands.cmd_done(['misnamed', 'summary', '--require-gates=pre-push,uat'], store) }
+          .to raise_error(SystemExit)
+      end
+      expect(err).to match(/pre-push/)
+      expect(err).to match(/uat/)
+    end
+  end
+
+  describe 'succeeds when every named gate has at least one recorded note' do
+    it 'closes when both required gates are recorded (pass)' do
+      create_story('covered')
+      gate('covered', 'pre-push', 'pass')
+      gate('covered', 'uat', 'pass')
+
+      expect { capture_io { Tyrion::Commands.cmd_done(['covered', 'shipped', '--require-gates=pre-push,uat'], store) } }
+        .not_to raise_error
+      expect(status_of('covered')).to eq('done')
+    end
+
+    it 'coverage is presence, not result — a recorded gate whose latest run recovered still counts' do
+      create_story('recovered')
+      gate('recovered', 'pre-push', 'fail')
+      gate('recovered', 'pre-push', 'pass')
+      gate('recovered', 'uat', 'pass')
+
+      expect { capture_io { Tyrion::Commands.cmd_done(['recovered', 'fixed', '--require-gates=pre-push,uat'], store) } }
+        .not_to raise_error
+      expect(status_of('recovered')).to eq('done')
+    end
+  end
+
+  describe 'without the flag, behavior is exactly as before' do
+    it 'closes a gate-less story with no coverage complaint' do
+      create_story('legacy')
+      out, = capture_io { Tyrion::Commands.cmd_done(['legacy', 'shipped'], store) }
+      expect(status_of('legacy')).to eq('done')
+      expect(out).not_to match(/require-gates/)
+    end
+
+    it 'still surfaces the pre-existing zero-gate warning' do
+      create_story('legacy2')
+      out, = capture_io { Tyrion::Commands.cmd_done(['legacy2', 'shipped'], store) }
+      expect(out).to match(/No gates recorded/)
+    end
+  end
+end
+
 # tyrion done honesty warnings: warn (never block) when the working tree is dirty
 # or the story has zero recorded gates, so an autonomous close can't silently drop
 # uncommitted work or leave no evidence trail (dogfood 2026-07-10 findings).

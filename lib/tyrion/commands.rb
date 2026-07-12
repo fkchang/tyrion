@@ -1818,6 +1818,7 @@ module Tyrion
       slug         = args.shift
       force        = args.delete('--force')
       from_checks  = args.delete('--from-checks')
+      required_gates = extract_require_gates!(args)
       summary      = args.join(' ')
 
       _project, epic = resolve_project_epic(store)
@@ -1869,6 +1870,21 @@ module Tyrion
           $stderr.puts ""
           $stderr.puts "Re-record the gate as pass, or override with:"
           $stderr.puts "  tyrion done #{slug} \"#{summary}\" --force"
+          exit 1
+        end
+      end
+
+      # Enforcement: --require-gates=<names> refuses the close unless each named
+      # gate has at least one recorded gate note — gate coverage is otherwise
+      # honor-system. The failing-gate refusal above already handles
+      # present-but-failing gates; this catches gates never recorded at all.
+      if required_gates.any?
+        missing = required_gates - recorded_gate_names(store, story['id'])
+        if missing.any?
+          $stderr.puts "Refusing to close #{slug}: --require-gates names #{missing.length} gate(s) with no recorded note:"
+          missing.each { |name| $stderr.puts "  ✗ #{name}" }
+          $stderr.puts ""
+          $stderr.puts "Record each with: tyrion gate #{slug} <name> pass|fail"
           exit 1
         end
       end
@@ -2683,6 +2699,27 @@ module Tyrion
            .select { |n| n['kind'] == 'gate' }
            .group_by { |n| gate_name_of(n) }
            .filter_map { |name, runs| name if gate_result_of(runs.last) == 'fail' }
+    end
+
+    # Distinct gate names that have at least one recorded gate note, regardless
+    # of pass/fail (coverage is presence, not result). Same
+    # gate_notes_for_story → kind='gate' → gate_name_of pipeline that
+    # latest_failing_gates uses, so the two stay in lockstep.
+    def self.recorded_gate_names(store, story_id)
+      store.gate_notes_for_story(story_id)
+           .select { |n| n['kind'] == 'gate' }
+           .map { |n| gate_name_of(n) }.uniq
+    end
+
+    # Parse --require-gates=<name1,name2> out of args (mutating), returning the
+    # list of required gate names. Absent flag → [] (no coverage requirement,
+    # identical to legacy behavior). Empty/whitespace names are dropped.
+    def self.extract_require_gates!(args)
+      flag = args.find { |a| a.start_with?('--require-gates=') }
+      return [] unless flag
+
+      args.delete(flag)
+      flag.split('=', 2)[1].to_s.split(',').map(&:strip).reject(&:empty?)
     end
 
     def self.gate_name_of(note)
