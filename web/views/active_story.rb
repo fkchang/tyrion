@@ -8,7 +8,7 @@ module Views
     NEXT_ACTION_MAX_LEN = 120
 
     def initialize(project:, epic:, story:, criteria:, notes:, stories:, disc_summary:,
-                   epic_switcher: [], git_branch: 'main', dirty_count: 0, flash: nil, active_tab: :active, project_slug: nil)
+                   epic_switcher: [], epic_scope_mode: :none, git_branch: 'main', dirty_count: 0, flash: nil, active_tab: :active, project_slug: nil)
       @project     = project
       @epic        = epic
       @story       = story
@@ -17,6 +17,7 @@ module Views
       @stories     = stories
       @disc_summary = disc_summary
       @epic_switcher = epic_switcher
+      @epic_scope_mode = epic_scope_mode
       @git_branch  = git_branch
       @dirty_count = dirty_count
       @flash       = flash
@@ -28,7 +29,7 @@ module Views
     def view_template
       render Views::Layout.new(
         project: @project, epic: @epic, stories: @stories,
-        disc_summary: @disc_summary, epic_switcher: @epic_switcher, active_tab: @active_tab,
+        disc_summary: @disc_summary, epic_switcher: @epic_switcher, epic_scope_mode: @epic_scope_mode, active_tab: @active_tab,
         git_branch: @git_branch, dirty_count: @dirty_count, project_slug: @project_slug
       ) do
         div(class: "main-content visible", id: "s-active") do

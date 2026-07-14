@@ -11,7 +11,8 @@ module Views
 
     def view_template
       render Views::Layout.new(project: @project, epic: @epic, stories: @stories,
-                                disc_summary: @disc_summary, epic_switcher: @epic_switcher, active_tab: :warroom,
+                                disc_summary: @disc_summary, epic_switcher: @epic_switcher,
+                                epic_scope_mode: :cross_epic, active_tab: :warroom,
                                 git_branch: @git_branch, dirty_count: @dirty_count,
                                 project_slug: @project_slug) do
         div(class: "main-content visible", id: "s-warroom") do

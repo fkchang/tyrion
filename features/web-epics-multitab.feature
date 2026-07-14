@@ -104,3 +104,28 @@ Feature: web-epics-multitab — Web: epics view, multi-tab scoping, epic switche
     When I click "Set as agent focus"
     Then a flash message shows the CLI fallback: "tyrion epic activate <slug>"
     And .tyrion/active-epic is NOT written
+
+  Scenario: epic-switcher-scoped-to-function
+    As a developer using the epic-switcher dropdown added in epic-switcher-dropdown
+    In order to only see an epic selector where picking an epic actually changes what I'm looking at
+    I want the interactive dropdown to appear only on tabs whose route honors ?epic=, and War Room to offer an explicit way back to the cross-epic view
+
+    Given I visit /roadmap, /global, /discoveries, /about, or /stories/:id with any ?epic= param
+    When the page renders
+    Then the topbar shows the epic slug as plain text with no <select data-action="epic-switch"> element
+
+    Given I visit / (Active Story) or /warroom with any ?epic= param
+    When the page renders
+    Then the topbar shows the interactive <select data-action="epic-switch"> dropdown
+
+    Given I am on /warroom
+    When I open the epic dropdown
+    Then the first option is labeled "(All Epics)" and every other option is a real epic slug
+
+    Given I am on /warroom scoped to a specific epic (e.g. ?epic=web-epics-multitab)
+    When I select "(All Epics)" from the dropdown
+    Then the URL updates to drop the epic param entirely (e.g. /warroom?project=tyrion, no &epic=) rather than merging in an empty value
+
+    Given I am on / (Active Story)
+    When I open the epic dropdown
+    Then there is no "(All Epics)" option -- only the list of real epic slugs

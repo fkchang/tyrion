@@ -2,14 +2,18 @@
 
 module Views
   class Layout < Phlex::HTML
+    # :none (plain crumb -- ?epic= isn't honored by this route), :scoped
+    # (interactive dropdown, no All-Epics escape hatch), :cross_epic
+    # (interactive dropdown + All-Epics option that clears ?epic= entirely).
     def initialize(project:, epic:, stories: [], disc_summary: {}, epic_switcher: [], active_tab: :active,
-                   git_branch: 'main', dirty_count: 0, project_slug: nil)
+                   epic_scope_mode: :none, git_branch: 'main', dirty_count: 0, project_slug: nil)
       @project     = project
       @epic        = epic
       @stories     = stories
       @disc_summary = disc_summary
       @epic_switcher = epic_switcher
       @active_tab  = active_tab
+      @epic_scope_mode = epic_scope_mode
       @git_branch  = git_branch || 'unknown'
       @dirty_count = dirty_count.to_i
       @project_slug = project_slug
@@ -69,7 +73,13 @@ module Views
           end
           if @epic
             span(class: "topbar-sep") { "·" }
-            render_epic_switcher
+            if @epic_scope_mode == :none
+              epic_label = @epic['slug'] || ''
+              span(class: "topbar-crumb active") { epic_label.length > 22 ? "#{epic_label[0..21]}…" : epic_label }
+            else
+              render_epic_switcher
+              render_epic_switcher_js
+            end
           end
           div(class: "topbar-git") do
             branch = @git_branch.length > 28 ? "#{@git_branch[0..27]}…" : @git_branch
@@ -93,12 +103,12 @@ module Views
           end
         end
       end
-      render_epic_switcher_js
     end
 
     def render_epic_switcher
       select(class: "topbar-crumb active", data: { action: "epic-switch" },
              style: "font-family:inherit;background:transparent;border:none;color:inherit;cursor:pointer;") do
+        option(value: "") { "(All Epics)" } if @epic_scope_mode == :cross_epic
         @epic_switcher.each do |e|
           option(value: e['slug'], selected: e['slug'] == @epic['slug']) { epic_option_label(e) }
         end
@@ -120,7 +130,7 @@ module Views
             var el = e.target.closest('[data-action="epic-switch"]');
             if (!el) return;
             var params = new URLSearchParams(window.location.search);
-            params.set('epic', el.value);
+            if (el.value === '') { params.delete('epic'); } else { params.set('epic', el.value); }
             window.location.href = window.location.pathname + '?' + params.toString();
           });
         JS

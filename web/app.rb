@@ -78,7 +78,7 @@ get "/" do
     project: d[:project], epic: d[:epic], story: d[:story],
     criteria: d[:criteria], notes: d[:notes],
     stories: d[:stories], disc_summary: d[:disc_summary],
-    epic_switcher: d[:epic_switcher],
+    epic_switcher: d[:epic_switcher], epic_scope_mode: :scoped,
     git_branch: d[:git_branch], dirty_count: d[:dirty_count],
     flash: session[:flash].tap { session.delete(:flash) },
     project_slug: params[:project]
