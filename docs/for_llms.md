@@ -77,8 +77,13 @@ binary and fails open silently if it isn't resolvable — the gate's actual deci
 in the `tyrion hook claim-gate` CLI subcommand (ported from `hooks/claim-gate.sh`), so upgrading
 the gem upgrades every installed repo's enforcement without re-copying anything. Merging preserves
 foreign hooks/permissions/keys untouched and replaces only Tyrion's own stale entries in place.
-`tyrion setup claude --check` writes nothing and reports each surface (hooks, gate shim + version,
-whitelist, CLAUDE.md block) with an exit code distinguishing current/drift/partial/fail-open.
+It also writes a versioned, hash-checked `<!-- BEGIN/END TYRION-MANAGED-BLOCK -->` section into
+the target's `CLAUDE.md` (mandate rules + a pointer at `tyrion prime`, not a static command dump)
+-- created fresh if the file has none, replaced in place on re-run with everything outside the
+markers untouched byte-for-byte, and refused with zero writes if the markers are ambiguous
+(duplicate/nested/reversed/unpaired). `tyrion setup claude --check` writes nothing and reports
+each surface (hooks, gate shim + version, whitelist, CLAUDE.md block) with an exit code
+distinguishing current/drift/partial/fail-open.
 
 ## Non-Claude Agents (Codex, anything reading ~/.agents/skills)
 

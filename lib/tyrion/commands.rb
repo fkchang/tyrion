@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'digest'
 require 'fileutils'
 require 'json'
 require 'time'
@@ -52,6 +53,14 @@ module Tyrion
     # Where `tyrion setup claude` reads/writes the merged Claude Code settings
     # file, relative to a target repo's root. Pairs with SHIM_INSTALL_PATH.
     SETTINGS_RELATIVE_PATH = '.claude/settings.json'
+
+    # Where `tyrion setup claude` reads/writes the managed CLAUDE.md block,
+    # relative to a target repo's root.
+    CLAUDE_MD_RELATIVE_PATH = 'CLAUDE.md'
+
+    # Bumped whenever the canonical block body text changes, so `--check` can
+    # tell "stale template" drift apart from a merely-hand-edited body.
+    CLAUDE_MD_BLOCK_VERSION = 1
 
     # `tyrion setup claude --check` exit codes (priority order: PARTIAL beats
     # DRIFT beats FAIL_OPEN beats CURRENT — see cmd_setup_claude_check).
@@ -2632,29 +2641,34 @@ module Tyrion
     def self.cmd_setup_claude(args, _store)
       check = args.delete('--check')
       root  = Repo.worktree_root
-      settings_path = File.join(root, SETTINGS_RELATIVE_PATH)
-      shim_path     = File.join(root, SHIM_INSTALL_PATH)
+      settings_path  = File.join(root, SETTINGS_RELATIVE_PATH)
+      shim_path      = File.join(root, SHIM_INSTALL_PATH)
+      claude_md_path = File.join(root, CLAUDE_MD_RELATIVE_PATH)
 
-      return cmd_setup_claude_check(settings_path, shim_path) if check
+      return cmd_setup_claude_check(settings_path, shim_path, claude_md_path) if check
 
       # Preflight everything before any write — malformed input means zero writes.
       existing = load_settings_for_merge(settings_path)
       merged   = build_merged_settings(existing)
       shim_content = shim_script(version: SHIM_VERSION)
+      existing_claude_md = File.exist?(claude_md_path) ? File.read(claude_md_path) : nil
+      new_claude_md       = build_merged_claude_md(existing_claude_md)
 
       atomic_write(shim_path, shim_content, mode: 0o755)
       atomic_write(settings_path, "#{JSON.pretty_generate(merged)}\n")
+      atomic_write(claude_md_path, new_claude_md)
 
       puts Output.green('Tyrion Claude Code integration installed:')
-      puts "  shim:     #{shim_path}"
-      puts "  settings: #{settings_path}"
+      puts "  shim:      #{shim_path}"
+      puts "  settings:  #{settings_path}"
+      puts "  CLAUDE.md: #{claude_md_path}"
       puts 'Hooks: SessionStart, PreCompact, PreToolUse(Bash) -> tyrion-shim.sh'
       puts "Whitelist: #{TYRION_PERMISSIONS.join(', ')}"
     rescue InvalidSettingsError => e
       die "refusing to install — #{e.message}"
     end
 
-    def self.cmd_setup_claude_check(settings_path, shim_path)
+    def self.cmd_setup_claude_check(settings_path, shim_path, claude_md_path)
       existing, malformed_message =
         begin
           [load_settings_for_merge(settings_path), nil]
@@ -2675,7 +2689,9 @@ module Tyrion
           :current
         end
 
-      statuses       = [hooks_status, whitelist_status, shim_status]
+      claude_md_status_value = claude_md_status(claude_md_path)
+
+      statuses       = [hooks_status, whitelist_status, shim_status, claude_md_status_value]
       all_current    = statuses.all? { |s| s == :current }
       fail_open_risk = all_current && !shim_reports_armed?(shim_path)
 
@@ -2683,11 +2699,15 @@ module Tyrion
       puts "hooks: #{hooks_status}"
       puts "whitelist: #{whitelist_status}"
       puts "gate shim + version: #{shim_status}#{shim_version ? " (v#{shim_version})" : ''}"
-      puts 'CLAUDE.md block: not yet managed by this tyrion version'
+      puts "CLAUDE.md block: #{claude_md_status_value}"
 
       overall, code, suffix =
         if statuses.include?(:absent)
           ['partial', EXIT_PARTIAL, ' — run tyrion setup claude to complete install']
+        elsif claude_md_status_value == :ambiguous
+          ['drift', EXIT_DRIFT,
+           ' — CLAUDE.md has ambiguous TYRION-MANAGED-BLOCK markers; resolve manually ' \
+           '(re-running tyrion setup claude will itself refuse until fixed)']
         elsif statuses.include?(:drift)
           ['drift', EXIT_DRIFT, ' — re-run tyrion setup claude to refresh']
         elsif fail_open_risk
@@ -2940,6 +2960,122 @@ module Tyrion
       return nil unless File.exist?(path)
       match = File.read(path).match(SHIM_MARKER_RE)
       match && match[1].to_i
+    end
+
+    # ── CLAUDE.md managed block ───────────────────────────────────────────
+    # Line-anchored HTML-comment markers so they're invisible when CLAUDE.md
+    # renders as markdown. Body hash is computed over the bytes strictly
+    # between the marker lines (never including the marker lines themselves),
+    # so the hash is never self-referential.
+    CLAUDE_MD_BEGIN_RE = /^<!-- BEGIN TYRION-MANAGED-BLOCK v(\d+) sha256:([0-9a-f]{64}) -->$/.freeze
+    CLAUDE_MD_END_RE   = /^<!-- END TYRION-MANAGED-BLOCK -->$/.freeze
+
+    # The canonical body text, hashed and wrapped by `render_claude_md_block`.
+    # Points at `tyrion prime` for live state rather than dumping a static
+    # command reference (which would itself drift from the CLI).
+    def self.claude_md_block_body
+      <<~BODY.chomp
+        ## Tyrion
+
+        This repo is tracked by Tyrion, a resumability ledger for coding agents.
+
+        Rules:
+        - claim before code (tyrion claim-next)
+        - evidence via tyrion note/check, not ad hoc
+
+        Run `tyrion prime` for the live session briefing — active epic/story, next action, unmet criteria.
+      BODY
+    end
+
+    # Renders the full marker-delimited block (BEGIN line + body + END line),
+    # ready to be spliced into a CLAUDE.md file.
+    def self.render_claude_md_block(body: claude_md_block_body, version: CLAUDE_MD_BLOCK_VERSION)
+      hash = Digest::SHA256.hexdigest(body)
+      "<!-- BEGIN TYRION-MANAGED-BLOCK v#{version} sha256:#{hash} -->\n#{body}\n<!-- END TYRION-MANAGED-BLOCK -->\n"
+    end
+
+    # Finds every BEGIN/END marker line in +content+, returning
+    # [begin_matches, end_matches] (each a MatchData array, in file order).
+    def self.claude_md_marker_scan(content)
+      [claude_md_matches(content, CLAUDE_MD_BEGIN_RE), claude_md_matches(content, CLAUDE_MD_END_RE)]
+    end
+
+    def self.claude_md_matches(content, regexp)
+      [].tap { |matches| content.scan(regexp) { matches << Regexp.last_match } }
+    end
+
+    # true only for the unambiguous "exactly one begin, one end, end after
+    # begin" shape. Anything else (0/2+ of either, or end before begin) is
+    # ambiguous and must not be auto-resolved.
+    def self.claude_md_well_formed?(begins, ends)
+      begins.length == 1 && ends.length == 1 && ends.first.begin(0) > begins.first.begin(0)
+    end
+
+    # Pure function: given the current CLAUDE.md content (nil/absent -> no
+    # file yet), returns the new full file content with the tyrion-owned
+    # block created/replaced. Raises InvalidSettingsError (zero writes, per
+    # the caller's preflight-then-write pattern) when the existing markers
+    # are ambiguous. Never touches disk.
+    def self.build_merged_claude_md(existing_content)
+      content = existing_content || ''
+      begins, ends = claude_md_marker_scan(content)
+      new_block = render_claude_md_block
+
+      if begins.empty? && ends.empty?
+        return new_block if content.empty?
+
+        return append_claude_md_block(content, new_block)
+      end
+
+      unless claude_md_well_formed?(begins, ends)
+        raise InvalidSettingsError,
+              "CLAUDE.md has ambiguous TYRION-MANAGED-BLOCK markers (#{begins.length} BEGIN, #{ends.length} END " \
+              'found) — resolve manually before re-running setup'
+      end
+
+      begin_match = begins.first
+      end_match   = ends.first
+
+      prefix = content[0...begin_match.begin(0)]
+      after_end = end_match.end(0)
+      after_end += 1 if content[after_end] == "\n"
+      suffix = content[after_end..] || ''
+
+      "#{prefix}#{new_block}#{suffix}"
+    end
+
+    # Appends +new_block+ after +content+, ensuring a blank-line separator
+    # regardless of whether +content+ already ends with 0, 1, or 2 newlines.
+    def self.append_claude_md_block(content, new_block)
+      separator =
+        if content.end_with?("\n\n")
+          ''
+        elsif content.end_with?("\n")
+          "\n"
+        else
+          "\n\n"
+        end
+
+      "#{content}#{separator}#{new_block}"
+    end
+
+    # :drift covers a well-formed block that's stale for any reason — hand-
+    # edited, corrupted hash, or an old block version — since a plain
+    # version+hash match against the canonical block is all that separates
+    # :current from it.
+    def self.claude_md_status(path)
+      return :absent unless File.exist?(path)
+
+      begins, ends = claude_md_marker_scan(File.read(path))
+      return :absent if begins.empty? && ends.empty?
+      return :ambiguous unless claude_md_well_formed?(begins, ends)
+
+      begin_match = begins.first
+      if begin_match[1].to_i == CLAUDE_MD_BLOCK_VERSION && begin_match[2] == Digest::SHA256.hexdigest(claude_md_block_body)
+        :current
+      else
+        :drift
+      end
     end
 
     # ── whitelist ──────────────────────────────────────────────────────────
