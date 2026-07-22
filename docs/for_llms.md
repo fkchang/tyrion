@@ -54,6 +54,7 @@ tyrion done my-story "summary"                 # refuses if any criterion still 
 
 tyrion resume [slug]                           # full context dump for cold-start agent
 tyrion pocket                                  # compact handoff briefing
+tyrion prime                                   # read-only tiered briefing for SessionStart/PreCompact hooks
 
 tyrion mark "worth remembering later"          # instant reconnaissance bookmark
 tyrion spike start "question" / tyrion spike done / tyrion spike promote <disc-id>
@@ -65,6 +66,19 @@ tyrion depends add <slug> <dep> / tyrion wave show / tyrion wave next
 `/tyrion-orient` (session start, read-only) -> `/tyrion-new` (bootstrap) / `/tyrion-shape --from docs` (documents -> stories) -> `/tyrion-import` (deterministic load) / `/tyrion-add-story` (one story mid-epic) -> `/tyrion-implement <slug>` (9-step build loop) -> `/tyrion-orchestrate` (fan out one subagent per story) -> `/tyrion-checkpoint` (before `/compact`/`/clear`).
 
 `/tyrion-implement` is the heavy lifter: orient+claim -> resume+plan -> per-criterion subagent loop (continuous capture: log a progress note before responding to any new user request, and after every Write/Edit/Bash call) -> UAT runbook -> `/pre-push` (build/strict modes) -> `tyrion done`. Modes: default, `--spike` (no quality gate, exploration), `--tdd=strict` (failing test first), `--dark-factory` (agent runs UAT and closes without human review — pair with a `/goal` directive for unattended epics).
+
+## Auto-Engagement (Claude Code)
+
+`tyrion setup claude` wires a target repo's `.claude/settings.json` in one idempotent, atomic
+command: `SessionStart`/`PreCompact` hooks invoking `tyrion prime`, a `PreToolUse` claim-gate
+hook invoking `tyrion hook claim-gate`, and the `tyrion` permission whitelist. Both hooks route
+through a small versioned shim (`.claude/hooks/tyrion-shim.sh`) that execs the real `tyrion`
+binary and fails open silently if it isn't resolvable — the gate's actual decision logic lives
+in the `tyrion hook claim-gate` CLI subcommand (ported from `hooks/claim-gate.sh`), so upgrading
+the gem upgrades every installed repo's enforcement without re-copying anything. Merging preserves
+foreign hooks/permissions/keys untouched and replaces only Tyrion's own stale entries in place.
+`tyrion setup claude --check` writes nothing and reports each surface (hooks, gate shim + version,
+whitelist, CLAUDE.md block) with an exit code distinguishing current/drift/partial/fail-open.
 
 ## Non-Claude Agents (Codex, anything reading ~/.agents/skills)
 

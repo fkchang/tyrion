@@ -3,6 +3,7 @@
 require 'fileutils'
 require 'json'
 require 'time'
+require 'timeout'
 require_relative 'importer'
 require_relative 'lesson_miner'
 
@@ -33,10 +34,38 @@ module Tyrion
       'all'      => nil
     }.freeze
 
+    # `tyrion hook claim-gate` payload version — printed by `--check` so a caller
+    # (e.g. a future `tyrion setup claude --check`) can detect an installed shim
+    # that predates the gate logic it now execs.
+    GATE_VERSION = 1
+
+    # Generic shim template version — bumped independently of GATE_VERSION
+    # since the shim's own logic (not the gate's) is what changes it.
+    SHIM_VERSION = 1
+
+    # Where `tyrion setup claude` installs the shim script, relative to a
+    # target repo's root. Single source of truth for both the installed
+    # file's path and the `hooks[*].hooks[*].command` strings the
+    # settings-merge engine writes to reference it.
+    SHIM_INSTALL_PATH = '.claude/hooks/tyrion-shim.sh'
+
+    # Where `tyrion setup claude` reads/writes the merged Claude Code settings
+    # file, relative to a target repo's root. Pairs with SHIM_INSTALL_PATH.
+    SETTINGS_RELATIVE_PATH = '.claude/settings.json'
+
+    # `tyrion setup claude --check` exit codes (priority order: PARTIAL beats
+    # DRIFT beats FAIL_OPEN beats CURRENT — see cmd_setup_claude_check).
+    EXIT_CURRENT   = 0
+    EXIT_DRIFT     = 1
+    EXIT_PARTIAL   = 2
+    EXIT_FAIL_OPEN = 3
+
     def self.run(argv)
-      args  = argv.dup
+      args = argv.dup
+      cmd  = args.shift
+      return cmd_prime(args) if cmd == 'prime'
+
       store = Store.new
-      cmd   = args.shift
 
       case cmd
       when 'init'         then cmd_init(args, store)
@@ -83,7 +112,9 @@ module Tyrion
       when 'depends'      then cmd_depends(args, store)
       when 'wave'         then cmd_wave(args, store)
       when 'whitelist'    then cmd_whitelist(args, store)
+      when 'setup'        then cmd_setup(args, store)
       when 'setup-codex'  then cmd_setup_codex(args, store)
+      when 'hook'         then cmd_hook(args, store)
       when 'lesson'       then cmd_lesson(args, store)
       when 'lessons'      then cmd_lesson(['list'] + args, store)
       when nil, '--help', '-h', 'help' then usage
@@ -1201,6 +1232,87 @@ module Tyrion
         puts "[ ] #{c['keyword']} #{c['text']}"
       end
     end
+
+    # ── prime ─────────────────────────────────────────────────────────────
+    # Tiered, lane-aware briefing for SessionStart/PreCompact hooks. No flag
+    # distinguishes the two — the tier matrix is state-driven. Read-only and
+    # fail-open: any error, missing/corrupt DB, or timeout exits 0 with a
+    # stderr warning rather than blocking session start or compaction.
+
+    def self.cmd_prime(_args)
+      root = Repo.worktree_root
+      return unless File.exist?(File.join(root, Repo::MARKER))
+
+      begin
+        Timeout.timeout(2) { prime_render }
+      rescue StandardError => e
+        $stderr.puts "tyrion prime: warning: #{e.message}"
+      end
+    end
+
+    def self.prime_render
+      # Re-read ENV at call time (not Store::DB_PATH, frozen at class-load) so a
+      # runtime-set TYRION_DB_PATH — tests, hooks — wins.
+      store = Store.new(db_path: ENV.fetch('TYRION_DB_PATH', Store::DB_PATH))
+
+      project_slug = Repo.active_project
+      return unless project_slug
+      project = store.find_project_by_slug(project_slug)
+      return unless project
+
+      token     = current_lane_token
+      epic_slug = Repo.active_epic(token: token)
+      return unless epic_slug
+      epic = store.find_epic(project['id'], epic_slug)
+      return unless epic
+
+      story = prime_story_for(store, epic, token)
+      story ? print_prime_tier2(epic, story, store) : print_prime_tier1(project, epic, store)
+    end
+    private_class_method :prime_render
+
+    # Read-only story lookup for prime — deliberately NOT resolve_my_story,
+    # which can write (pre-claim adopt, claim-next). Rung 2 (own lane) or the
+    # legacy sole-unclaimed lookup only; never consults the .tyrion/active-story
+    # pin and never counts an "assigned:<lane>" placeholder (status != in_progress).
+    def self.prime_story_for(store, epic, token)
+      token ? store.in_progress_story_for(epic['id'], token) : store.story_in_progress_unclaimed(epic['id'])
+    end
+    private_class_method :prime_story_for
+
+    def self.print_prime_tier1(project, epic, store)
+      north_star   = project['about_md']&.lines&.first&.strip&.sub(/^#+\s*/, '')
+      epic_stories = store.stories_for_epic(epic['id'])
+      done_n       = epic_stories.count { |s| s['status'] == 'done' }
+
+      puts north_star if presence(north_star)
+      puts "epic: #{epic['slug']} (#{done_n}/#{epic_stories.length})"
+      puts "next: tyrion claim-next"
+      puts "full context: tyrion resume"
+      puts
+      puts "Rules:"
+      puts "  - claim before code (tyrion claim-next)"
+      puts "  - evidence via tyrion note/check, not ad hoc"
+    end
+    private_class_method :print_prime_tier1
+
+    def self.print_prime_tier2(epic, story, store)
+      stale_suffix = Output.stale?(story['last_note_at']) ? " #{Output.stale_label(story['last_note_at'])}" : ''
+
+      puts "epic: #{epic['slug']}"
+      puts "story: #{story['slug']}#{stale_suffix}"
+      puts "next: #{story['next_action']}" if presence(story['next_action'])
+
+      unmet = store.criteria_for_story(story['id']).reject { |c| c['status'] == 'met' }
+      unmet.each { |c| puts "[ ] #{c['keyword']} #{c['text']}" }
+
+      puts
+      puts "Rules:"
+      puts "  - claim before code"
+      puts "  - evidence via tyrion note/check, not ad hoc"
+      puts "  - tyrion resume #{story['slug']} · /tyrion-implement #{story['slug']}"
+    end
+    private_class_method :print_prime_tier2
 
     # ── mark ──────────────────────────────────────────────────────────────
 
@@ -2506,6 +2618,330 @@ module Tyrion
       puts 'Restart the Codex CLI to discover them.'
     end
 
+    # ── setup claude ───────────────────────────────────────────────────────
+    # Installs (or reports on) Tyrion's Claude Code integration: the generic
+    # shim script + the merged hooks/whitelist settings.
+
+    def self.cmd_setup(args, store)
+      case args.shift
+      when 'claude' then cmd_setup_claude(args, store)
+      else die "Unknown setup target. Use: claude"
+      end
+    end
+
+    def self.cmd_setup_claude(args, _store)
+      check = args.delete('--check')
+      root  = Repo.worktree_root
+      settings_path = File.join(root, SETTINGS_RELATIVE_PATH)
+      shim_path     = File.join(root, SHIM_INSTALL_PATH)
+
+      return cmd_setup_claude_check(settings_path, shim_path) if check
+
+      # Preflight everything before any write — malformed input means zero writes.
+      existing = load_settings_for_merge(settings_path)
+      merged   = build_merged_settings(existing)
+      shim_content = shim_script(version: SHIM_VERSION)
+
+      atomic_write(shim_path, shim_content, mode: 0o755)
+      atomic_write(settings_path, "#{JSON.pretty_generate(merged)}\n")
+
+      puts Output.green('Tyrion Claude Code integration installed:')
+      puts "  shim:     #{shim_path}"
+      puts "  settings: #{settings_path}"
+      puts 'Hooks: SessionStart, PreCompact, PreToolUse(Bash) -> tyrion-shim.sh'
+      puts "Whitelist: #{TYRION_PERMISSIONS.join(', ')}"
+    rescue InvalidSettingsError => e
+      die "refusing to install — #{e.message}"
+    end
+
+    def self.cmd_setup_claude_check(settings_path, shim_path)
+      existing, malformed_message =
+        begin
+          [load_settings_for_merge(settings_path), nil]
+        rescue InvalidSettingsError => e
+          [nil, e.message]
+        end
+
+      hooks_status     = existing ? setup_claude_hooks_status(existing) : :absent
+      whitelist_status = existing ? setup_claude_whitelist_status(existing) : :absent
+
+      shim_version = installed_shim_version(shim_path)
+      shim_status  =
+        if shim_version.nil?
+          :absent
+        elsif shim_version != SHIM_VERSION
+          :drift
+        else
+          :current
+        end
+
+      statuses       = [hooks_status, whitelist_status, shim_status]
+      all_current    = statuses.all? { |s| s == :current }
+      fail_open_risk = all_current && !shim_reports_armed?(shim_path)
+
+      puts "settings file: malformed JSON — #{malformed_message}" if malformed_message
+      puts "hooks: #{hooks_status}"
+      puts "whitelist: #{whitelist_status}"
+      puts "gate shim + version: #{shim_status}#{shim_version ? " (v#{shim_version})" : ''}"
+      puts 'CLAUDE.md block: not yet managed by this tyrion version'
+
+      overall, code, suffix =
+        if statuses.include?(:absent)
+          ['partial', EXIT_PARTIAL, ' — run tyrion setup claude to complete install']
+        elsif statuses.include?(:drift)
+          ['drift', EXIT_DRIFT, ' — re-run tyrion setup claude to refresh']
+        elsif fail_open_risk
+          ['fail-open', EXIT_FAIL_OPEN, ' — shim installed but not reporting armed; check that `tyrion` resolves on PATH']
+        else
+          ['current', EXIT_CURRENT, '']
+        end
+
+      puts "Overall: #{overall}#{suffix}"
+      exit(code)
+    end
+
+    # :absent if none of the 3 canonical events have a tyrion-owned matcher-
+    # group; :current if all 3 are present and byte-identical to
+    # tyrion_hook_groups; :drift otherwise (missing some, or present-but-stale).
+    def self.setup_claude_hooks_status(existing)
+      per_event_states = tyrion_hook_groups.map do |event, wanted_group|
+        found = Array(existing.dig('hooks', event)).find { |g| tyrion_group_match?(g, wanted_group['matcher']) }
+
+        if found.nil?
+          :absent
+        elsif found == wanted_group
+          :current
+        else
+          :drift
+        end
+      end
+
+      if per_event_states.all? { |s| s == :absent }
+        :absent
+      elsif per_event_states.all? { |s| s == :current }
+        :current
+      else
+        :drift
+      end
+    end
+
+    def self.setup_claude_whitelist_status(existing)
+      present = allow_list(existing) & TYRION_PERMISSIONS
+      missing = TYRION_PERMISSIONS - present
+
+      if present.empty?
+        :absent
+      elsif missing.empty?
+        :current
+      else
+        :drift
+      end
+    end
+
+    # Actually invokes the installed shim end-to-end (mirrors the exact
+    # regression this design catches: a hook that looks wired but silently
+    # fails open). Any failure shelling out counts as fail-open risk.
+    def self.shim_reports_armed?(shim_path)
+      out = `#{shim_path.shellescape} tyrion hook claim-gate --check 2>&1`
+      out.include?('armed')
+    rescue StandardError
+      false
+    end
+
+    # ── hook (claim-gate) ────────────────────────────────────────────────────
+    # Fat-binary port of hooks/claim-gate.sh's embedded Ruby (thin-shim design —
+    # a generic shim script in the target repo execs `tyrion hook claim-gate`,
+    # so upgrading the gem upgrades every installed repo's gate for free).
+    # See hooks/claim-gate.sh for the full behavioral rationale in comments;
+    # this is a straight logic port with real quote literals (no 34.chr/39.chr
+    # workarounds — those existed only to keep the old bash heredoc quote-
+    # balanced, which doesn't apply to a real .rb file).
+
+    def self.cmd_hook(args, store)
+      case args.shift
+      when 'claim-gate' then cmd_hook_claim_gate(args, store)
+      else die "Unknown hook subcommand. Use: claim-gate"
+      end
+    end
+
+    def self.cmd_hook_claim_gate(args, store)
+      return cmd_hook_claim_gate_check if args.first == '--check'
+
+      cmd_hook_claim_gate_decide(store)
+    rescue StandardError
+      # Any internal error — fail open, never wedge the agent.
+    end
+
+    # Diagnostic mode: reports whether the gate is armed from the current
+    # directory. ALWAYS exits 0 — it reports, never blocks.
+    def self.cmd_hook_claim_gate_check
+      root =
+        begin
+          Repo.tyrion_root(Dir.pwd)
+        rescue StandardError
+          nil
+        end
+      puts(root ? 'armed' : 'fail-open: no .tyrion project found from this directory')
+      puts "version: #{GATE_VERSION}"
+    end
+
+    # Only gate a ledger-mutating tyrion subcommand invoked as an ACTUAL command —
+    # the `tyrion` (or `.../bin/tyrion`) token must sit in command position: at the
+    # start of a command segment or after a shell separator, following only optional
+    # `VAR=value` env assignments and plain interpreter words (`ruby`, `bundle exec`,
+    # ...). A flag (e.g. `-C`) or a quote before the token breaks the run, so
+    # `git -C /path/tyrion check-ignore ...` and `git commit -m "tyrion note: ..."`
+    # never match. The verb must be a complete token — `check-ignore` is not `check`.
+    # Group 1 is the verb; group 2 is the first positional arg (the target slug).
+    CLAIM_GATE_RE = %r{
+      (?:^|[\n;&|])            # start of a command segment
+      \s*
+      # optional VAR=value env assignments. The value is a balanced single- or
+      # double-quoted string, or a bare unquoted token.
+      (?:\w+=(?:'[^']*'|"[^"]*"|[^\s'"]*)\s+)*
+      (?:[A-Za-z0-9_.]+\s+)*   # optional plain interpreter words (ruby, bundle, exec)
+      (?:\S*/)?                # optional path prefix on the executable (bin/, /path/bin/)
+      tyrion\s+
+      (note|check|done)        # the gated verb
+      (?=[\s;&|]|$)            # verb must be a complete token, not check-ignore
+      (?:\s+(\S+))?            # optional first positional arg (the target slug)
+    }x.freeze
+
+    # Claude Code runs this hook with cwd = the SESSION's project dir, so a gated
+    # command that targets a DIFFERENT repo via a `cd <dir> &&` (or `cd <dir>;`)
+    # prefix would otherwise be judged against the session ledger, not the one it
+    # actually mutates. Matches the last top-level `cd <dir>` in the command chain
+    # that leads up to the gated command.
+    CLAIM_GATE_CD_RE = %r{
+      (?:^|[\n;&|])                     # segment boundary before cd
+      \s*
+      cd\s+
+      (?:
+        "([^"]*)" |                     # double-quoted dir (may hold spaces)
+        '([^']*)' |                     # single-quoted dir
+        ([^\s;&|]+)                     # bare dir
+      )
+      \s*
+      (?=$|[\n;&|])                     # cd must be a complete segment
+    }x.freeze
+
+    def self.cmd_hook_claim_gate_decide(store)
+      data =
+        begin
+          JSON.parse($stdin.read)
+        rescue StandardError
+          return # unparseable hook payload — not our place to block
+        end
+
+      cmd = data.dig('tool_input', 'command').to_s
+      m = cmd.match(CLAIM_GATE_RE)
+      return unless m
+
+      verb        = m[1]
+      target_slug = m[2]
+
+      cd_dir = claim_gate_cd_dir(cmd[0...m.begin(0)])
+      root   = Repo.tyrion_root(cd_dir || Dir.pwd)
+      return unless root # outside a Tyrion project — fail open
+
+      token = claim_gate_lane_token(cmd)
+
+      project_slug = Repo.active_project(root)
+      epic_slug    = Repo.active_epic(root, token: token)
+
+      epic            = nil
+      has_in_progress = false
+      if project_slug && (project = store.find_project_by_slug(project_slug)) &&
+         epic_slug && (epic = store.find_epic(project['id'], epic_slug))
+        has_in_progress   = !store.in_progress_story_for(epic['id'], token).nil? if token
+        # Legacy single-session: an unclaimed (NULL claimed_by) in_progress story
+        # in the active epic is this lane's story too.
+        has_in_progress ||= !store.story_in_progress_unclaimed(epic['id']).nil?
+      end
+
+      return if has_in_progress
+
+      # Orchestrator affordance: a lane with no in_progress story may still record
+      # a post-hoc `tyrion note` on a story its subagents already finished — i.e.
+      # a story whose status is `done` or `blocked`. `check`/`done` are never
+      # permitted without a claim, and `note` on a pending/in_progress story stays
+      # blocked.
+      if verb == 'note' && target_slug && epic
+        story = store.find_story(epic['id'], target_slug)
+        return if story && %w[done blocked].include?(story['status'])
+      end
+
+      $stderr.puts <<~MSG
+        Tyrion claim gate: no in_progress story in this lane.
+        Claim a story before recording ledger updates:
+          tyrion start <slug>
+        Then re-run your `tyrion #{verb}` command.
+      MSG
+      exit 2
+    end
+
+    def self.claim_gate_cd_dir(head)
+      cd_dir = nil
+      head.scan(CLAIM_GATE_CD_RE) { cd_dir = Regexp.last_match(1) || Regexp.last_match(2) || Regexp.last_match(3) }
+      cd_dir
+    end
+
+    # An explicit TYRION_LANE=<token> prefix in the command wins over the ambient
+    # lane identity. An agent may write the value quoted; strip a matched
+    # surrounding quote pair (the unquoted form has no pair and is unchanged).
+    def self.claim_gate_lane_token(cmd)
+      raw_lane = cmd[/\bTYRION_LANE=(\S+)/, 1]
+      if raw_lane
+        q = raw_lane[0]
+        if q == '"' || q == "'"
+          close    = raw_lane.index(q, 1)
+          raw_lane = close ? raw_lane[1...close] : raw_lane[1..-1]
+        end
+      end
+      raw_lane || current_lane_token
+    end
+
+    # ── atomic write ───────────────────────────────────────────────────────
+    # Build-complete-then-rename pattern: write to a temp file in the SAME
+    # directory as +path+ (required for an atomic same-filesystem rename), then
+    # rename it into place. If anything raises before the rename, no partial
+    # file is left at +path+.
+    def self.atomic_write(path, content, mode: nil)
+      FileUtils.mkdir_p(File.dirname(path))
+      tmp_path = "#{path}.tmp.#{Process.pid}.#{rand(1_000_000)}"
+      File.write(tmp_path, content)
+      File.chmod(mode, tmp_path) if mode
+      File.rename(tmp_path, path)
+    ensure
+      File.delete(tmp_path) if tmp_path && File.exist?(tmp_path)
+    end
+
+    # ── shim template ──────────────────────────────────────────────────────
+    # The generic shim installed into target repos. Its only job: fail open
+    # silently if the real binary isn't resolvable, else `exec` it so the real
+    # command's exit code (e.g. exit 2 from the claim gate) propagates unchanged.
+    SHIM_MARKER_RE = /# tyrion-shim v(\d+)/.freeze
+
+    def self.shim_script(version: SHIM_VERSION)
+      <<~SHIM
+        #!/usr/bin/env bash
+        # tyrion-shim v#{version} — installed by `tyrion setup claude`.
+        # Re-run setup to upgrade; do not hand-edit.
+        if ! command -v "$1" >/dev/null 2>&1; then
+          exit 0
+        fi
+        exec "$@"
+      SHIM
+    end
+
+    # Reads the version marker from an installed shim. Returns nil if the file
+    # doesn't exist or doesn't look like a tyrion-owned shim (no matching marker).
+    def self.installed_shim_version(path)
+      return nil unless File.exist?(path)
+      match = File.read(path).match(SHIM_MARKER_RE)
+      match && match[1].to_i
+    end
+
     # ── whitelist ──────────────────────────────────────────────────────────
 
     def self.cmd_whitelist(args, _store)
@@ -2594,6 +3030,164 @@ module Tyrion
       File.write(path, "#{JSON.pretty_generate(settings)}\n")
     end
 
+    # ── settings merge engine (`tyrion setup claude`) ────────────────────────
+    # Pure logic that folds Tyrion's hooks + whitelist permissions into a
+    # possibly-absent/malformed `.claude/settings.json`-shaped hash, without
+    # disturbing anything foreign already there. No disk I/O except in
+    # `load_settings_for_merge` (read-only); nothing here ever writes a file —
+    # `cmd_setup_claude` does that, via `atomic_write`.
+    #
+    # Error-signaling convention: invalid input is signaled by RAISING
+    # `InvalidSettingsError` (never a silent nil / false return) from both
+    # `load_settings_for_merge` (bad JSON syntax) and `build_merged_settings`
+    # (well-formed JSON, but the wrong shape per `validate_settings_shape`).
+    # Callers should rescue this one class around the whole load -> build ->
+    # write pipeline.
+    class InvalidSettingsError < StandardError; end
+
+    # Builds the command string for one tyrion-owned hook entry, e.g.
+    # `"$CLAUDE_PROJECT_DIR"/.claude/hooks/tyrion-shim.sh tyrion hook claim-gate`.
+    def self.shim_command(*subcmd_parts)
+      %("$CLAUDE_PROJECT_DIR"/#{SHIM_INSTALL_PATH} #{subcmd_parts.join(' ')})
+    end
+
+    # The three matcher-groups Tyrion owns, keyed by hook event name. Built
+    # fresh each call (not a frozen constant) — callers may hand these
+    # straight into arrays that get further merged.
+    def self.tyrion_hook_groups
+      {
+        'SessionStart' => { 'matcher' => '', 'hooks' => [{ 'type' => 'command', 'command' => shim_command('tyrion', 'prime') }] },
+        'PreCompact'   => { 'matcher' => '', 'hooks' => [{ 'type' => 'command', 'command' => shim_command('tyrion', 'prime') }] },
+        'PreToolUse'   => { 'matcher' => 'Bash', 'hooks' => [{ 'type' => 'command', 'command' => shim_command('tyrion', 'hook', 'claim-gate') }] }
+      }
+    end
+
+    # A matcher-group is "tyrion-owned" if any of its inner hook commands
+    # reference the shim path — this is how a stale tyrion entry (e.g. from an
+    # older shim version or the pre-shim direct-script style) is told apart
+    # from a foreign one, with no extra metadata needed.
+    def self.tyrion_owned_hook_group?(group)
+      return false unless group.is_a?(Hash)
+
+      Array(group['hooks']).any? { |h| h.is_a?(Hash) && h['command'].to_s.include?(SHIM_INSTALL_PATH) }
+    end
+
+    # The one shared "is this the tyrion-owned group for this matcher"
+    # predicate — used both to find the group to replace in-place
+    # (`merge_hook_groups`) and to report its status (`setup_claude_hooks_status`),
+    # so the ownership rule can't drift between the two call sites.
+    def self.tyrion_group_match?(group, matcher)
+      group.is_a?(Hash) && group['matcher'] == matcher && tyrion_owned_hook_group?(group)
+    end
+
+    # Given the existing matcher-group array for ONE hook event (nil/absent ->
+    # treated as []) and the one tyrion-owned group that should be present,
+    # returns a NEW array: replaces an existing tyrion-owned group for the
+    # same matcher in place (same position), else appends. Never mutates
+    # +existing_groups+; every foreign/other-matcher group is preserved
+    # untouched, in order.
+    def self.merge_hook_groups(existing_groups, tyrion_group)
+      existing_groups = Array(existing_groups || [])
+      matcher = tyrion_group['matcher']
+      idx = existing_groups.find_index { |g| tyrion_group_match?(g, matcher) }
+
+      if idx
+        replaced = existing_groups.dup
+        replaced[idx] = tyrion_group
+        replaced
+      else
+        existing_groups + [tyrion_group]
+      end
+    end
+
+    # Given the whole settings hash (may lack `hooks` entirely, or have
+    # some/all of the three tyrion event arrays absent), returns a NEW hash
+    # with SessionStart/PreCompact/PreToolUse each merged per
+    # `merge_hook_groups`, every other event key (e.g. a user's own `Stop`
+    # hook) preserved byte-for-byte in original key order, and every other
+    # top-level key in +settings_hash+ untouched. Does not mutate the input.
+    def self.merge_settings_hooks(settings_hash)
+      original_hooks = settings_hash['hooks'].is_a?(Hash) ? settings_hash['hooks'] : {}
+      tyrion_groups  = tyrion_hook_groups
+
+      new_hooks = {}
+      original_hooks.each do |event, groups|
+        new_hooks[event] = tyrion_groups.key?(event) ? merge_hook_groups(groups, tyrion_groups[event]) : groups
+      end
+      tyrion_groups.each do |event, group|
+        new_hooks[event] = merge_hook_groups(nil, group) unless new_hooks.key?(event)
+      end
+
+      settings_hash.merge('hooks' => new_hooks)
+    end
+
+    # Folds TYRION_PERMISSIONS into settings_hash['permissions']['allow'] the
+    # same way `whitelist_add` does (additive, no duplicates, preserves
+    # existing order) — as a pure function, reusing `allow_list`. Does not
+    # mutate the input.
+    def self.merge_settings_permissions(settings_hash)
+      allow    = allow_list(settings_hash)
+      added    = TYRION_PERMISSIONS.reject { |p| allow.include?(p) }
+      original_permissions = settings_hash['permissions'].is_a?(Hash) ? settings_hash['permissions'] : {}
+
+      settings_hash.merge('permissions' => original_permissions.merge('allow' => allow + added))
+    end
+
+    # true/false — is +settings_hash+ safe to merge into? Rejects (returns
+    # false, never raises) hooks/events/matcher-groups/permissions present
+    # but of the wrong type.
+    def self.validate_settings_shape(settings_hash)
+      return false unless settings_hash.is_a?(Hash)
+
+      hooks = settings_hash['hooks']
+      if hooks
+        return false unless hooks.is_a?(Hash)
+        return false unless hooks.all? { |_event, groups| valid_hook_group_array?(groups) }
+      end
+
+      permissions = settings_hash['permissions']
+      if permissions
+        return false unless permissions.is_a?(Hash)
+
+        allow = permissions['allow']
+        return false if allow && !allow.is_a?(Array)
+      end
+
+      true
+    end
+
+    def self.valid_hook_group_array?(groups)
+      return false unless groups.is_a?(Array)
+
+      groups.all? do |group|
+        next false unless group.is_a?(Hash)
+
+        inner_hooks = group['hooks']
+        inner_hooks.nil? || inner_hooks.is_a?(Array)
+      end
+    end
+
+    # Reads+parses the settings file at +path+. Absent file -> {}. Valid
+    # JSON -> parsed hash. Invalid JSON syntax -> raises InvalidSettingsError
+    # (see error-signaling convention above).
+    def self.load_settings_for_merge(path)
+      return {} unless File.exist?(path)
+
+      JSON.parse(File.read(path))
+    rescue JSON::ParserError => e
+      raise InvalidSettingsError, "Invalid JSON in #{path}: #{e.message}"
+    end
+
+    # The composed public entry point `cmd_setup_claude` calls. Pure function:
+    # given an already-parsed settings hash, returns the fully merged hash
+    # (hooks merged + whitelist permissions folded in) or raises
+    # InvalidSettingsError per `validate_settings_shape`. Never writes to disk.
+    def self.build_merged_settings(existing_hash)
+      raise InvalidSettingsError, 'malformed .claude/settings.json shape' unless validate_settings_shape(existing_hash)
+
+      merge_settings_permissions(merge_settings_hooks(existing_hash))
+    end
+
     # ── usage ──────────────────────────────────────────────────────────────
 
     def self.usage
@@ -2677,6 +3271,11 @@ module Tyrion
           tyrion whitelist show                    Show whitelist status across all scopes
           tyrion whitelist add [--scope local|project|global]   Add tyrion rules (default: local)
           tyrion whitelist remove [--scope local|project|global] Remove tyrion rules
+
+        Claude Code:
+          tyrion setup claude                      Wire hooks, claim-gate shim, and whitelist into .claude/settings.json
+          tyrion setup claude --check              Report install status per surface, writes nothing
+          tyrion hook claim-gate [--check]         PreToolUse claim-gate logic (invoked by the installed shim)
 
         Other agents:
           tyrion setup-codex                       Install tyrion skills into Codex native skill discovery (~/.agents/skills)

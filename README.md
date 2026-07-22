@@ -34,6 +34,7 @@ Tyrion gives your project a spine:
 - **Resume state** — every story tracks `current_context` and `next_action`. A new agent runs `tyrion resume` and knows exactly where to start.
 - **The war room** — `tyrion status` shows the full plan view: what's pending, what's in flight, what's done, what's being investigated.
 - **`tyrion pocket`** — a compact briefing of the current story and next action, made for agent handoff.
+- **`tyrion prime`** — a read-only, lane-aware briefing sized to whatever's true right now (silent when untracked, a short north-star pointer when idle, a pocket-shaped checklist when a story's in flight). Built for SessionStart/PreCompact hooks.
 
 ---
 
@@ -47,6 +48,23 @@ cd tyrion && gem build tyrion.gemspec && gem install tyrion-*.gem
 ```
 
 Your ledger lives at `~/.tyrion/tyrion.db`. Override with `TYRION_DB_PATH`.
+
+### Claude Code
+
+One command wires a target repo's `.claude/settings.json` for auto-engagement: `tyrion prime`
+on `SessionStart`/`PreCompact`, and the claim-before-ledger-write gate on `PreToolUse`, plus the
+`tyrion` permission whitelist.
+
+```bash
+tyrion setup claude          # merges hooks + whitelist into .claude/settings.json, installs the shim
+tyrion setup claude --check  # reports current/drift/partial/fail-open per surface, writes nothing
+```
+
+Both hooks route through a small versioned shim (`.claude/hooks/tyrion-shim.sh`) that execs the
+real `tyrion` command — upgrading the gem upgrades every installed repo's gate, with no logic to
+re-copy. The shim fails open silently if `tyrion` isn't resolvable. Merging is additive and
+idempotent: pre-existing hooks, permissions, and unknown keys are preserved untouched, and
+re-running replaces only Tyrion's own stale entries.
 
 ### Codex (and other agents that read `~/.agents/skills`)
 
@@ -161,6 +179,7 @@ tyrion check user-login 1 "auth_spec.rb:42 — rspec spec/auth → PASSED"
 tyrion status                    The war room — plan view
 tyrion resume [slug]             Full context dump for a story
 tyrion pocket                    Compact briefing for agent handoff
+tyrion prime                     Read-only tiered briefing for SessionStart/PreCompact hooks
 
 tyrion start <slug>              Claim a story
 tyrion block <slug> "reason"     Mark a story blocked (shows in war room BLOCKED lane)
