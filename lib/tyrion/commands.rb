@@ -17,6 +17,8 @@ module Tyrion
       'Bash(tyrion *)'
     ].freeze
 
+    VALID_EPIC_MODES = %w[dark_factory shape].freeze
+
     WHITELIST_SCOPES = {
       'local'   => -> { File.join(Dir.pwd, '.claude', 'settings.local.json') },
       'project' => -> { File.join(Dir.pwd, '.claude', 'settings.json') },
@@ -319,9 +321,10 @@ module Tyrion
       when 'complete' then cmd_epic_complete(args, store)
       when 'archive'   then cmd_epic_archive(args, store)
       when 'unarchive' then cmd_epic_unarchive(args, store)
+      when 'mode'      then cmd_epic_mode(args, store)
       else
         $stderr.puts "Unknown epic subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion epic [list|show|activate|pause|complete|archive|unarchive]"
+        $stderr.puts "Usage: tyrion epic [list|show|activate|pause|complete|archive|unarchive|mode]"
         exit 1
       end
     end
@@ -342,8 +345,10 @@ module Tyrion
         # Only show status bracket for non-default statuses — avoids every epic
         # looking [active] when that's just the DB default, not the active pointer.
         status_tag = e['status'] == 'active' ? '' : " [#{e['status']}]"
+        badge      = Output.epic_mode_badge(e)
+        mode_tag   = badge.empty? ? '' : " #{badge}"
         pointer    = e['slug'] == active_slug ? " #{Output.cyan('← active')}" : ''
-        puts "#{e['slug']}  #{e['name']}  #{done}/#{stories.length}#{status_tag}#{extra_tag}#{pointer}"
+        puts "#{e['slug']}  #{e['name']}  #{done}/#{stories.length}#{status_tag}#{mode_tag}#{extra_tag}#{pointer}"
       end
 
       active.each { |e| line.call(e) }
@@ -463,6 +468,21 @@ module Tyrion
       puts "Epic unarchived: #{epic['name']} [#{slug}]"
     end
 
+    def self.cmd_epic_mode(args, store)
+      slug  = args.shift
+      value = args.shift
+      die "Usage: tyrion epic mode <slug> <dark_factory|shape>" unless slug && value
+      die "Invalid mode: #{value}. Must be one of: #{VALID_EPIC_MODES.join(', ')}" unless VALID_EPIC_MODES.include?(value)
+
+      project = resolve_project(store)
+      epic    = store.find_epic(project['id'], slug)
+      die "Epic not found: #{slug}" unless epic
+
+      stored_mode = value == 'shape' ? nil : value # shape is the canonical NULL
+      store.update_epic(epic['id'], 'mode' => stored_mode)
+      puts "Epic mode set: #{epic['name']} [#{slug}] -> #{value}"
+    end
+
     def self.cmd_import(args, store)
       die "Usage: tyrion import <file.feature> [--confirm-abandon] [--force] [--criteria=then]" if args.empty?
       Importer.run(args, store)
@@ -508,7 +528,9 @@ module Tyrion
         return
       end
 
-      puts "#{Output.bold('Epic:')}    #{epic['name']} [#{Output.dim(epic_slug)}]"
+      badge      = Output.epic_mode_badge(epic)
+      mode_badge = badge.empty? ? '' : "  #{badge}"
+      puts "#{Output.bold('Epic:')}    #{epic['name']} [#{Output.dim(epic_slug)}]#{mode_badge}"
 
       if epic['intent'] && !epic['intent'].empty?
         puts "           #{Output.dim(epic['intent'][0, 80])}#{'…' if epic['intent'].length > 80}"

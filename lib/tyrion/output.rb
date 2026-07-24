@@ -70,5 +70,13 @@ module Tyrion
     def self.criterion_icon(status)
       status == 'met' ? green('[✓]') : '[ ]'
     end
+
+    def self.dark_factory?(epic) = epic['mode'] == 'dark_factory'
+
+    # Bare badge text, no leading space — callers own their own spacing.
+    # Empty string for shape/NULL (the deliberate quiet default).
+    def self.epic_mode_badge(epic)
+      dark_factory?(epic) ? '🏭 dark_factory' : ''
+    end
   end
 end

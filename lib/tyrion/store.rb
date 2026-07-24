@@ -1353,6 +1353,10 @@ module Tyrion
       ['add_completed_by_to_stories', lambda { |db|
         cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
         db.execute('ALTER TABLE stories ADD COLUMN completed_by TEXT') unless cols.include?('completed_by')
+      }],
+      ['add_mode_to_epics', lambda { |db|
+        cols = db.execute('PRAGMA table_info(epics)').map { |r| r['name'] }
+        db.execute('ALTER TABLE epics ADD COLUMN mode TEXT') unless cols.include?('mode')
       }]
     ].freeze
 
