@@ -135,6 +135,34 @@ RSpec.describe 'Tyrion::Commands.cmd_prime' do
     end
   end
 
+  # ── Tier 2 mode-contract line (dark_factory epic) ────────────────────────
+
+  describe 'Tier 2 mode-contract line for a dark_factory epic' do
+    let(:token) { 'claude:3:stamp' }
+    let(:ctx)   { tyrion_worktree(epic_slug: 'auth-epic') }
+    let(:store) { ctx.store }
+    let(:epic)  { ctx.epic }
+
+    before do
+      point_prime_at(ctx)
+      allow(Tyrion::Commands).to receive(:current_lane_token).and_return(token)
+      story = store.create_story(epic_id: epic['id'], slug: 'story-a', title: 'Story A')
+      store.start_story(story['id'], claimed_by: token)
+    end
+
+    it 'prints a mode: dark_factory line when the epic mode is dark_factory' do
+      store.update_epic(epic['id'], 'mode' => 'dark_factory')
+      out, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      expect(out).to match(/^mode: dark_factory/)
+    end
+
+    it 'prints nothing extra when the epic mode is shape/NULL (default)' do
+      out, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      expect(out).not_to match(/^mode:/)
+      expect(out).not_to include('dark_factory')
+    end
+  end
+
   # ── criterion 4 — same command, no flag, state-driven tier ───────────────
 
   describe 'criterion 4 — no flag distinguishes hook type' do

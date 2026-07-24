@@ -471,12 +471,18 @@ module Tyrion
     def self.cmd_epic_mode(args, store)
       slug  = args.shift
       value = args.shift
-      die "Usage: tyrion epic mode <slug> <dark_factory|shape>" unless slug && value
-      die "Invalid mode: #{value}. Must be one of: #{VALID_EPIC_MODES.join(', ')}" unless VALID_EPIC_MODES.include?(value)
+      die "Usage: tyrion epic mode <slug> [dark_factory|shape]" unless slug
 
       project = resolve_project(store)
       epic    = store.find_epic(project['id'], slug)
       die "Epic not found: #{slug}" unless epic
+
+      unless value # bare word — orchestrate/implement parse this, never mutate here
+        puts(Output.dark_factory?(epic) ? 'dark_factory' : 'shape')
+        return
+      end
+
+      die "Invalid mode: #{value}. Must be one of: #{VALID_EPIC_MODES.join(', ')}" unless VALID_EPIC_MODES.include?(value)
 
       stored_mode = value == 'shape' ? nil : value # shape is the canonical NULL
       store.update_epic(epic['id'], 'mode' => stored_mode)
@@ -1333,6 +1339,7 @@ module Tyrion
       puts "epic: #{epic['slug']}"
       puts "story: #{story['slug']}#{stale_suffix}"
       puts "next: #{story['next_action']}" if presence(story['next_action'])
+      puts "mode: dark_factory — orchestrate auto-advances waves; implement continues past done" if Output.dark_factory?(epic)
 
       unmet = store.criteria_for_story(story['id']).reject { |c| c['status'] == 'met' }
       unmet.each { |c| puts "[ ] #{c['keyword']} #{c['text']}" }

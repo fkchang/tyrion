@@ -49,7 +49,7 @@ Tyrion-aware implementation loop for one story. Follows a 9-step protocol in str
 
 The RIGOR tag is the zero-friction path: when `/tyrion-shape` ingested the plan, it already assessed each story. Read it in Step 3 and act on it — never ask the user to specify a mode that shape already decided.
 
-**Dark-factory is orthogonal to this resolution** — `--dark-factory`/`--adequate`/`--mediocre` modifies whichever TDD mode wins above (default: build). It never changes TDD or pre-push requirements; it only replaces every user prompt with the autonomous action + gate record described in Steps 4 and 9. `--dark-factory` with `--review` must refuse (`--review` means pause for the user at every boundary; dark factory means there is no user).
+**Dark-factory is orthogonal to this resolution** — `--dark-factory`/`--adequate`/`--mediocre` modifies whichever TDD mode wins above (default: build). It never changes TDD or pre-push requirements; it only replaces every user prompt with the autonomous action + gate record described in Steps 4 and 9. **Dark-factory activates when EITHER an explicit `--dark-factory`/`--adequate`/`--mediocre` flag is passed OR the story's epic has a persisted `mode: dark_factory`** (read it with `tyrion epic mode <epic-slug>` — the getter prints the bare word `dark_factory` or `shape`; see ORIENT). Both triggers resolve to the same "dark-factory is active" state *before* any compatibility check runs, so an explicit flag on a dark_factory epic is simply redundant (a no-op, not an error). `--dark-factory` with `--review` must refuse (`--review` means pause for the user at every boundary; dark factory means there is no user) — **this refusal applies identically whether dark-factory was activated by the flag or implied by the epic's persisted mode**: `--review` on a `mode: dark_factory` epic gets the same refusal as `--review --dark-factory`.
 
 ---
 
@@ -97,6 +97,16 @@ If the epic context_md contains a `Plan file:` line, OR `--plan=<path>` was pass
 4. Record: `PLAN_SECTION = <extracted text>` — you will inject this into every subagent prompt in Step 5.
 
 If no plan file is found, proceed normally — you will derive the plan from criteria and epic context in Step 4.
+
+**Read the epic's persisted mode now — do this before announcing the active mode:**
+
+The epic can carry a persisted `mode` that activates dark-factory automatically, even when the user invoked `/tyrion-implement` bare (no flags). Read it once you know which epic owns the story:
+
+```bash
+tyrion epic mode <epic-slug>   # prints exactly one bare word: dark_factory or shape
+```
+
+If it prints `dark_factory`, treat dark-factory as **active** for the rest of this run — identical to an explicit `--dark-factory` flag (see the "Dark-factory is orthogonal to this resolution" rule above; the flag and the epic-mode trigger both resolve to the same active state). If it prints `shape`, dark-factory is off unless an explicit flag turned it on. An explicit `--dark-factory` on a `dark_factory` epic is redundant, not an error. If the user passed `--review` and this read (or a flag) makes dark-factory active, refuse the incompatible combination now — same refusal as `--review --dark-factory`.
 
 **Announce the active mode now** — one line, prominently:
 

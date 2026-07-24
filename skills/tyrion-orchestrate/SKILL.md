@@ -13,6 +13,7 @@ Fan out one Claude subagent per ready story, collect 1-2 sentence summaries, adv
 
 - You have a Tyrion epic with a wave plan (`tyrion wave show` shows waves)
 - You want to run multiple stories in parallel without babysitting each one
+- The epic's persisted **mode** governs your cadence between waves: `dark_factory` runs wave-to-wave to epic completion; `shape` (the default when unset) pauses after each wave for human inspection — worker subagents are unaffected either way (see 2c)
 - Overlapping files within a wave are fine — every lane runs in its own git worktree on its own `story/<slug>` branch (standard since the worktree-lanes epic), so lanes cannot sweep each other's uncommitted work, and enforcement-config changes (hooks, settings) stay lane-local until merged
 
 ## Protocol
@@ -29,6 +30,14 @@ Capture the active epic slug now — you will pass it to every subagent.
 ```bash
 tyrion epic show     # note the slug from the first line
 ```
+
+Read and display the epic's current **mode** so the user knows the cadence this run will use:
+
+```bash
+tyrion epic mode <epic-slug>   # prints "dark_factory" or "shape" (unset epics read as shape)
+```
+
+`dark_factory` → the parent auto-advances wave to wave until the epic is done. `shape` (or unset) → the parent pauses after each wave for inspection. This read is **informational only** — do NOT cache it for the run. The authoritative check that gates looping re-reads mode fresh at step 2f every time (a user may flip it mid-run).
 
 If `tyrion status` shows 0 pending stories, there is nothing to dispatch — stop.
 
@@ -143,6 +152,8 @@ Each subagent receives:
 
 ---
 
+**Workers are always headless, always `--dark-factory` — this is deliberate and mode-independent.** The `/tyrion-implement <slug> --dark-factory` invocation above is hardcoded and must NEVER be made conditional on the epic's mode. A dispatched subagent has no human prompt channel, so there is nothing for a `shape`-mode cadence to pause *for* inside a worker. The epic's mode governs only the **parent** orchestrator's between-wave cadence (step 2f) — never how a worker runs. A future editor must not wire this template to `tyrion epic mode`.
+
 #### 2d. MERGE PHASE — merge, validate, close, clean up (strictly sequential)
 
 After all subagents in the wave return, process each `READY: <slug>` **one at a time** — never merge two lanes concurrently. For each, from the main checkout:
@@ -221,7 +232,22 @@ If stories remain `in_progress` after all subagents have returned (stuck/orphane
 
 If `tyrion status` shows 0 in_progress and 0 pending (all done), loop terminates normally → proceed to step 3.
 
-Otherwise loop back to step 2a.
+Otherwise (pending stories remain, nothing blocked or stuck), the decision to auto-advance or pause is governed by the epic's **mode**. Re-read it fresh here — do NOT reuse the value captured at ORIENT (step 1); a user may have flipped it mid-run:
+
+```bash
+tyrion epic mode <epic-slug>   # authoritative read that gates looping
+```
+
+- **`dark_factory`** → loop back to step 2a immediately and dispatch the next wave.
+- **`shape`** (or the command returns anything other than `dark_factory` — fail safe toward the conservative, human-in-the-loop behavior) → **STOP.** Do NOT auto-loop. Print a clear pause message with the current status, e.g.:
+
+  ```
+  Wave complete — pausing for inspection (mode: shape).
+  ```
+
+  Then run `tyrion status` for the current view and tell the user: re-invoke `/tyrion-orchestrate` when ready to continue with the next wave.
+
+This mode-based pause is a normal, all-clear checkpoint — not a failure state. Every full-stop condition (blocked, conflict, integration failure, stuck, unexpected result) still fires regardless of mode; those halt work until the human intervenes, whereas this pause just waits for a "go ahead" to start the next wave.
 
 ### 3. DONE
 
@@ -270,12 +296,16 @@ tyrion note <slug> recovery "orchestration session found story stuck in_progress
 | Termination = all stories done (not just wave-next empty) | Crashed subagent leaves story in_progress with no pending siblings; wave-next returns empty but epic is not done |
 | Subagents return summaries only | Main session context stays lean; large context collapses orchestration |
 | Blocked = full stop | Dispatching the next wave on top of a blocked story creates unresolvable dependency tangles |
+| Workers always run `--dark-factory`, never conditional on epic mode | A subagent has no human prompt channel, so `shape`-mode cadence has nothing to pause for inside a worker; mode governs only the parent's between-wave cadence. Wiring the dispatch template to `tyrion epic mode` would be a bug |
+| Mode-based pause (shape) ≠ full stop | A full stop (blocked, conflict, integration failure, stuck) needs human intervention before ANY further work, even in `dark_factory`. The shape-mode pause is weaker: all clear, just waiting for a "go ahead" to start the next wave — not a failure state |
+| Re-read mode fresh at 2f every wave, never cache from ORIENT | The parent re-reads between waves so flipping `dark_factory`→`shape` mid-run pauses after the current wave; a cached value would ignore the flip |
 | Chunk wide waves (> 8 stories) | Avoid saturating the Agent concurrency pool — batch 6-8 per dispatch |
 | Subagents use `/tyrion-implement` | They run the full quality protocol (TDD, pre-push, UAT). The orchestrating session dispatches only — it never implements stories directly |
 
 ## Termination conditions
 
 - `tyrion status` shows all stories done AND `tyrion wave next` returns "(no pending stories)" → normal completion
+- A wave completes all-clear with pending stories remaining AND the epic's mode is `shape` (or unset) → **shape-mode pause**: stop, print the pause message + `tyrion status`, wait for the user to re-invoke `/tyrion-orchestrate` (not a failure — the next wave simply awaits a "go ahead")
 - A story surfaces as `blocked` → pause, surface to user
 - A story is stuck `in_progress` after all subagents return → stuck story recovery (see above)
 - A subagent returns neither DONE nor BLOCKED → treat as blocked, note it, surface to user

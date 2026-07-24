@@ -67,6 +67,8 @@ tyrion depends add <slug> <dep> / tyrion wave show / tyrion wave next
 
 `/tyrion-implement` is the heavy lifter: orient+claim -> resume+plan -> per-criterion subagent loop (continuous capture: log a progress note before responding to any new user request, and after every Write/Edit/Bash call) -> UAT runbook -> `/pre-push` (build/strict modes) -> `tyrion done`. Modes: default, `--spike` (no quality gate, exploration), `--tdd=strict` (failing test first), `--dark-factory` (agent runs UAT and closes without human review — pair with a `/goal` directive for unattended epics).
 
+Dark-factory also persists per epic: `tyrion epic mode <slug> dark_factory` (read back with `tyrion epic mode <slug>`, a bare `dark_factory`/`shape` word) makes it the default for that epic without retyping the flag — `/tyrion-implement` treats a persisted `dark_factory` epic as equivalent to the explicit flag, `/tyrion-orchestrate` auto-advances wave to wave instead of pausing after each one, and `tyrion prime`'s Tier-2 briefing surfaces a `mode:` contract line so an agent resuming mid-story knows the cadence without asking. `shape` (unset) stays the human-in-the-loop default everywhere.
+
 ## Auto-Engagement (Claude Code)
 
 `tyrion setup claude` wires a target repo's `.claude/settings.json` in one idempotent, atomic

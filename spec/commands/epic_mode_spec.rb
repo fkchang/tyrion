@@ -68,10 +68,28 @@ RSpec.describe 'epic mode (dark_factory / shape)' do
     end
   end
 
-  describe 'missing arguments' do
+  describe 'missing slug' do
     it 'dies with a usage message' do
-      expect { Tyrion::Commands.cmd_epic(['mode', 'my-epic'], store) }
+      expect { Tyrion::Commands.cmd_epic(['mode'], store) }
         .to raise_error(SystemExit).and output(/Usage: tyrion epic mode/).to_stderr
+    end
+  end
+
+  # ── CLI: tyrion epic mode <slug> read form (getter) ──────────────────────
+  describe 'tyrion epic mode <slug> (no value) — read form' do
+    it 'prints exactly "dark_factory\\n" when the epic mode is dark_factory, no mutation' do
+      store.update_epic(epic['id'], 'mode' => 'dark_factory')
+      expect_any_instance_of(Tyrion::Store).not_to receive(:update_epic)
+      expect { Tyrion::Commands.cmd_epic(['mode', 'my-epic'], store) }
+        .to output("dark_factory\n").to_stdout
+      expect(store.find_epic_by_id(epic['id'])['mode']).to eq 'dark_factory'
+    end
+
+    it 'prints exactly "shape\\n" when the epic mode is unset/NULL, no mutation' do
+      expect_any_instance_of(Tyrion::Store).not_to receive(:update_epic)
+      expect { Tyrion::Commands.cmd_epic(['mode', 'my-epic'], store) }
+        .to output("shape\n").to_stdout
+      expect(store.find_epic_by_id(epic['id'])['mode']).to be_nil
     end
   end
 
