@@ -158,7 +158,10 @@ module Views
                          else 'var(--ink-faint)'
                          end
             icon_glyph = s_status == 'pending' ? '○' : '●'
-            href = s_status == 'in_progress' ? nav_href('/') : "/stories/#{s['id']}"
+            # Always link to the exact story: with parallel lanes several stories
+            # can be in_progress at once, so routing in-progress rows through the
+            # ambient active-story resolver ('/') showed the wrong card.
+            href = "/stories/#{s['id']}"
 
             a(class: row_class, href: href, style: "text-decoration:none;") do
               span(class: s_status == 'in_progress' ? 's-icon s-icon-pulse' : 's-icon',

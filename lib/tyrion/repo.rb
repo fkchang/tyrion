@@ -24,6 +24,7 @@ module Tyrion
     end
 
     # Walk up from cwd to find .tyrion/marker (handles subdir invocation).
+    # Returns nil if path no longer exists (e.g. a project whose repo dir was deleted).
     def self.tyrion_root(path = Dir.pwd)
       cur = File.realpath(path)
       loop do
@@ -32,6 +33,8 @@ module Tyrion
         return nil if parent == cur
         cur = parent
       end
+    rescue Errno::ENOENT
+      nil
     end
 
     # Current worktree root — falls back to cwd if marker not found.

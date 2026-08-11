@@ -29,6 +29,19 @@ RSpec.describe Tyrion::Repo do
     end
   end
 
+  describe '.tyrion_root' do
+    it 'returns nil for a path that no longer exists (deleted project dir)' do
+      expect(described_class.tyrion_root("#{tmpdir}/gone/deeper")).to be_nil
+    end
+
+    it 'finds the root when invoked from a subdir' do
+      FileUtils.mkdir_p("#{tmpdir}/.tyrion")
+      FileUtils.touch("#{tmpdir}/#{described_class::MARKER}")
+      FileUtils.mkdir_p("#{tmpdir}/sub/dir")
+      expect(described_class.tyrion_root("#{tmpdir}/sub/dir")).to eq(File.realpath(tmpdir))
+    end
+  end
+
   describe '.lane_dir' do
     it 'returns a path under .tyrion/lanes/ keyed by the first 16 hex chars of sha256(token)' do
       token = 'claude:12345:abcdef'

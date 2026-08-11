@@ -26,6 +26,34 @@ RSpec.describe Views::Layout do
   end
 end
 
+# Parallel lanes: several stories can be in_progress at once, so every sidebar
+# story row must link to its exact /stories/:id — never the ambient '/' resolver,
+# which showed whichever in-progress story it resolved first.
+RSpec.describe Views::Layout do
+  subject(:html) do
+    Views::Layout.new(
+      project: { 'slug' => 'tyrion', 'name' => 'Tyrion' },
+      epic: { 'slug' => 'ukf-h0' },
+      stories: [
+        { 'id' => 11, 'slug' => 'i1', 'status' => 'in_progress' },
+        { 'id' => 12, 'slug' => 'i2', 'status' => 'in_progress' },
+        { 'id' => 13, 'slug' => 'i3', 'status' => 'pending' }
+      ],
+      disc_summary: { spike: nil, ready_count: 0, mark_count: 0 },
+      project_slug: 'tyrion'
+    ).call { }
+  end
+
+  it 'links each in-progress sidebar row to its own story id' do
+    expect(html).to include('href="/stories/11"')
+    expect(html).to include('href="/stories/12"')
+  end
+
+  it 'does not route any sidebar story row through the ambient active-story view' do
+    expect(html).not_to match(%r{class="story-row[^"]*" href="/(\?|")})
+  end
+end
+
 RSpec.describe Views::Layout do
   subject(:html) do
     Views::Layout.new(
