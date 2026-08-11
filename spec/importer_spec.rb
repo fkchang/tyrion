@@ -30,6 +30,25 @@ CRITERIA_THEN_FEATURE_CONTENT = <<~FEATURE
       And third outcome continues
 FEATURE
 
+WRAPPED_INTENT_FEATURE_CONTENT = <<~FEATURE
+  Feature: Wrapped Intent Epic
+
+    Scenario: wrapped-intent-story
+      # Intent: As a uregistry maintainer, in order to know whether search
+      # changes help or hurt before merging, I want ukf search to log every
+      # query and ukf bench to score hit@1/hit@5/latency against a golden set.
+      Given a precondition
+      When an action occurs
+      Then an outcome is observed
+
+    Scenario: comment-between-steps-story
+      # Intent: short intent here
+      Given a precondition
+      # this is just a note, not part of intent
+      When an action occurs
+      Then an outcome is observed
+FEATURE
+
 NARRATIVE_FEATURE_CONTENT = <<~FEATURE
   Feature: Narrative Epic
     Epic with Gherkin narrative format.
@@ -70,6 +89,11 @@ RSpec.describe Tyrion::Importer do
   let(:criteria_then_feature_path) do
     path = File.join(ctx.tmpdir, 'criteria-mode-epic.feature')
     File.write(path, CRITERIA_THEN_FEATURE_CONTENT)
+    path
+  end
+  let(:wrapped_intent_feature_path) do
+    path = File.join(ctx.tmpdir, 'wrapped-intent-epic.feature')
+    File.write(path, WRAPPED_INTENT_FEATURE_CONTENT)
     path
   end
 
@@ -266,6 +290,48 @@ RSpec.describe Tyrion::Importer do
         run_narrative_import
         story = narrative_story('story-intent-wins')
         expect(story['intent']).to eq 'explicit intent takes priority over narrative'
+      end
+    end
+
+    # ── Wrapped multi-line # Intent: comments ───────────────────────────────
+
+    context 'wrapped multi-line # Intent: comment' do
+      def run_wrapped_intent_import
+        capture_io { Tyrion::Importer.run([wrapped_intent_feature_path], store) }
+      end
+
+      def wrapped_story(slug)
+        epic = store.find_epic(ctx.project['id'], 'wrapped-intent-epic')
+        store.stories_for_epic(epic['id']).find { |s| s['slug'] == slug }
+      end
+
+      it 'captures a wrapped multi-line intent in full as one space-joined string' do
+        run_wrapped_intent_import
+        story = wrapped_story('wrapped-intent-story')
+        expect(story['intent']).to eq(
+          'As a uregistry maintainer, in order to know whether search ' \
+          'changes help or hurt before merging, I want ukf search to log every ' \
+          'query and ukf bench to score hit@1/hit@5/latency against a golden set.'
+        )
+      end
+
+      it 'leaves single-line # Intent: unchanged' do
+        run_import
+        story = first_story
+        expect(story['intent']).to eq 'test the basic import path'
+      end
+
+      it 'does not absorb a comment line between steps into the intent' do
+        run_wrapped_intent_import
+        story = wrapped_story('comment-between-steps-story')
+        expect(story['intent']).to eq 'short intent here'
+        expect(story['intent']).not_to include('this is just a note')
+      end
+
+      it 'does not count the comment line between steps as a criterion' do
+        run_wrapped_intent_import
+        story = wrapped_story('comment-between-steps-story')
+        expect(store.criteria_for_story(story['id']).length).to eq 3
       end
     end
 

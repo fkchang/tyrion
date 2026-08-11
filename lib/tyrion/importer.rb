@@ -140,12 +140,15 @@ module Tyrion
       scenarios           = []
       current_scenario    = nil
       last_semantic_kind  = nil
+      intent_continuation = nil # :scenario, :feature, or nil — set after a # Intent: line,
+                                 # cleared by any non-comment-continuation line
 
       lines.each do |line|
         stripped = line.strip
 
         if stripped.start_with?('Feature:')
           feature_name = stripped.sub(/^Feature:\s*/, '').strip
+          intent_continuation = nil
           next
         end
 
@@ -155,6 +158,7 @@ module Tyrion
           slug  = title.downcase.gsub(/[^a-z0-9]+/, '-').gsub(/^-|-$/, '')
           current_scenario = { title: title, slug: slug, intent: nil, narrative: [], criteria: [], setup_context: [] }
           last_semantic_kind = nil
+          intent_continuation = nil
           next
         end
 
@@ -162,11 +166,26 @@ module Tyrion
           intent_text = stripped.sub(/^#\s*Intent:\s*/, '').strip
           if current_scenario
             current_scenario[:intent] = intent_text
+            intent_continuation = :scenario
           else
             feature_description = intent_text
+            intent_continuation = :feature
           end
           next
         end
+
+        # Contiguous plain comment lines immediately following # Intent: wrap the
+        # same intent (agent-drafted feature files wrap long intents across lines).
+        if intent_continuation && stripped.start_with?('#')
+          continuation_text = stripped.sub(/^#\s*/, '').strip
+          if intent_continuation == :scenario
+            current_scenario[:intent] = "#{current_scenario[:intent]} #{continuation_text}"
+          else
+            feature_description = "#{feature_description} #{continuation_text}"
+          end
+          next
+        end
+        intent_continuation = nil
 
         next if stripped.start_with?('#') || stripped.empty?
         next unless current_scenario
