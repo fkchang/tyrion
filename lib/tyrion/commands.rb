@@ -444,6 +444,7 @@ module Tyrion
 
       store.update_epic(epic['id'], 'status' => 'done')
       puts "Epic #{slug} sealed as done."
+      puts Output.dim("Tip: /tyrion-changelog #{slug} — add a changelog entry for this epic.")
     end
 
     def self.cmd_epic_archive(args, store)
@@ -2148,6 +2149,7 @@ module Tyrion
       if answer.downcase == 'y'
         store.update_epic(epic['id'], 'status' => 'done')
         output.puts "Epic #{epic['slug']} sealed as done."
+        output.puts Output.dim("Tip: /tyrion-changelog #{epic['slug']} — add a changelog entry for this epic.")
       else
         output.puts "Tip: run `tyrion epic complete #{epic['slug']}` when ready to seal."
       end

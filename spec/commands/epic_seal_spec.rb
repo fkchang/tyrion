@@ -37,6 +37,14 @@ RSpec.describe 'epic completion seal commands' do
       expect(store.find_epic_by_id(epic['id'])['status']).to eq('done')
     end
 
+    it 'prints a changelog tip when the seal succeeds' do
+      s = create_story('last'); store.start_story(s['id'])
+      out = StringIO.new
+      Tyrion::Commands.cmd_done(['last', 'wrapped up'], store,
+        input: StringIO.new("y\n"), output: out)
+      expect(out.string).to match(%r{/tyrion-changelog my-epic})
+    end
+
     it 'leaves the epic active and prints the hint when the user answers n' do
       s = create_story('last'); store.start_story(s['id'])
       out = StringIO.new
@@ -65,6 +73,13 @@ RSpec.describe 'epic completion seal commands' do
       expect { Tyrion::Commands.cmd_epic_complete(['my-epic'], store) }
         .to output(/Epic my-epic sealed as done\./).to_stdout
       expect(store.find_epic_by_id(epic['id'])['status']).to eq('done')
+    end
+
+    it 'prints a changelog tip after sealing' do
+      create_story('a', done: true)
+      create_story('b', done: true)
+      expect { Tyrion::Commands.cmd_epic_complete(['my-epic'], store) }
+        .to output(%r{/tyrion-changelog my-epic}).to_stdout
     end
 
     it 'refuses when a story is not done and names it' do
