@@ -190,7 +190,7 @@ module TyrionWeb
 
       stories = epics_to_scan.flat_map do |e|
         store.stories_for_epic(e['id']).map { |s| s.merge('epic_slug' => e['slug']) }
-      end
+      end.map { |s| s.merge(criteria_progress(s['id'])) }
       by_status = stories.group_by { |s| s['status'] }
 
       {
@@ -202,6 +202,13 @@ module TyrionWeb
         blocked:      by_status.fetch('blocked', []),
         done:         by_status.fetch('done', []).last(8)
       }
+    end
+
+    # Acceptance-criteria progress for a story card (War Room). 'criteria_total'
+    # zero means the story has no criteria — cards render no bar in that case.
+    def self.criteria_progress(story_id)
+      criteria = store.criteria_for_story(story_id)
+      { 'criteria_met' => TyrionWeb::Presenter.criteria_met_count(criteria), 'criteria_total' => criteria.size }
     end
 
     def self.load_sidebar_data(project, epic)

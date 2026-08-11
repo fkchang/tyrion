@@ -89,3 +89,41 @@ RSpec.describe 'TyrionWeb::Data.load_war_room_view — scoped to a single epic' 
     expect(result[:queue]).to eq []
   end
 end
+
+# Criteria progress: each story card carries met/total acceptance-criteria
+# counts so the war room shows movement within a story, not just its status.
+RSpec.describe 'TyrionWeb::Data.load_war_room_view — criteria progress' do
+  let(:ctx)     { tyrion_worktree(project_slug: 'wr-proj', project_name: 'WR Test') }
+  let(:store)   { ctx.store }
+  let(:project) { ctx.project }
+  let(:epic)    { store.create_epic(project_id: project['id'], slug: 'ep-a', name: 'Epic A') }
+
+  before do
+    TyrionWeb::Data.instance_variable_set(:@store, store)
+    allow(TyrionWeb::Data).to receive(:resolve_active_epic).and_return(nil)
+  end
+
+  after { TyrionWeb::Data.instance_variable_set(:@store, nil) }
+
+  it 'reports met/total criteria counts for a story that has criteria' do
+    story = store.create_story(epic_id: epic['id'], slug: 'has-criteria', title: 'HC', sequence: 1)
+    store.add_criteria(story['id'], [
+      { keyword: 'Then', semantic_kind: 'then', text: 'a' },
+      { keyword: 'Then', semantic_kind: 'then', text: 'b' }
+    ])
+    store.check_criterion(story['id'], 1, 'done')
+
+    result = TyrionWeb::Data.load_war_room_view(project_slug: 'wr-proj')
+    card = result[:queue].find { |s| s['slug'] == 'has-criteria' }
+    expect(card['criteria_met']).to eq 1
+    expect(card['criteria_total']).to eq 2
+  end
+
+  it 'reports zero total for a story with no criteria' do
+    store.create_story(epic_id: epic['id'], slug: 'no-criteria', title: 'NC', sequence: 1)
+
+    result = TyrionWeb::Data.load_war_room_view(project_slug: 'wr-proj')
+    card = result[:queue].find { |s| s['slug'] == 'no-criteria' }
+    expect(card['criteria_total']).to eq 0
+  end
+end

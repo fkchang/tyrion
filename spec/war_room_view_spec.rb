@@ -52,3 +52,32 @@ RSpec.describe Views::WarRoomView do
     end
   end
 end
+
+# Criteria progress bar: a glanceable met/total signal per card, shown only
+# when the story actually has criteria.
+RSpec.describe 'Views::WarRoomView — criteria progress bar' do
+  def story(slug, criteria_met:, criteria_total:)
+    { 'slug' => slug, 'claimed_by' => 'claude:1:a', 'last_note_at' => nil, 'next_action' => 'do x',
+      'criteria_met' => criteria_met, 'criteria_total' => criteria_total }
+  end
+
+  def render(queue:)
+    Views::WarRoomView.new(
+      project: { 'name' => 'P', 'slug' => 'p' }, queue: queue, active: [],
+      blocked: [], done: [],
+      epic: { 'slug' => 'e', 'name' => 'E' }, stories: [],
+      disc_summary: { spike: nil, ready_count: 0, mark_count: 0 }, project_slug: 'p'
+    ).call
+  end
+
+  it 'renders a "met/total" progress bar for a story with criteria' do
+    html = render(queue: [story('has-criteria', criteria_met: 3, criteria_total: 5)])
+    expect(html).to include('3/5')
+    expect(html).to include('rm-mini-track')
+  end
+
+  it 'renders no progress bar for a story with zero criteria' do
+    html = render(queue: [story('no-criteria', criteria_met: 0, criteria_total: 0)])
+    expect(html).not_to include('wr-card-progress')
+  end
+end

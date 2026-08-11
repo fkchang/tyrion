@@ -144,10 +144,23 @@ module Views
           if s['current_context']
             p(class: "wr-card-ctx") { s['current_context']&.slice(0, 60) }
           end
+          render_criteria_progress(s)
           div(class: "wr-card-tags") do
             span(class: "wr-tag") { s['status'] }
           end
         end
+      end
+    end
+
+    def render_criteria_progress(s)
+      total = s['criteria_total'].to_i
+      return unless total.positive?
+
+      met = s['criteria_met'].to_i
+      pct = (met * 100.0 / total).round
+      div(class: "wr-card-progress") do
+        div(class: "rm-mini-track") { div(class: "rm-mini-fill", style: "width:#{pct}%") }
+        span(class: "wr-card-progress-text") { "#{met}/#{total}" }
       end
     end
 
