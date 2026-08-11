@@ -117,3 +117,33 @@ RSpec.describe 'Views::WarRoomView — blocked card reason' do
     expect(html).not_to include('wr-card-blocked-reason')
   end
 end
+
+# Orchestrated runs never call `tyrion done` themselves — the parent merges
+# the lane branch and closes the story. An in_progress card with every
+# criterion met is waiting on that merge, not "still working," so it needs a
+# distinct hint instead of the ambiguous in_progress badge.
+RSpec.describe 'Views::WarRoomView — awaiting merge hint' do
+  def story(slug, status:, criteria_met:, criteria_total:)
+    { 'slug' => slug, 'claimed_by' => 'claude:1:a', 'last_note_at' => nil, 'next_action' => 'do x',
+      'status' => status, 'criteria_met' => criteria_met, 'criteria_total' => criteria_total }
+  end
+
+  def render(active:)
+    Views::WarRoomView.new(
+      project: { 'name' => 'P', 'slug' => 'p' }, queue: [], active: active,
+      blocked: [], done: [],
+      epic: { 'slug' => 'e', 'name' => 'E' }, stories: [],
+      disc_summary: { spike: nil, ready_count: 0, mark_count: 0 }, project_slug: 'p'
+    ).call
+  end
+
+  it 'shows "awaiting merge" when all criteria are met on an in_progress card' do
+    html = render(active: [story('ready-to-merge', status: 'in_progress', criteria_met: 3, criteria_total: 3)])
+    expect(html).to include('awaiting merge')
+  end
+
+  it 'does not show the hint when criteria are only partially met' do
+    html = render(active: [story('still-working', status: 'in_progress', criteria_met: 2, criteria_total: 3)])
+    expect(html).not_to include('awaiting merge')
+  end
+end

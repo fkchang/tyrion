@@ -103,6 +103,15 @@ module Views
       text.length > 80 ? "#{text.slice(0, 80)}…" : text
     end
 
+    # In orchestrated runs, workers never call `tyrion done` themselves — the
+    # parent merges the lane branch and closes the story. So in_progress with
+    # every criterion met means the story is sitting on (or undergoing) that
+    # merge, not just "still working."
+    def awaiting_merge?(s)
+      s['status'] == 'in_progress' && s['criteria_total'].to_i.positive? &&
+        s['criteria_met'].to_i == s['criteria_total'].to_i
+    end
+
     # Multiple lanes are active at once — show them all, marked by owner lane,
     # rather than singling one out as THE resume point (the web can't know which
     # lane belongs to the viewer).
@@ -150,6 +159,9 @@ module Views
           end
           if blocked && s['blocked_on']
             p(class: "wr-card-blocked-reason") { truncate_reason(s['blocked_on']) }
+          end
+          if awaiting_merge?(s)
+            p(class: "wr-card-state-hint") { "⚔ awaiting merge" }
           end
           render_criteria_progress(s)
           div(class: "wr-card-tags") do
