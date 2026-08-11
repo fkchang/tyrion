@@ -663,10 +663,15 @@ module Tyrion
           raise "Story not found: #{story_id}" unless story
           raise "Cannot block a done story" if story['status'] == 'done'
 
+          # Re-blocking an already-blocked story must not clobber the status it
+          # will eventually resume to — keep the previously-stashed values.
+          prior_status      = story['status'] == 'blocked' ? story['pre_block_status'] : story['status']
+          prior_claimed_by  = story['status'] == 'blocked' ? story['pre_block_claimed_by'] : story['claimed_by']
+
           t = now
           db.execute(
-            'UPDATE stories SET status=?, blocked_on=?, blocked_on_discovery=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?',
-            ['blocked', blocked_on, blocked_on_discovery, t, story_id]
+            'UPDATE stories SET status=?, pre_block_status=?, pre_block_claimed_by=?, blocked_on=?, blocked_on_discovery=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?',
+            ['blocked', prior_status, prior_claimed_by, blocked_on, blocked_on_discovery, t, story_id]
           )
           reopen_epic_if_done!(db, story['epic_id'])
         end
@@ -674,7 +679,13 @@ module Tyrion
       end
     end
 
-    def unblock_story(story_id)
+    # Restores a blocked story to the status it held before it was blocked
+    # (pre_block_status), or 'pending' for legacy rows blocked before that
+    # column existed. claimed_by is restored alongside it so a story that was
+    # in_progress under a lane resumes under that same lane. resume: true
+    # forces restoration to 'in_progress' regardless of the recorded state —
+    # an escape hatch for legacy rows with no pre_block_status.
+    def unblock_story(story_id, resume: false)
       with_db do |db|
         db.transaction(:immediate) do
           story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
@@ -682,13 +693,19 @@ module Tyrion
           raise "Story is not blocked (status: #{story['status']})" unless story['status'] == 'blocked'
 
           t = now
+          restored_status     = resume ? 'in_progress' : (story['pre_block_status'] || 'pending')
+          restored_claimed_by = story['pre_block_claimed_by']
+          restored_claimed_at = restored_claimed_by ? t : nil
+
           db.execute(
-            'UPDATE stories SET status=?, blocked_on=NULL, blocked_on_discovery=NULL, updated_at=? WHERE id=?',
-            ['pending', t, story_id]
+            'UPDATE stories SET status=?, claimed_by=?, claimed_at=?, pre_block_status=NULL, pre_block_claimed_by=NULL, blocked_on=NULL, blocked_on_discovery=NULL, updated_at=? WHERE id=?',
+            [restored_status, restored_claimed_by, restored_claimed_at, t, story_id]
           )
         end
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end
+    rescue SQLite3::ConstraintException
+      raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
     end
 
     def complete_story(story_id, summary, force: false)
@@ -1357,6 +1374,11 @@ module Tyrion
       ['add_mode_to_epics', lambda { |db|
         cols = db.execute('PRAGMA table_info(epics)').map { |r| r['name'] }
         db.execute('ALTER TABLE epics ADD COLUMN mode TEXT') unless cols.include?('mode')
+      }],
+      ['add_pre_block_status_to_stories', lambda { |db|
+        cols = db.execute('PRAGMA table_info(stories)').map { |r| r['name'] }
+        db.execute('ALTER TABLE stories ADD COLUMN pre_block_status TEXT') unless cols.include?('pre_block_status')
+        db.execute('ALTER TABLE stories ADD COLUMN pre_block_claimed_by TEXT') unless cols.include?('pre_block_claimed_by')
       }]
     ].freeze
 

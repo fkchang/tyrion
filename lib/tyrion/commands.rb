@@ -1206,11 +1206,12 @@ module Tyrion
         die "Discovery not found: #{disc_id}" unless store.find_discovery(disc_id)
       end
 
+      prior_status = story['status']
       store.block_story(story['id'], blocked_on: reason, blocked_on_discovery: disc_id)
 
       body = "blocked: #{reason}"
       body += " [#{disc_id}]" if disc_id
-      metadata = { 'action' => 'block', 'blocked_on' => reason, 'blocked_on_discovery' => disc_id }.compact
+      metadata = { 'action' => 'block', 'blocked_on' => reason, 'blocked_on_discovery' => disc_id, 'prior_status' => prior_status }.compact
       store.add_note(story['id'], 'blocker', body, metadata: JSON.dump(metadata))
 
       puts "#{Output.red('Blocked:')} #{slug} — #{story['title']}"
@@ -1223,22 +1224,26 @@ module Tyrion
     # ── unblock ────────────────────────────────────────────────────────────
 
     def self.cmd_unblock(args, store)
+      resume_idx = args.index('--resume')
+      resume = !resume_idx.nil?
+      args.delete_at(resume_idx) if resume_idx
+
       slug = args.shift
-      die "Usage: tyrion unblock <slug>" unless slug
+      die "Usage: tyrion unblock <slug> [--resume]" unless slug
 
       _project, epic = resolve_project_epic(store)
       story = store.find_story(epic['id'], slug)
       die "Story not found: #{slug}" unless story
 
       prior_reason = story['blocked_on']
-      store.unblock_story(story['id'])
+      updated = store.unblock_story(story['id'], resume: resume)
 
       body = presence(prior_reason) ? "unblocked (was: #{prior_reason})" : 'unblocked'
-      metadata = { 'action' => 'unblock', 'blocked_on' => prior_reason }.compact
+      metadata = { 'action' => 'unblock', 'blocked_on' => prior_reason, 'restored_status' => updated['status'] }.compact
       store.add_note(story['id'], 'blocker', body, metadata: JSON.dump(metadata))
 
       puts "#{Output.green('Unblocked:')} #{slug} — #{story['title']}"
-      puts "Status: #{Output.dim('pending')}"
+      puts "Status: #{Output.dim(updated['status'])}"
     rescue RuntimeError => e
       die e.message
     end
@@ -3404,7 +3409,7 @@ module Tyrion
         Work:
           tyrion start <slug> [--steal]            Claim a story (--steal to force takeover of another lane)
           tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story with a reason
-          tyrion unblock <slug>                    Unblock a story → back to pending
+          tyrion unblock <slug> [--resume]         Unblock a story → restores prior status (--resume forces in_progress)
           tyrion claim-next                        Claim next pending story (transactional)
           tyrion claim <slug> --as <label>         Pre-claim a story for a lane (adopts on TYRION_LANE=<label> start)
           tyrion unclaim <slug> [--steal]          Release a claim → pending (frees a dead lane; --steal for a live one)

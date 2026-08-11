@@ -35,6 +35,14 @@ RSpec.describe 'tyrion block / unblock' do
       db_path = File.join(ctx.tmpdir, 'test.db')
       expect { Tyrion::Store.new(db_path: db_path) }.not_to raise_error
     end
+
+    it 'adds pre_block_status and pre_block_claimed_by columns without error on a fresh DB' do
+      story = make_story
+      expect(story.key?('pre_block_status')).to be true
+      expect(story.key?('pre_block_claimed_by')).to be true
+      expect(story['pre_block_status']).to be_nil
+      expect(story['pre_block_claimed_by']).to be_nil
+    end
   end
 
   # ── cmd_block ─────────────────────────────────────────────────────────────
@@ -239,6 +247,87 @@ RSpec.describe 'tyrion block / unblock' do
           expect { Tyrion::Commands.cmd_unblock(['my-story'], store) }.to raise_error(SystemExit)
         end
         expect(err).to match(/not blocked/i)
+      end
+    end
+
+    context 'blocked from in_progress' do
+      before do
+        story = make_story
+        store.start_story(story['id'], claimed_by: 'lane-A')
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'waiting on review'], store) }
+      end
+
+      it 'restores status to in_progress' do
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'in_progress'
+      end
+
+      it 'preserves claimed_by' do
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['claimed_by']).to eq 'lane-A'
+      end
+
+      it 'prints the restored status' do
+        expect {
+          Tyrion::Commands.cmd_unblock(['my-story'], store)
+        }.to output(/Status:.*in_progress/).to_stdout
+      end
+    end
+
+    context 'blocked from pending (no claim)' do
+      before { make_story }
+
+      it 'restores status to pending' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'waiting'], store) }
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'pending'
+      end
+    end
+
+    context 'legacy blocked row with no pre_block_status recorded' do
+      before do
+        story = make_story
+        store.update_story(story['id'], 'status' => 'blocked', 'blocked_on' => 'legacy block, predates this fix')
+      end
+
+      it 'falls back to pending' do
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'pending'
+      end
+    end
+
+    context '--resume forces restoration to in_progress' do
+      before do
+        story = make_story
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'waiting'], store) }
+      end
+
+      it 'restores to in_progress despite pre_block_status being pending' do
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story', '--resume'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'in_progress'
+      end
+    end
+
+    context 'restoring to in_progress collides with another story already in that lane' do
+      before do
+        story_one = make_story(slug: 'story-one')
+        story_two = store.create_story(epic_id: epic['id'], slug: 'story-two', title: 'Story Two')
+
+        store.start_story(story_one['id'], claimed_by: 'lane-A')
+        capture_io { Tyrion::Commands.cmd_block(['story-one', 'waiting on review'], store) }
+        store.start_story(story_two['id'], claimed_by: 'lane-A')
+      end
+
+      it 'dies cleanly instead of raising a raw SQLite exception' do
+        _out, err = capture_io do
+          expect { Tyrion::Commands.cmd_unblock(['story-one'], store) }.to raise_error(SystemExit)
+        end
+        expect(err).to match(/already in_progress/i)
+      end
+
+      it 'leaves story-one blocked' do
+        capture_io { expect { Tyrion::Commands.cmd_unblock(['story-one'], store) }.to raise_error(SystemExit) }
+        expect(store.find_story(epic['id'], 'story-one')['status']).to eq 'blocked'
       end
     end
   end
