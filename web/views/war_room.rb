@@ -99,6 +99,10 @@ module Views
       na.length > 120 ? "#{na.slice(0, 120)}…" : na
     end
 
+    def truncate_reason(text)
+      text.length > 80 ? "#{text.slice(0, 80)}…" : text
+    end
+
     # Multiple lanes are active at once — show them all, marked by owner lane,
     # rather than singling one out as THE resume point (the web can't know which
     # lane belongs to the viewer).
@@ -143,6 +147,9 @@ module Views
           h4(class: "wr-card-title") { s['slug'] }
           if s['current_context']
             p(class: "wr-card-ctx") { s['current_context']&.slice(0, 60) }
+          end
+          if blocked && s['blocked_on']
+            p(class: "wr-card-blocked-reason") { truncate_reason(s['blocked_on']) }
           end
           render_criteria_progress(s)
           div(class: "wr-card-tags") do

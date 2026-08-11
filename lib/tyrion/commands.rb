@@ -1207,6 +1207,12 @@ module Tyrion
       end
 
       store.block_story(story['id'], blocked_on: reason, blocked_on_discovery: disc_id)
+
+      body = "blocked: #{reason}"
+      body += " [#{disc_id}]" if disc_id
+      metadata = { 'action' => 'block', 'blocked_on' => reason, 'blocked_on_discovery' => disc_id }.compact
+      store.add_note(story['id'], 'blocker', body, metadata: JSON.dump(metadata))
+
       puts "#{Output.red('Blocked:')} #{slug} — #{story['title']}"
       puts "Blocked on: #{reason}"
       puts "Discovery:  #{disc_id}" if disc_id
@@ -1224,7 +1230,13 @@ module Tyrion
       story = store.find_story(epic['id'], slug)
       die "Story not found: #{slug}" unless story
 
+      prior_reason = story['blocked_on']
       store.unblock_story(story['id'])
+
+      body = presence(prior_reason) ? "unblocked (was: #{prior_reason})" : 'unblocked'
+      metadata = { 'action' => 'unblock', 'blocked_on' => prior_reason }.compact
+      store.add_note(story['id'], 'blocker', body, metadata: JSON.dump(metadata))
+
       puts "#{Output.green('Unblocked:')} #{slug} — #{story['title']}"
       puts "Status: #{Output.dim('pending')}"
     rescue RuntimeError => e

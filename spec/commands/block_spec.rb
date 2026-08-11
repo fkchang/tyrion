@@ -65,6 +65,25 @@ RSpec.describe 'tyrion block / unblock' do
       end
     end
 
+    context 'records the block as a story note' do
+      before { make_story }
+
+      it 'writes a blocker note with the reason' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'waiting for Finance approval'], store) }
+        story = store.find_story(epic['id'], 'my-story')
+        notes = store.notes_for_story(story['id']).select { |n| n['kind'] == 'blocker' }
+        expect(notes.first['body']).to eq 'blocked: waiting for Finance approval'
+      end
+
+      it 'records metadata with the reason' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'waiting for Finance approval'], store) }
+        story = store.find_story(epic['id'], 'my-story')
+        notes = store.notes_for_story(story['id']).select { |n| n['kind'] == 'blocker' }
+        meta = JSON.parse(notes.first['metadata'])
+        expect(meta).to include('action' => 'block', 'blocked_on' => 'waiting for Finance approval')
+      end
+    end
+
     context 'with --discovery flag' do
       before do
         make_story
@@ -83,6 +102,15 @@ RSpec.describe 'tyrion block / unblock' do
         expect {
           Tyrion::Commands.cmd_block(['my-story', 'waiting on spike', '--discovery', @disc['id']], store)
         }.to output(/#{Regexp.escape(@disc['id'])}/).to_stdout
+      end
+
+      it 'includes the disc-id in the blocker note body' do
+        capture_io do
+          Tyrion::Commands.cmd_block(['my-story', 'waiting on spike', '--discovery', @disc['id']], store)
+        end
+        story = store.find_story(epic['id'], 'my-story')
+        notes = store.notes_for_story(story['id']).select { |n| n['kind'] == 'blocker' }
+        expect(notes.first['body']).to include(@disc['id'])
       end
     end
 
@@ -168,6 +196,38 @@ RSpec.describe 'tyrion block / unblock' do
         store.update_story(story['id'], 'blocked_on_discovery' => disc['id'])
         capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
         expect(store.find_story(epic['id'], 'my-story')['blocked_on_discovery']).to be_nil
+      end
+
+      it 'writes a blocker note preserving the prior reason' do
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        story = store.find_story(epic['id'], 'my-story')
+        notes = store.notes_for_story(story['id']).select { |n| n['kind'] == 'blocker' }
+        expect(notes.first['body']).to eq 'unblocked (was: waiting on Finance)'
+      end
+
+      it 'records metadata with the prior reason' do
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        story = store.find_story(epic['id'], 'my-story')
+        notes = store.notes_for_story(story['id']).select { |n| n['kind'] == 'blocker' }
+        meta = JSON.parse(notes.first['metadata'])
+        expect(meta).to include('action' => 'unblock', 'blocked_on' => 'waiting on Finance')
+      end
+
+    end
+
+    context 'full block/unblock cycle via commands' do
+      before { make_story }
+
+      it 'keeps both the block and unblock notes after unblocking, so the reason is recoverable' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'waiting on Finance'], store) }
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+
+        story = store.find_story(epic['id'], 'my-story')
+        notes = store.notes_for_story(story['id']).select { |n| n['kind'] == 'blocker' }
+        bodies = notes.map { |n| n['body'] }
+        expect(bodies).to include('blocked: waiting on Finance')
+        expect(bodies).to include('unblocked (was: waiting on Finance)')
+        expect(story['blocked_on']).to be_nil
       end
     end
 

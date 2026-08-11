@@ -90,6 +90,31 @@ RSpec.describe 'TyrionWeb::Data.load_war_room_view — scoped to a single epic' 
   end
 end
 
+# Traceability: the Blocked lane card needs the block reason to display it, so
+# the story hash reaching the view must carry blocked_on.
+RSpec.describe 'TyrionWeb::Data.load_war_room_view — blocked_on on blocked cards' do
+  let(:ctx)     { tyrion_worktree(project_slug: 'wr-proj', project_name: 'WR Test') }
+  let(:store)   { ctx.store }
+  let(:project) { ctx.project }
+  let(:epic)    { store.create_epic(project_id: project['id'], slug: 'ep-a', name: 'Epic A') }
+
+  before do
+    TyrionWeb::Data.instance_variable_set(:@store, store)
+    allow(TyrionWeb::Data).to receive(:resolve_active_epic).and_return(nil)
+  end
+
+  after { TyrionWeb::Data.instance_variable_set(:@store, nil) }
+
+  it 'includes blocked_on in the blocked story hash' do
+    story = store.create_story(epic_id: epic['id'], slug: 'blocked-one', title: 'B1', sequence: 1)
+    store.block_story(story['id'], blocked_on: 'waiting on Finance approval')
+
+    result = TyrionWeb::Data.load_war_room_view(project_slug: 'wr-proj')
+    card = result[:blocked].find { |s| s['slug'] == 'blocked-one' }
+    expect(card['blocked_on']).to eq 'waiting on Finance approval'
+  end
+end
+
 # Criteria progress: each story card carries met/total acceptance-criteria
 # counts so the war room shows movement within a story, not just its status.
 RSpec.describe 'TyrionWeb::Data.load_war_room_view — criteria progress' do

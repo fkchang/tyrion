@@ -81,3 +81,39 @@ RSpec.describe 'Views::WarRoomView — criteria progress bar' do
     expect(html).not_to include('wr-card-progress')
   end
 end
+
+# Traceability: the Blocked lane card shows why a story is blocked, so a
+# viewer doesn't have to click through to the story detail to see the reason.
+RSpec.describe 'Views::WarRoomView — blocked card reason' do
+  def story(slug, blocked_on: nil)
+    { 'slug' => slug, 'claimed_by' => 'claude:1:a', 'last_note_at' => nil, 'next_action' => 'do x',
+      'blocked_on' => blocked_on }
+  end
+
+  def render(blocked:)
+    Views::WarRoomView.new(
+      project: { 'name' => 'P', 'slug' => 'p' }, queue: [], active: [],
+      blocked: blocked, done: [],
+      epic: { 'slug' => 'e', 'name' => 'E' }, stories: [],
+      disc_summary: { spike: nil, ready_count: 0, mark_count: 0 }, project_slug: 'p'
+    ).call
+  end
+
+  it 'shows the blocked_on reason on the blocked card' do
+    html = render(blocked: [story('blocked-one', blocked_on: 'waiting on Finance approval')])
+    expect(html).to include('waiting on Finance approval')
+    expect(html).to include('wr-card-blocked-reason')
+  end
+
+  it 'truncates a long reason to about 80 characters' do
+    long_reason = 'x' * 200
+    html = render(blocked: [story('blocked-long', blocked_on: long_reason)])
+    expect(html).to include('x' * 80)
+    expect(html).not_to include('x' * 81)
+  end
+
+  it 'renders no reason line when blocked_on is nil' do
+    html = render(blocked: [story('blocked-no-reason', blocked_on: nil)])
+    expect(html).not_to include('wr-card-blocked-reason')
+  end
+end
