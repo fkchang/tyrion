@@ -1,0 +1,67 @@
+/* Ambient pane — sized to read at 300-360px wide alongside a terminal.
+   Self-contained (no shared.css): this page renders outside Views::Layout. */
+:root {
+  --am-bg:      #0D0A07;
+  --am-text:    #D4B896;
+  --am-muted:   #6B5037;
+  --am-aged:    #F59E0B;
+  --am-border:  #2E2010;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 14px 14px 18px;
+  background: var(--am-bg);
+  color: var(--am-text);
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  /* long unbroken text (URLs, paths) wraps instead of forcing a sideways scroll */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.am-project {
+  color: var(--am-muted);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.am-mark {
+  border-left: 2px solid var(--am-border);
+  padding: 0 0 0 9px;
+  margin-bottom: 12px;
+}
+
+.am-mark.aged {
+  border-left-color: var(--am-aged);
+  color: var(--am-aged);
+}
+
+.am-mark-q { margin-bottom: 2px; }
+
+.am-mark-meta {
+  color: var(--am-muted);
+  font-size: 11px;
+}
+
+.am-ready {
+  color: var(--am-muted);
+  font-size: 11px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--am-border);
+}
+
+.am-empty {
+  color: var(--am-muted);
+  font-size: 12px;
+}
+
+@media (min-width: 520px) {
+  body { max-width: 480px; }
+}
