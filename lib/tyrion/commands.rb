@@ -31,6 +31,7 @@ module Tyrion
 
     DISCOVERY_ALIASES = {
       'active'   => 'active_spike',
+      'marks'    => 'mark',
       'ready'    => 'findings_ready',
       'promoted' => 'promoted_to_story',
       'deferred' => 'deferred',
@@ -1440,11 +1441,12 @@ module Tyrion
     def self.cmd_discovery(args, store)
       sub = args.shift
       case sub
-      when 'list'  then cmd_discovery_list(args, store)
-      when 'show'  then cmd_discovery_show(args, store)
-      when 'defer' then cmd_discovery_defer(args, store)
+      when 'list'   then cmd_discovery_list(args, store)
+      when 'show'   then cmd_discovery_show(args, store)
+      when 'defer'  then cmd_discovery_defer(args, store)
+      when 'search' then cmd_discovery_search(args, store)
       else
-        die "Usage: tyrion discovery [list|show|defer]"
+        die "Usage: tyrion discovery [list|show|defer|search]"
       end
     end
 
@@ -1456,6 +1458,27 @@ module Tyrion
       return puts "(no discoveries)" if discs.empty?
 
       discs.each { |d| puts "#{d['id']}  [#{d['status']}]  #{Output.origin_tag(d['origin'])}  #{d['question']}" }
+    end
+
+    SEARCH_SNIPPET_WIDTH = 60
+
+    # Dedup check before filing a new mark: "is this already tracked?". Silent
+    # when nothing matches (exit 0, no output) so an agent can run it mid-task
+    # without adding noise — the answer that matters is the one with hits.
+    def self.cmd_discovery_search(args, store)
+      status_filter = resolve_discovery_status(args)
+      args.slice!(args.index('--status'), 2) if args.index('--status')
+      term = args.join(' ')
+      die 'Usage: tyrion discovery search "<term>" [--status <alias>]' if term.strip.empty?
+
+      project = resolve_project(store)
+      discs   = store.search_discoveries(project_id: project['id'], term: term, status: status_filter)
+
+      discs.each do |d|
+        text = presence(d['question']) || presence(d['finding']) || ''
+        text = "#{text[0, SEARCH_SNIPPET_WIDTH - 1]}…" if text.length > SEARCH_SNIPPET_WIDTH
+        puts "#{d['id']}  [#{d['status']}]  #{text}  (#{Output.time_ago(d['created_at'])})"
+      end
     end
 
     def self.resolve_discovery_status(args)
@@ -3486,9 +3509,10 @@ module Tyrion
           tyrion spike start "question" [--auto]   Frame a known unknown → active_spike
           tyrion spike done [--auto]               Close spike with finding + confidence + recommendation
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
-          tyrion discovery list [--status <alias>] List discoveries (aliases: active|ready|promoted|deferred|all)
+          tyrion discovery list [--status <alias>] List discoveries (aliases: active|marks|ready|promoted|deferred|all)
           tyrion discovery show <disc-id>          Show full discovery detail
           tyrion discovery defer <disc-id> ["why"] Retire an open mark/finding with a reason
+          tyrion discovery search "<term>"         Search discoveries (all statuses; silent if no match)
 
         Lessons:
           tyrion lesson add --at <trigger> "text"   Record a lesson, scoped to active epic if any

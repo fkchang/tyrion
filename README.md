@@ -139,6 +139,10 @@ tyrion spike promote disc-001
 
 # Survey the reconnaissance backlog
 tyrion discovery list --status ready
+
+# Check whether something is already tracked before filing a new mark
+# (searches every status; prints nothing when there's no match)
+tyrion discovery search "sqlite wal"
 ```
 
 Each `spike promote` creates a story with `born_from_discovery` set — full traceability from question to shipped feature.
