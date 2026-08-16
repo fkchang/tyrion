@@ -90,7 +90,9 @@ cd web && TYRION_PROJECT=<slug> bundle exec ruby app.rb
 - `tyrion spike start/done` — structured spike cycle, `active_spike` → `findings_ready`
 - `tyrion spike promote <disc-id>` — converts `findings_ready` → story with `born_from_discovery` traceability
 
-Status aliases for `tyrion discovery list --status`: `active`→`active_spike`, `ready`→`findings_ready`, `promoted`→`promoted_to_story`, `deferred`→`deferred`, `all`→no filter.
+Status aliases for `tyrion discovery list --status`: `active`→`active_spike`, `marks`→`mark`, `ready`→`findings_ready`, `promoted`→`promoted_to_story`, `deferred`→`deferred`, `all`→no filter.
+
+`tyrion discovery search "<term>" [--status <alias>]` is the dedup check an agent runs before filing a new mark. `Store#search_discoveries` splits the term on whitespace and ANDs the words, ORing each word across `question`/`finding`/`recommendation` via LIKE; `%`, `_` and `\` are escaped (`ESCAPE '\'`) so they match literally. No status is excluded by default — that's what makes it a real dedup check. Newest-first, one line per hit, and **silent on no match** (exit 0, no "no results" line) so it costs nothing to run mid-task.
 
 ### Key conventions
 

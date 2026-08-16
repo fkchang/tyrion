@@ -851,6 +851,37 @@ module Tyrion
       end
     end
 
+    # Fields a `discovery search` term is matched against.
+    SEARCH_FIELDS = %w[question finding recommendation].freeze
+
+    # LIKE search across +SEARCH_FIELDS+, scoped to one project. Every
+    # whitespace-separated word in +term+ must match at least one field (AND
+    # across words, OR across fields); matching is case-insensitive via LIKE.
+    # `%`, `_` and `\` in the term are escaped so they match literally instead
+    # of acting as wildcards. No status is excluded by default — pass +status+
+    # to narrow. Newest first.
+    def search_discoveries(project_id:, term:, status: nil)
+      words = term.to_s.split
+      raise ArgumentError, 'search term is blank' if words.empty?
+
+      any_field = SEARCH_FIELDS.map { |f| "#{f} LIKE ? ESCAPE '\\'" }.join(' OR ')
+      sql       = +'SELECT * FROM discoveries WHERE project_id = ?'
+      binds     = [project_id]
+
+      words.each do |word|
+        sql << " AND (#{any_field})"
+        binds.concat(Array.new(SEARCH_FIELDS.size, "%#{escape_like(word)}%"))
+      end
+
+      if status
+        sql << ' AND status = ?'
+        binds << status
+      end
+      sql << ' ORDER BY created_at DESC, id DESC'
+
+      with_db { |db| db.execute(sql, binds) }
+    end
+
     def active_spike_for(project_id)
       with_db do |db|
         db.get_first_row(
@@ -1108,6 +1139,12 @@ module Tyrion
     end
 
     private
+
+    # Neutralize LIKE metacharacters so a term like "50%" or "foo_bar" matches
+    # literally. Pairs with `ESCAPE '\'` in the query.
+    def escape_like(str)
+      str.gsub(/[\\%_]/) { |c| "\\#{c}" }
+    end
 
     SHORT_SHA_RE = /\A[0-9a-f]{7,40}\z/
 
