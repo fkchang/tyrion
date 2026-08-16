@@ -1440,10 +1440,11 @@ module Tyrion
     def self.cmd_discovery(args, store)
       sub = args.shift
       case sub
-      when 'list' then cmd_discovery_list(args, store)
-      when 'show' then cmd_discovery_show(args, store)
+      when 'list'  then cmd_discovery_list(args, store)
+      when 'show'  then cmd_discovery_show(args, store)
+      when 'defer' then cmd_discovery_defer(args, store)
       else
-        die "Usage: tyrion discovery [list|show]"
+        die "Usage: tyrion discovery [list|show|defer]"
       end
     end
 
@@ -1482,6 +1483,27 @@ module Tyrion
       puts "Recommendation: #{disc['recommendation'] || '—'}"
       puts "Hypothesis:     #{disc['hypothesis'] || '—'}" if disc['hypothesis']
       puts "Exit criteria:  #{disc['exit_criteria'] || '—'}" if disc['exit_criteria']
+      puts "Defer reason:   #{disc['defer_reason']}" if disc['defer_reason']
+    end
+
+    def self.cmd_discovery_defer(args, store)
+      disc_id = args.shift
+      die "Usage: tyrion discovery defer <disc-id> [\"why\"]" unless disc_id
+      reason = presence(args.join(' ').strip)
+
+      disc = store.find_discovery(disc_id)
+      die "Discovery #{disc_id} not found" unless disc
+
+      # Repeat defer keeps the reason already on record — show which one won.
+      return puts "already deferred, nothing to do: #{defer_summary(disc)}" if disc['status'] == 'deferred'
+
+      puts "[deferred] #{defer_summary(store.defer_discovery(disc_id, reason: reason))}"
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    def self.defer_summary(disc)
+      [disc['id'], presence(disc['defer_reason'])].compact.join(' — ')
     end
 
     # ── spike ─────────────────────────────────────────────────────────────
@@ -3466,6 +3488,7 @@ module Tyrion
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
           tyrion discovery list [--status <alias>] List discoveries (aliases: active|ready|promoted|deferred|all)
           tyrion discovery show <disc-id>          Show full discovery detail
+          tyrion discovery defer <disc-id> ["why"] Retire an open mark/finding with a reason
 
         Lessons:
           tyrion lesson add --at <trigger> "text"   Record a lesson, scoped to active epic if any

@@ -882,6 +882,28 @@ module Tyrion
       end
     end
 
+    # 'deferred' is deliberately absent — a repeat defer is a friendly no-op handled
+    # by the command layer, not a state this method is ever asked to write over.
+    DEFERRABLE_STATUSES = %w[mark findings_ready].freeze
+
+    def defer_discovery(id, reason: nil)
+      with_db do |db|
+        db.transaction(:immediate) do
+          disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+          raise "Discovery not found: #{id}" unless disc
+          unless DEFERRABLE_STATUSES.include?(disc['status'])
+            raise "Discovery #{id} is #{disc['status']} — only #{DEFERRABLE_STATUSES.join(' or ')} discoveries can be deferred"
+          end
+
+          db.execute(
+            "UPDATE discoveries SET status='deferred', defer_reason=?, updated_at=? WHERE id=?",
+            [reason, now, id]
+          )
+          db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+        end
+      end
+    end
+
     def promote_discovery_to_story(disc_id, epic_id:, slug:, title:, intent:)
       with_db do |db|
         db.transaction(:immediate) do
@@ -1396,6 +1418,10 @@ module Tyrion
         next if cols.include?('origin')
 
         db.execute("ALTER TABLE discoveries ADD COLUMN origin TEXT NOT NULL DEFAULT 'human' CHECK(origin IN ('agent','human'))")
+      }],
+      ['add_defer_reason_to_discoveries', lambda { |db|
+        cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
+        db.execute('ALTER TABLE discoveries ADD COLUMN defer_reason TEXT') unless cols.include?('defer_reason')
       }]
     ].freeze
 
