@@ -169,6 +169,26 @@ module TyrionWeb
       { project: project, spike: spike, findings_ready: findings_ready, marks: marks }
     end
 
+    # Ambient pane data — deliberately just the newest open marks plus a
+    # findings_ready count. Unlike the other loaders, an unknown ?project=
+    # slug falls back to the resolved active project instead of rendering an
+    # empty page: the ambient pane is glance-only, so a stale bookmarked slug
+    # should still show something true rather than a blank surface.
+    def self.load_ambient_view(project_slug: nil, mark_limit: 3)
+      slug    = project_slug&.strip&.then { |s| s.empty? ? nil : s }
+      project = (slug && store.find_project_by_slug(slug)) || resolve_active_project
+      return { project: nil, marks: [], findings_ready_count: 0 } unless project
+
+      marks = store.list_discoveries(project_id: project['id'], status: 'mark')
+                   .sort_by { |d| [d['created_at'].to_s, d['id'].to_s] }.reverse.first(mark_limit)
+
+      {
+        project: project,
+        marks: marks,
+        findings_ready_count: store.list_discoveries(project_id: project['id'], status: 'findings_ready').size
+      }
+    end
+
     def self.load_war_room_view(project_slug: nil, epic_slug: nil)
       project = project_slug ? store.find_project_by_slug(project_slug) : resolve_active_project
       return { project: nil, epic: nil, queue: [], active: [], active_count: 0, blocked: [], done: [] } unless project

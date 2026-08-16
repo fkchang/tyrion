@@ -134,6 +134,18 @@ get "/discoveries" do
   )
 end
 
+# ── Ambient pane ───────────────────────────────────────────────────────────────
+#
+# Standalone narrow surface for a browser pane split alongside a terminal —
+# rendered without Views::Layout on purpose (no navbar, no sidebar, no chrome).
+
+get "/ambient" do
+  d = TyrionWeb::Data.load_ambient_view(project_slug: params[:project])
+  phlex Views::Ambient.new(
+    project: d[:project], marks: d[:marks], findings_ready_count: d[:findings_ready_count]
+  )
+end
+
 # ── War Room ───────────────────────────────────────────────────────────────────
 
 get "/warroom" do
