@@ -1321,8 +1321,14 @@ module Tyrion
       epic = store.find_epic(project['id'], epic_slug)
       return unless epic
 
+      # Counted up front, before any line is printed: if this read is the thing
+      # that raises or blows the 2s budget, the whole briefing is suppressed
+      # (fail-open as everywhere else here) rather than truncated mid-render
+      # with its Rules block missing.
+      open_marks = store.count_open_marks(project['id'])
+
       story = prime_story_for(store, epic, token)
-      story ? print_prime_tier2(epic, story, store) : print_prime_tier1(project, epic, store)
+      story ? print_prime_tier2(epic, story, store, open_marks) : print_prime_tier1(project, epic, store, open_marks)
     end
     private_class_method :prime_render
 
@@ -1335,7 +1341,7 @@ module Tyrion
     end
     private_class_method :prime_story_for
 
-    def self.print_prime_tier1(project, epic, store)
+    def self.print_prime_tier1(project, epic, store, open_marks)
       north_star   = project['about_md']&.lines&.first&.strip&.sub(/^#+\s*/, '')
       epic_stories = store.stories_for_epic(epic['id'])
       done_n       = epic_stories.count { |s| s['status'] == 'done' }
@@ -1344,20 +1350,24 @@ module Tyrion
       puts "epic: #{epic['slug']} (#{done_n}/#{epic_stories.length})"
       puts "next: tyrion claim-next"
       puts "full context: tyrion resume"
+      print_prime_marks_line(open_marks)
       puts
       puts "Rules:"
       puts "  - claim before code (tyrion claim-next)"
       puts "  - evidence via tyrion note/check, not ad hoc"
+      puts PRIME_FILING_RULE
     end
     private_class_method :print_prime_tier1
 
-    def self.print_prime_tier2(epic, story, store)
+    def self.print_prime_tier2(epic, story, store, open_marks)
       stale_suffix = Output.stale?(story['last_note_at']) ? " #{Output.stale_label(story['last_note_at'])}" : ''
 
       puts "epic: #{epic['slug']}"
       puts "story: #{story['slug']}#{stale_suffix}"
       puts "next: #{story['next_action']}" if presence(story['next_action'])
       puts "mode: dark_factory — orchestrate auto-advances waves; implement continues past done" if Output.dark_factory?(epic)
+
+      print_prime_marks_line(open_marks)
 
       unmet = store.criteria_for_story(story['id']).reject { |c| c['status'] == 'met' }
       unmet.each { |c| puts "[ ] #{c['keyword']} #{c['text']}" }
@@ -1366,9 +1376,21 @@ module Tyrion
       puts "Rules:"
       puts "  - claim before code"
       puts "  - evidence via tyrion note/check, not ad hoc"
+      puts PRIME_FILING_RULE
       puts "  - tyrion resume #{story['slug']} · /tyrion-implement #{story['slug']}"
     end
     private_class_method :print_prime_tier2
+
+    # Same rule line in both tiers — the nudge must not drift between them.
+    PRIME_FILING_RULE = '  - file what you notice (tyrion mark --auto); search before filing'
+
+    # One status line, only when there is something to dedupe against.
+    def self.print_prime_marks_line(open_marks)
+      return if open_marks.zero?
+
+      puts %(marks: #{open_marks} open — check first: tyrion discovery search "<terms>")
+    end
+    private_class_method :print_prime_marks_line
 
     # ── mark ──────────────────────────────────────────────────────────────
 

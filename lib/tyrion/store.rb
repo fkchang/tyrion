@@ -851,6 +851,15 @@ module Tyrion
       end
     end
 
+    def count_open_marks(project_id)
+      with_db do |db|
+        db.get_first_value(
+          "SELECT COUNT(*) FROM discoveries WHERE project_id = ? AND status = 'mark'",
+          [project_id]
+        ).to_i
+      end
+    end
+
     def active_spike_for(project_id)
       with_db do |db|
         db.get_first_row(
