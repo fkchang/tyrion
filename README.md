@@ -202,11 +202,18 @@ tyrion wave set <slug> <N> [why] Pin story to wave N regardless of topo sort (wa
 tyrion wave next                 Print first fully-pending wave as newline-delimited slugs
 tyrion wave next --with-pocket   Same, with tyrion pocket briefing appended below each slug
 
-tyrion mark "desc"               Instant reconnaissance bookmark
-tyrion spike start "question"    Frame a known unknown
-tyrion spike done                Close with findings
+tyrion mark "desc" [--auto]      Instant reconnaissance bookmark
+tyrion discover [--auto]         Organic capture — question + finding
+tyrion spike start "q" [--auto]  Frame a known unknown
+tyrion spike done [--auto]       Close with findings
 tyrion spike promote <disc-id>   Promote finding → story
 ```
+
+`--auto` records the discovery as filed by an agent rather than by you, so the
+discovery list can be triaged into "things I decided to track" and "things an
+agent noticed". It is always an explicit flag, never guessed from session state —
+agents filing autonomously must pass it. Every surface tags each discovery
+`[agent]` or `[human]`.
 
 `tyrion help` for the full scroll.
 

@@ -50,6 +50,13 @@ Supporting commands used within that loop:
   refuses a blocked story and prints the unblock command.
 - **`tyrion show <slug>`** — full story detail (read-only), useful mid-session
   when `resume` output has scrolled away.
+- **`tyrion mark "desc" --auto`** (also `tyrion discover --auto`, `tyrion spike
+  start "q" --auto`, `tyrion spike done --auto`) — file a discovery. **Always
+  pass `--auto`.** It records `origin=agent`, which is how a human later tells
+  "things I decided to track" from "things an agent noticed on its own" and
+  bulk-triages accordingly. Tyrion never infers this: an in-progress story does
+  not mean an agent is at the keyboard, so without the flag your row is recorded
+  as `human` and the distinction is silently lost.
 
 ## Sequencing rules
 
