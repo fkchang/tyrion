@@ -861,7 +861,11 @@ module Tyrion
       end
     end
 
-    def close_spike(id, finding:, confidence:, recommendation:, origin: 'human')
+    # origin is who *filed* the discovery, set at spike start. A close only overwrites it
+    # when the closer explicitly claims authorship (origin: 'agent' from --auto); passing
+    # nil preserves whatever is stored, so closing an agent-framed spike without the flag
+    # can never silently relabel it human.
+    def close_spike(id, finding:, confidence:, recommendation:, origin: nil)
       with_db do |db|
         db.transaction(:immediate) do
           disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
@@ -870,7 +874,7 @@ module Tyrion
 
           t = now
           db.execute(
-            "UPDATE discoveries SET status='findings_ready', finding=?, confidence=?, recommendation=?, origin=?, updated_at=? WHERE id=?",
+            "UPDATE discoveries SET status='findings_ready', finding=?, confidence=?, recommendation=?, origin=COALESCE(?, origin), updated_at=? WHERE id=?",
             [finding, confidence, recommendation, origin, t, id]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
@@ -1384,6 +1388,10 @@ module Tyrion
       ['add_origin_to_discoveries', lambda { |db|
         # NOT NULL DEFAULT 'human' is what backfills pre-existing rows — SQLite applies the
         # default to every existing row as part of ADD COLUMN, so no separate UPDATE is needed.
+        # Backfilling to 'human' rather than leaving an "unknown" state is deliberate: every
+        # discovery that predates this column was typed by a person, because --auto (the only
+        # way to record 'agent') did not exist before this migration. The claim is true, not a
+        # convenient default.
         cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
         next if cols.include?('origin')
 

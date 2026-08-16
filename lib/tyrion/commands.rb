@@ -680,8 +680,8 @@ module Tyrion
         if marks.any?
           # Marks are a count here, not a per-row render — so the origin split rides the
           # count line rather than being dropped on the way to the collapsed summary.
-          by_agent = marks.count { |d| d['origin'] == 'agent' }
-          puts "  #{marks.size} unformalized mark(s)  —  #{by_agent} #{Output.origin_tag('agent')}, #{marks.size - by_agent} #{Output.origin_tag('human')}"
+          by_agent, by_human = marks.partition { |d| d['origin'] == 'agent' }.map(&:size)
+          puts "  #{marks.size} unformalized mark(s)  —  #{by_agent} #{Output.origin_tag('agent')}, #{by_human} #{Output.origin_tag('human')}"
         end
         puts
       end
@@ -1381,8 +1381,10 @@ module Tyrion
     # not mean an agent is the one at the keyboard, and a silent misclassification defeats
     # the whole point of the origin column. Mutates args — the flag is consumed so it can
     # never be mistaken for a positional argument (a mark's description, a spike's question).
-    def self.consume_auto_flag(args)
-      args.delete('--auto') ? 'agent' : 'human'
+    # `default:` is what an omitted flag means: 'human' when the command *creates* the row,
+    # nil when it *updates* one (nil preserves the stored origin — see Store#close_spike).
+    def self.consume_auto_flag(args, default: 'human')
+      args.delete('--auto') ? 'agent' : default
     end
 
     def self.cmd_mark(args, store)
@@ -1473,7 +1475,7 @@ module Tyrion
       disc = store.find_discovery(disc_id)
       die "Discovery #{disc_id} not found" unless disc
 
-      puts "#{disc['id']}  [#{disc['status']}]"
+      puts "#{disc['id']}  [#{disc['status']}]  #{Output.origin_tag(disc['origin'])}"
       puts "Question:       #{disc['question'] || '—'}"
       puts "Finding:        #{disc['finding'] || '—'}"
       puts "Confidence:     #{disc['confidence'] || '—'}"
@@ -1500,7 +1502,7 @@ module Tyrion
     def self.cmd_spike_start(args, store, input: $stdin, output: $stdout)
       origin   = consume_auto_flag(args)
       question = args.first&.strip
-      die "Usage: tyrion spike start \"your question\"" if question.nil? || question.empty?
+      die "Usage: tyrion spike start \"your question\" [--auto]" if question.nil? || question.empty?
 
       project, = resolve_project_epic(store, require_epic: false)
 
@@ -1525,7 +1527,7 @@ module Tyrion
     end
 
     def self.cmd_spike_done(args, store, input: $stdin, output: $stdout)
-      origin = consume_auto_flag(args)
+      origin = consume_auto_flag(args, default: nil)
       project, = resolve_project_epic(store, require_epic: false)
 
       spike = store.active_spike_for(project['id'])

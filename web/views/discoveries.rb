@@ -110,9 +110,9 @@ module Views
         @marks.each do |d|
           div(class: "dv-card mark") do
             div(class: "dv-card-id") do
-            plain "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
-            render_origin(d)
-          end
+              plain "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
+              render_origin(d)
+            end
             div(class: "dv-card-q") { "\"#{d['question']}\"" }
             div(class: "dv-actions") do
               span(class: "dv-code-chip") { "tyrion discover #{d['id']}" }

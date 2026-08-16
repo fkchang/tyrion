@@ -90,6 +90,8 @@ cd web && TYRION_PROJECT=<slug> bundle exec ruby app.rb
 - `tyrion spike start/done` — structured spike cycle, `active_spike` → `findings_ready`
 - `tyrion spike promote <disc-id>` — converts `findings_ready` → story with `born_from_discovery` traceability
 
+The first four take `--auto` to record `origin=agent` — see **Discovery origin** under Key conventions.
+
 Status aliases for `tyrion discovery list --status`: `active`→`active_spike`, `ready`→`findings_ready`, `promoted`→`promoted_to_story`, `deferred`→`deferred`, `all`→no filter.
 
 ### Key conventions
@@ -109,6 +111,8 @@ Status aliases for `tyrion discovery list --status`: `active`→`active_spike`, 
 **Epic archive** — `tyrion epic archive <slug>` sets `archived_at` (via `Store#archive_epic`); `tyrion epic unarchive <slug>` clears it (`Store#unarchive_epic`). Archived epics drop out of the main `tyrion epic list` into a separate `Archived:` section (shown with an `[archived]` marker) and move to the collapsed Archived section on the web roadmap; the web split keys off `archived_at` (`active_epics`/`archived_epics` in `web/lib/tyrion_web/data.rb`). The `archived_at` column is added idempotently via `MIGRATIONS`.
 
 **Discovery IDs** — `disc-NNN` format, per-project sequential counter, zero-padded to 3 digits, generated inside `db.transaction(:immediate)`.
+
+**Discovery origin** — `discoveries.origin` is `agent` or `human` (`CHECK`, `NOT NULL DEFAULT 'human'`), answering "did I decide to track this, or did an agent notice it?" so the list can be bulk-triaged. It is set **only** from an explicit `--auto` flag on `tyrion mark`, `tyrion discover`, `tyrion spike start`, and `tyrion spike done` — never inferred from whether a story is in progress, because an active story does not mean an agent is the one typing. **Agents filing autonomously must pass `--auto`; without it the row records `human` and the column silently means nothing.** `Commands.consume_auto_flag(args, default:)` deletes the flag from `args` (so it can't be mistaken for a description/question) and returns the origin; `default:` is `'human'` on the commands that *create* a row and `nil` on `spike done`, which *updates* one — `Store#close_spike` writes `origin=COALESCE(?, origin)`, so closing an agent-framed spike without the flag preserves its origin rather than relabelling it. `Tyrion::Output.origin_label` is the single source of the `[agent]`/`[human]` wording; `origin_tag` adds CLI colour and `TyrionWeb::Presenter.origin_tag` returns `{text:, css:}` for the web, so `tyrion status`, `tyrion discovery list`, `tyrion discovery show`, and the web Discoveries view can't drift apart. Anything not literally `agent` renders as human, so a NULL never reads as agent.
 
 **Schema migrations** — new columns use the `MIGRATIONS` constant (array of `[name, lambda]` pairs in `store.rb`), not raw `ALTER TABLE` in `setup_db`. The lambda checks `PRAGMA table_info` before altering so it's idempotent.
 
