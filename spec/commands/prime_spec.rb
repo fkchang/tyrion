@@ -247,6 +247,105 @@ RSpec.describe 'Tyrion::Commands.cmd_prime' do
     end
   end
 
+  # ── discovery-filing nudge (open marks count + Rules entry, both tiers) ───
+
+  describe 'discovery-filing nudge' do
+    let(:token) { 'claude:42:stamp' }
+    let(:ctx)   { tyrion_worktree(epic_slug: 'auth-epic') }
+    let(:store) { ctx.store }
+    let(:epic)  { ctx.epic }
+
+    before do
+      point_prime_at(ctx)
+      allow(Tyrion::Commands).to receive(:current_lane_token).and_return(token)
+      store.create_story(epic_id: epic['id'], slug: 'story-a', title: 'Story A')
+    end
+
+    def mark!(question)
+      store.create_discovery(project_id: ctx.project['id'], status: 'mark', question: question)
+    end
+
+    def claim_story!
+      story = store.find_story(epic['id'], 'story-a')
+      store.start_story(story['id'], claimed_by: token)
+    end
+
+    it 'reports the open-marks count with the search command in Tier 1' do
+      2.times { |i| mark!("thing #{i}") }
+
+      out, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      expect(out).to match(/^marks: 2 open .*tyrion discovery search/)
+    end
+
+    it 'reports the open-marks count with the search command in Tier 2' do
+      claim_story!
+      mark!('a thing')
+
+      out, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      expect(out).to match(/^story: story-a/)
+      expect(out).to match(/^marks: 1 open .*tyrion discovery search/)
+    end
+
+    it 'counts only open marks, not resolved or in-flight discoveries' do
+      mark!('still open')
+      store.create_discovery(project_id: ctx.project['id'], status: 'findings_ready', question: 'done')
+      store.create_discovery(project_id: ctx.project['id'], status: 'deferred', question: 'later')
+
+      out, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      expect(out).to match(/^marks: 1 open/)
+    end
+
+    it 'omits the marks line entirely when there are no open marks' do
+      out, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      expect(out).not_to match(/^marks:/)
+    end
+
+    it 'counts only the active project, not marks filed against a sibling project' do
+      mark!('ours')
+      other = store.create_project(slug: 'other-proj', name: 'Other')
+      2.times { |i| store.create_discovery(project_id: other['id'], status: 'mark', question: "theirs #{i}") }
+
+      out, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      expect(out).to match(/^marks: 1 open/)
+    end
+
+    it 'adds the identical filing rule to both tiers, marks or not' do
+      rule = Tyrion::Commands::PRIME_FILING_RULE
+
+      tier1, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      claim_story!
+      tier2, = capture_io { Tyrion::Commands.cmd_prime([]) }
+
+      expect(rule).to match(/file what you notice \(tyrion mark --auto\); search before filing/)
+      expect(tier1.lines.map(&:chomp)).to include(rule)
+      expect(tier2.lines.map(&:chomp)).to include(rule)
+    end
+
+    it 'keeps both Rules blocks at 5 lines or fewer with the added rule' do
+      mark!('a thing')
+
+      tier1, = capture_io { Tyrion::Commands.cmd_prime([]) }
+      claim_story!
+      tier2, = capture_io { Tyrion::Commands.cmd_prime([]) }
+
+      [tier1, tier2].each do |out|
+        rules_idx = out.lines.index { |l| l.start_with?('Rules:') }
+        expect(out.lines[rules_idx..].length).to be <= 5
+      end
+    end
+
+    it 'suppresses the whole briefing rather than half of it when the marks count blows up' do
+      allow_any_instance_of(Tyrion::Store).to receive(:count_open_marks).and_raise(RuntimeError, 'boom')
+
+      out = err = nil
+      expect { out, err = capture_io { Tyrion::Commands.cmd_prime([]) } }.not_to raise_error
+      expect(err).to match(/tyrion prime: warning/)
+      # The count is read before the first puts, so a failure can never leave a
+      # header printed with its Rules block missing.
+      expect(out).to eq('')
+    end
+  end
+
   # ── criterion 7 — read-only ───────────────────────────────────────────────
 
   describe 'criterion 7 — prime is provably read-only' do
