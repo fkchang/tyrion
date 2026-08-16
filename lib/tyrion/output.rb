@@ -76,12 +76,14 @@ module Tyrion
     # (which reaches it through TyrionWeb::Presenter.origin_tag). Anything that is not the
     # literal 'agent' reads as human, so a pre-migration NULL never renders as agent.
     # origin_label is the uncolored form — the web must not inherit CLI escape codes.
+    def self.agent_origin?(origin) = origin.to_s == 'agent'
+
     def self.origin_label(origin)
-      origin.to_s == 'agent' ? '[agent]' : '[human]'
+      agent_origin?(origin) ? '[agent]' : '[human]'
     end
 
     def self.origin_tag(origin)
-      origin.to_s == 'agent' ? cyan(origin_label(origin)) : dim(origin_label(origin))
+      agent_origin?(origin) ? cyan(origin_label(origin)) : dim(origin_label(origin))
     end
 
     def self.dark_factory?(epic) = epic['mode'] == 'dark_factory'

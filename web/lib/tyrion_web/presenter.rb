@@ -120,8 +120,8 @@ module TyrionWeb
     # re-derived, so the web can never drift out of step with `tyrion status` /
     # `tyrion discovery list`. Uses the uncolored label; origin_tag carries ANSI codes.
     def self.origin_tag(origin)
-      agent = origin.to_s == 'agent'
-      { text: Tyrion::Output.origin_label(origin), css: agent ? 'dv-origin agent' : 'dv-origin human' }
+      css = Tyrion::Output.agent_origin?(origin) ? 'dv-origin agent' : 'dv-origin human'
+      { text: Tyrion::Output.origin_label(origin), css: css }
     end
 
     def self.epic_seal_glyph(epic, active_epic_id)
