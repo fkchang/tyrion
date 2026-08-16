@@ -99,8 +99,15 @@ module Views
           div(class: "dv-section-title") { "marks — #{@marks.size} unformalized" }
         end
         @marks.each do |d|
+          # Unrounded so the badge flips at a full 14 days, not at 13.5 like the
+          # rounded age findings_ready uses.
+          age_days = d['created_at'] ? (Time.now - Time.parse(d['created_at'])) / 86400 : 0
+          aging = age_days >= 14
           div(class: "dv-card mark") do
-            div(class: "dv-card-id") { "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}" }
+            div(class: "dv-card-id") do
+              plain "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
+              span(class: "dv-aging-badge") { " ⚠ aging" } if aging
+            end
             div(class: "dv-card-q") { "\"#{d['question']}\"" }
             div(class: "dv-actions") do
               span(class: "dv-code-chip") { "tyrion discover #{d['id']}" }
