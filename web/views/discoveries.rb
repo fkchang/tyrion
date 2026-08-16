@@ -43,6 +43,11 @@ module Views
 
     private
 
+    def render_origin(disc)
+      tag = TyrionWeb::Presenter.origin_tag(disc['origin'])
+      span(class: tag[:css]) { tag[:text] }
+    end
+
     def render_spike_section
       div(class: "dv-section") do
         div(class: "dv-section-header") do
@@ -50,7 +55,10 @@ module Views
           div(class: "dv-section-title") { "active_spike — 1 in flight" }
         end
         div(class: "dv-card spike") do
-          div(class: "dv-card-id") { "#{@spike['id']} · started #{TyrionWeb::Presenter.time_ago(@spike['created_at'])}" }
+          div(class: "dv-card-id") do
+            plain "#{@spike['id']} · started #{TyrionWeb::Presenter.time_ago(@spike['created_at'])}"
+            render_origin(@spike)
+          end
           div(class: "dv-card-q") { "\"#{@spike['question']}\"" }
           div(class: "dv-card-meta") do
             plain "Hypothesis: #{@spike['hypothesis']}" if @spike['hypothesis']
@@ -76,6 +84,7 @@ module Views
           div(class: "dv-card ready") do
             div(class: "dv-card-id") do
               plain "#{d['id']} · found #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
+              render_origin(d)
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
             div(class: "dv-card-q") { "\"#{d['question']}\"" }
@@ -100,7 +109,10 @@ module Views
         end
         @marks.each do |d|
           div(class: "dv-card mark") do
-            div(class: "dv-card-id") { "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}" }
+            div(class: "dv-card-id") do
+            plain "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
+            render_origin(d)
+          end
             div(class: "dv-card-q") { "\"#{d['question']}\"" }
             div(class: "dv-actions") do
               span(class: "dv-code-chip") { "tyrion discover #{d['id']}" }

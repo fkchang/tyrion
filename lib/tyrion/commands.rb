@@ -672,12 +672,17 @@ module Tyrion
       unless active_spikes.empty? && findings_ready.empty? && marks.empty?
         puts "  DISCOVERIES"
         active_spikes.each do |d|
-          puts "  ● #{d['id']}  #{d['question']}"
+          puts "  ● #{d['id']}  #{Output.origin_tag(d['origin'])}  #{d['question']}"
         end
         findings_ready.each do |d|
-          puts "  → #{d['id']}  #{d['question']}  (tyrion spike promote #{d['id']})"
+          puts "  → #{d['id']}  #{Output.origin_tag(d['origin'])}  #{d['question']}  (tyrion spike promote #{d['id']})"
         end
-        puts "  #{marks.size} unformalized mark(s)" if marks.any?
+        if marks.any?
+          # Marks are a count here, not a per-row render — so the origin split rides the
+          # count line rather than being dropped on the way to the collapsed summary.
+          by_agent = marks.count { |d| d['origin'] == 'agent' }
+          puts "  #{marks.size} unformalized mark(s)  —  #{by_agent} #{Output.origin_tag('agent')}, #{marks.size - by_agent} #{Output.origin_tag('human')}"
+        end
         puts
       end
 
@@ -1372,14 +1377,24 @@ module Tyrion
 
     # ── mark ──────────────────────────────────────────────────────────────
 
+    # Who filed this discovery. Explicit flag, never inferred: an in-progress story does
+    # not mean an agent is the one at the keyboard, and a silent misclassification defeats
+    # the whole point of the origin column. Mutates args — the flag is consumed so it can
+    # never be mistaken for a positional argument (a mark's description, a spike's question).
+    def self.consume_auto_flag(args)
+      args.delete('--auto') ? 'agent' : 'human'
+    end
+
     def self.cmd_mark(args, store)
       return puts "No active project." unless Repo.active_project
 
+      origin = consume_auto_flag(args)
       project, = resolve_project_epic(store, require_epic: false)
       disc = store.create_discovery(
         project_id:  project['id'],
         status:      'mark',
         question:    args.first,
+        origin:      origin,
         git_context: Repo.git_context_json
       )
       puts "[mark] #{disc['id']}"
@@ -1388,6 +1403,7 @@ module Tyrion
     # ── discover ──────────────────────────────────────────────────────────
 
     def self.cmd_discover(args, store, input: $stdin, output: $stdout)
+      origin = consume_auto_flag(args)
       project, = resolve_project_epic(store, require_epic: false)
 
       question = prompt(input, output, "What were you trying to do? ")
@@ -1398,6 +1414,7 @@ module Tyrion
         status:      'findings_ready',
         question:    question,
         finding:     finding,
+        origin:      origin,
         git_context: Repo.git_context_json
       )
       output.puts "[findings_ready] #{disc['id']}"
@@ -1435,7 +1452,7 @@ module Tyrion
 
       return puts "(no discoveries)" if discs.empty?
 
-      discs.each { |d| puts "#{d['id']}  [#{d['status']}]  #{d['question']}" }
+      discs.each { |d| puts "#{d['id']}  [#{d['status']}]  #{Output.origin_tag(d['origin'])}  #{d['question']}" }
     end
 
     def self.resolve_discovery_status(args)
@@ -1475,12 +1492,13 @@ module Tyrion
       when 'promote' then cmd_spike_promote(args, store)
       else
         $stderr.puts "Unknown spike subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion spike start \"your question\"\n       tyrion spike done\n       tyrion spike promote <disc-id>"
+        $stderr.puts "Usage: tyrion spike start \"your question\" [--auto]\n       tyrion spike done [--auto]\n       tyrion spike promote <disc-id>"
         exit 1
       end
     end
 
     def self.cmd_spike_start(args, store, input: $stdin, output: $stdout)
+      origin   = consume_auto_flag(args)
       question = args.first&.strip
       die "Usage: tyrion spike start \"your question\"" if question.nil? || question.empty?
 
@@ -1500,12 +1518,14 @@ module Tyrion
         question:      question,
         hypothesis:    presence(hypothesis),
         exit_criteria: presence(exit_criteria),
+        origin:        origin,
         git_context:   Repo.git_context_json
       )
       output.puts "[active_spike] #{disc['id']}"
     end
 
     def self.cmd_spike_done(args, store, input: $stdin, output: $stdout)
+      origin = consume_auto_flag(args)
       project, = resolve_project_epic(store, require_epic: false)
 
       spike = store.active_spike_for(project['id'])
@@ -1515,7 +1535,8 @@ module Tyrion
       confidence     = prompt_confidence(input, output)
       recommendation = prompt(input, output, "Recommendation: ")
 
-      disc = store.close_spike(spike['id'], finding: presence(finding), confidence: confidence, recommendation: presence(recommendation))
+      disc = store.close_spike(spike['id'], finding: presence(finding), confidence: confidence,
+                                            recommendation: presence(recommendation), origin: origin)
       output.puts "[findings_ready] #{disc['id']}"
     end
 
@@ -3435,11 +3456,11 @@ module Tyrion
           tyrion followup list <slug>              List followup notes (open + resolved)
           tyrion followup resolve <slug> <n>       Mark followup #n as resolved
 
-        Discovery (SDRD spike loop):
-          tyrion mark "description"                Bookmark — instant breadcrumb with git context
-          tyrion discover                          Organic capture — question + finding → findings_ready
-          tyrion spike start "question"            Frame a known unknown → active_spike
-          tyrion spike done                        Close spike with finding + confidence + recommendation
+        Discovery (SDRD spike loop) — add --auto on any of the four to record origin=agent:
+          tyrion mark "description" [--auto]       Bookmark — instant breadcrumb with git context
+          tyrion discover [--auto]                 Organic capture — question + finding → findings_ready
+          tyrion spike start "question" [--auto]   Frame a known unknown → active_spike
+          tyrion spike done [--auto]               Close spike with finding + confidence + recommendation
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
           tyrion discovery list [--status <alias>] List discoveries (aliases: active|ready|promoted|deferred|all)
           tyrion discovery show <disc-id>          Show full discovery detail

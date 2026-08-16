@@ -116,6 +116,14 @@ module TyrionWeb
       end
     end
 
+    # Same [agent]/[human] wording the CLI prints — delegated to Output.origin_label, not
+    # re-derived, so the web can never drift out of step with `tyrion status` /
+    # `tyrion discovery list`. Uses the uncolored label; origin_tag carries ANSI codes.
+    def self.origin_tag(origin)
+      agent = origin.to_s == 'agent'
+      { text: Tyrion::Output.origin_label(origin), css: agent ? 'dv-origin agent' : 'dv-origin human' }
+    end
+
     def self.epic_seal_glyph(epic, active_epic_id)
       if epic['status'] == 'done'       then '✓'
       elsif epic['id'] == active_epic_id then '⚑'

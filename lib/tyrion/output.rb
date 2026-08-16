@@ -71,6 +71,19 @@ module Tyrion
       status == 'met' ? green('[✓]') : '[ ]'
     end
 
+    # Canonical origin marker for discoveries — the single source of truth for the wording
+    # shared by `tyrion status`, `tyrion discovery list`, and the web Discoveries view
+    # (which reaches it through TyrionWeb::Presenter.origin_tag). Anything that is not the
+    # literal 'agent' reads as human, so a pre-migration NULL never renders as agent.
+    # origin_label is the uncolored form — the web must not inherit CLI escape codes.
+    def self.origin_label(origin)
+      origin.to_s == 'agent' ? '[agent]' : '[human]'
+    end
+
+    def self.origin_tag(origin)
+      origin.to_s == 'agent' ? cyan(origin_label(origin)) : dim(origin_label(origin))
+    end
+
     def self.dark_factory?(epic) = epic['mode'] == 'dark_factory'
 
     # Bare badge text, no leading space — callers own their own spacing.
