@@ -1640,6 +1640,8 @@ module Tyrion
         lessons.each { |l| puts "  📎 [#{l['trigger']}] #{l['text']}" }
       end
 
+      print_known_section(store, epic['project_id'])
+
       puts
 
       if story['current_context'] && !story['current_context'].empty?
@@ -3492,6 +3494,28 @@ module Tyrion
     # Renders the Gates: section (gate/commit notes) for tyrion show / tyrion resume.
     # Per gate name: latest result (✓ pass / ✗ fail) + total run count. Commit notes
     # print their body verbatim. Prints nothing when the story has no gate/commit notes.
+    # Project-wide (not epic- or story-scoped): what's already been noticed, so
+    # the agent doesn't re-investigate a question someone already marked.
+    KNOWN_SECTION_LIMIT = 5
+
+    def self.print_known_section(store, project_id)
+      open = store.open_discoveries(project_id: project_id)
+      return if open.empty?
+
+      puts
+      puts Output.bold("Known:")
+      open.first(KNOWN_SECTION_LIMIT).each do |d|
+        if d['status'] == 'findings_ready'
+          text = presence(d['finding']) || presence(d['question']) || '(no finding recorded)'
+          puts "  → #{d['id']}  #{text}  #{Output.dim("(tyrion spike promote #{d['id']})")}"
+        else
+          puts "  • #{d['id']}  #{presence(d['question']) || '(no description)'}"
+        end
+      end
+      remaining = open.length - KNOWN_SECTION_LIMIT
+      puts Output.dim("  (#{remaining} more — tyrion discovery list --status all)") if remaining > 0
+    end
+
     def self.print_gates_section(store, story_id)
       notes = store.gate_notes_for_story(story_id)
       return if notes.empty?
