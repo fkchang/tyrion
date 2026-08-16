@@ -892,6 +892,19 @@ module Tyrion
       end
     end
 
+    # Unresolved discoveries (marks + findings awaiting promotion), newest
+    # first — the opposite order from list_discoveries, because the "Known:"
+    # section on `tyrion resume` surfaces what was captured most recently.
+    def open_discoveries(project_id:)
+      with_db do |db|
+        db.execute(
+          "SELECT * FROM discoveries WHERE project_id = ? AND status IN ('mark', 'findings_ready') " \
+          'ORDER BY created_at DESC, rowid DESC',
+          [project_id]
+        )
+      end
+    end
+
     def active_spike_for(project_id)
       with_db do |db|
         db.get_first_row(
