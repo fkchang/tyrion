@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'cgi'
 require 'fileutils'
 require 'net/http'
 
@@ -10,6 +11,24 @@ module Tyrion
   # the next start.
   module WebServer
     DEFAULT_PORT = 4579
+
+    # Narrow enough to live in a split pane beside a terminal, tall enough to
+    # show a screenful of marks.
+    AMBIENT_WINDOW_SIZE = '340,960'
+
+    OPENERS = { darwin: 'open', linux: 'xdg-open' }.freeze
+
+    # Chrome-family binaries support `--app=<url>` (chromeless window), ordered
+    # by preference. App mode is a convenience only — see open_app_window's
+    # callers, which always fall back to a normal browser open of the same URL.
+    APP_MODE_BROWSERS = {
+      darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+               '/Applications/Chromium.app/Contents/MacOS/Chromium',
+               '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+               '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'],
+      linux:  %w[google-chrome google-chrome-stable chromium chromium-browser
+                 brave-browser microsoft-edge]
+    }.freeze
 
     def self.state_dir
       dir = File.join(Dir.home, '.tyrion')
@@ -118,14 +137,54 @@ module Tyrion
 
     def self.url(port) = "http://localhost:#{port}"
 
-    def self.open_browser(port)
-      target = url(port)
-      opener = case RbConfig::CONFIG['host_os']
-               when /darwin/    then 'open'
-               when /linux|bsd/ then 'xdg-open'
-               end
+    # Always fully scoped: an already-running server may have been started for a
+    # different project, so a bare /ambient could silently show another
+    # project's marks.
+    def self.ambient_url(port, project)
+      "#{url(port)}/ambient?project=#{CGI.escape(project.to_s)}"
+    end
+
+    def self.open_browser(port) = open_url(url(port))
+
+    def self.open_url(target)
+      opener = OPENERS[host_family]
       system(opener, target, out: File::NULL, err: File::NULL) if opener
-      target
+    end
+
+    def self.host_family
+      case RbConfig::CONFIG['host_os']
+      when /darwin/    then :darwin
+      when /linux|bsd/ then :linux
+      end
+    end
+
+    def self.app_mode_binary
+      APP_MODE_BROWSERS.fetch(host_family, []).lazy.filter_map { |cmd| which(cmd) }.first
+    end
+
+    # Absolute paths pass through; bare names resolve on PATH.
+    def self.which(cmd)
+      return File.executable?(cmd) ? cmd : nil if cmd.include?('/')
+
+      ENV.fetch('PATH', '').split(File::PATH_SEPARATOR)
+         .map { |dir| File.join(dir, cmd) }
+         .find { |path| File.executable?(path) && !File.directory?(path) }
+    end
+
+    # Opens target in a chromeless, narrow window. Argument array — never a
+    # shell string — so a URL can't be interpolated into a command line.
+    # Returns false (never raises) when no browser is found or launch fails, so
+    # the caller can fall back to a plain open.
+    def self.open_app_window(target)
+      bin = app_mode_binary
+      return false unless bin
+
+      Process.detach(Process.spawn(bin, "--app=#{target}",
+                                   "--window-size=#{AMBIENT_WINDOW_SIZE}",
+                                   out: File::NULL, err: File::NULL))
+      true
+    rescue StandardError
+      false
     end
   end
 end

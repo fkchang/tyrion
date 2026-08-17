@@ -1058,11 +1058,12 @@ module Tyrion
 
       case sub
       when 'open', 'start' then web_ensure_running(port, project, open: open)
+      when 'ambient'       then web_ambient(port, project, open: open)
       when 'restart'       then web_restart(port, project, open: open)
       when 'stop'          then web_stop(port)
       when 'status'        then web_print_status(port)
       else
-        die "Usage: tyrion web [open|restart|stop|status] [--port N] [--no-open]"
+        die "Usage: tyrion web [open|ambient|restart|stop|status] [--port N] [--no-open]"
       end
     end
 
@@ -1079,6 +1080,25 @@ module Tyrion
         web_boot(port, project)
       end
       WebServer.open_browser(port) if open
+    end
+
+    # `tyrion web ambient` — same server, opened straight to the project-scoped
+    # ambient page in a narrow app-mode window meant to sit in a split pane.
+    # App mode is pure convenience: the URL is always printed, so pinning any
+    # browser tab to it by hand works just as well. Unlike the rest of `web`,
+    # this one isn't idempotent on the window — running it twice opens a second
+    # app window (the server side is still reused).
+    def self.web_ambient(port, project, open:)
+      web_ensure_running(port, project, open: false)
+      target = WebServer.ambient_url(port, project)
+      puts "  ambient: #{target}"
+      puts Output.dim('  (pin any browser tab to this URL in a split pane)')
+      return unless open
+
+      return if WebServer.open_app_window(target)
+
+      puts Output.dim('  no Chrome-family browser for app mode — opening a normal window')
+      WebServer.open_url(target)
     end
 
     def self.web_restart(port, project, open:)
@@ -3573,6 +3593,7 @@ module Tyrion
           tyrion notes <slug> [--kind <kind>]      All notes, untruncated (full body)
           tyrion web [restart|stop|status]         Start (or open) the web UI — auto-opens browser
                                                     (alias: tyrion dashboard; flags: --port N, --no-open)
+          tyrion web ambient                       Open the project-scoped ambient page in a narrow window
 
         Work:
           tyrion start <slug> [--steal]            Claim a story (--steal to force takeover of another lane)
