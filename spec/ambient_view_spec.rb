@@ -62,7 +62,7 @@ RSpec.describe Views::Ambient do
     html = render(marks: [], findings_ready_count: 3)
 
     expect(html).to include('3 findings ready')
-    expect(html).not_to include('am-mark')
+    expect(html).not_to include('<div class="am-mark"')
   end
 
   it 'renders a minimal no-project state when nothing resolves' do

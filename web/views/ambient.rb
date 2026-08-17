@@ -8,11 +8,13 @@ module Views
   class Ambient < Phlex::HTML
     AGING_DAYS  = 14   # same threshold as the Discoveries marks aging badge
     TRUNCATE_AT = 140
+    POLL_INTERVAL_MS = 60_000   # slower than the story pane's 30s — glance surface, not a monitor
 
-    def initialize(project:, marks: [], findings_ready_count: 0)
+    def initialize(project:, marks: [], findings_ready_count: 0, token: nil)
       @project              = project
       @marks                = marks || []
       @findings_ready_count = findings_ready_count.to_i
+      @token                = token
     end
 
     def view_template
@@ -24,13 +26,14 @@ module Views
           title { "tyrion · ambient" }
           link(rel: "stylesheet", href: "/ambient.css")
         end
-        body do
+        body(data: { project: project_slug, token: @token }) do
           if @project.nil?
             div(class: "am-empty") { "no project" }
           else
-            div(class: "am-project") { @project['slug'] || @project['name'] || '' }
+            div(class: "am-project") { project_slug }
             render_marks
             render_ready_line
+            render_js
           end
         end
       end
@@ -38,20 +41,109 @@ module Views
 
     private
 
+    def project_slug
+      @project && (@project['slug'] || @project['name'] || '')
+    end
+
     # Zero open marks blanks this section only — the findings_ready line below
     # still renders, so the pane never goes fully dark on a half-empty state.
+    # The container and the per-mark created_at are what the poller repaints
+    # from; created_at also lets aging be recomputed without a round trip.
     def render_marks
-      @marks.each do |m|
-        div(class: aged?(m) ? "am-mark aged" : "am-mark") do
-          div(class: "am-mark-q") { truncate(m['question'].to_s) }
-          div(class: "am-mark-meta") { "#{m['id']} · #{TyrionWeb::Presenter.time_ago(m['created_at'])}" }
+      div(id: "am-marks") do
+        @marks.each do |m|
+          div(class: aged?(m) ? "am-mark aged" : "am-mark", data: { created_at: m['created_at'] }) do
+            div(class: "am-mark-q") { truncate(m['question'].to_s) }
+            div(class: "am-mark-meta") { "#{m['id']} · #{TyrionWeb::Presenter.time_ago(m['created_at'])}" }
+          end
         end
       end
     end
 
     def render_ready_line
-      div(class: "am-ready") do
+      div(id: "am-ready", class: "am-ready") do
         "#{@findings_ready_count} findings ready"
+      end
+    end
+
+    # Two independent jobs per tick, and the split is the whole point:
+    #   1. token changed -> repaint BOTH sections from the payload
+    #   2. aging recomputed from created_at every tick, token or not
+    # AGING_DAYS / TRUNCATE_AT are interpolated from the Ruby constants above so
+    # the client repaint can't drift from the server-side first render.
+    def render_js
+      script do
+        raw safe(<<~JS)
+          (function () {
+            var AGING_MS   = #{AGING_DAYS} * 86400000;
+            var TRUNCATE   = #{TRUNCATE_AT};
+            var INTERVAL   = #{POLL_INTERVAL_MS};
+            var slug       = document.body.dataset.project;
+            var knownToken = document.body.dataset.token || null;
+            var marksHost  = document.getElementById('am-marks');
+            var readyLine  = document.getElementById('am-ready');
+            if (!slug || !marksHost || !readyLine) return;
+
+            function truncate(t) { return t.length > TRUNCATE ? t.slice(0, TRUNCATE) + '\\u2026' : t; }
+
+            function timeAgo(ts) {
+              if (!ts) return '\\u2014';
+              var secs = Math.floor((Date.now() - Date.parse(ts)) / 1000);
+              if (secs < 60) return 'just now';
+              var mins = Math.floor(secs / 60);
+              if (mins < 60) return mins + 'm ago';
+              var hrs = Math.floor(mins / 60);
+              if (hrs < 24) return hrs + 'h ago';
+              return Math.floor(hrs / 24) + 'd ago';
+            }
+
+            // A mark crossing the threshold changes neither its id nor its text,
+            // so no token moves — this can never be gated on a token diff.
+            function refreshAging() {
+              var nodes = marksHost.querySelectorAll('.am-mark');
+              for (var i = 0; i < nodes.length; i++) {
+                var ts = nodes[i].dataset.createdAt;
+                nodes[i].classList.toggle('aged', ts ? (Date.now() - Date.parse(ts)) >= AGING_MS : false);
+              }
+            }
+
+            // Marks list and findings_ready line always repaint together —
+            // repainting one alone would leave the pane self-contradicting.
+            function apply(data) {
+              marksHost.textContent = '';
+              (data.marks || []).forEach(function (m) {
+                var wrap = document.createElement('div');
+                wrap.className = 'am-mark';
+                wrap.dataset.createdAt = m.created_at || '';
+                var q = document.createElement('div');
+                q.className = 'am-mark-q';
+                q.textContent = truncate(String(m.question || ''));
+                var meta = document.createElement('div');
+                meta.className = 'am-mark-meta';
+                meta.textContent = m.id + ' \\u00b7 ' + timeAgo(m.created_at);
+                wrap.appendChild(q);
+                wrap.appendChild(meta);
+                marksHost.appendChild(wrap);
+              });
+              readyLine.textContent = (data.findings_ready_count || 0) + ' findings ready';
+            }
+
+            // A 404 still carries a renderable empty-state body, so it flows
+            // through the same path rather than being treated as an error.
+            function poll() {
+              fetch('/api/ambient_poll?project=' + encodeURIComponent(slug))
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                  if (data.token !== knownToken) { knownToken = data.token; apply(data); }
+                  refreshAging();
+                })
+                .catch(function () { refreshAging(); });
+            }
+
+            refreshAging();
+            setInterval(poll, INTERVAL);
+          })();
+        JS
       end
     end
 
