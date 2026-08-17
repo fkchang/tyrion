@@ -38,6 +38,40 @@ tyrion status        # see what's already registered
 
 Determine project from: `--project` flag, active project, or ask. Determine epic from: `--epic` flag, or ask if ambiguous.
 
+### Step 2b: Discovery recall check (read-only)
+
+**Do this before drafting any scenario.** The project already knows about gaps nobody wrote a
+story for — marks filed mid-task, spikes whose findings were never promoted. Shaping a new epic
+without reading them is how they get stranded.
+
+```bash
+tyrion discovery list --status all
+```
+
+Read the whole list. Anything still open — `mark`, `findings_ready`, `active_spike` (i.e. not
+`promoted_to_story`, `deferred`, or `invalidated`) — is a candidate. Judge each one on whether its
+subject overlaps the epic being drafted. `tyrion discovery search "<term>"` narrows a long list,
+but the `--status all` listing is the one that has to be read: the mark filed three months ago is
+exactly the one you'd never think to search for.
+
+Every overlapping discovery gets one of exactly two dispositions, and both are visible in the draft
+the user reviews:
+
+1. **Folded in** — its subject becomes a drafted scenario, or joins one. Name the `disc-NNN` in
+   that scenario's intent line or in the `.context.md` sidecar so the trace survives import.
+2. **Called out** — it overlaps but is out of scope for this epic. It goes in the Step 5 draft
+   review, verbatim, as:
+   `leaving disc-NNN open — consider tyrion discovery defer disc-NNN if out of scope`
+
+Never silently drop an overlapping discovery. "I read it and decided it wasn't worth mentioning"
+is not one of the two dispositions.
+
+**This step performs no DB writes.** `discovery list` and `discovery search` are reads.
+**Never run `tyrion discovery defer`** — not here, not after import, not anywhere in this skill.
+Whether a known gap still matters is a human judgment, and deferring is a DB write; the skill's job
+ends at surfacing the choice with the exact command to run. Same boundary as `tyrion import`: this
+skill only ever proposes.
+
 ### Step 3: Comprehend and extract
 
 **Plans come in many shapes.** A Claude-generated plan might use numbered sections, prose paragraphs, bullet lists, tables, or a mix. Don't pattern-match against a specific format — read and understand the document, then normalize what you find into tyrion's structure.
@@ -194,6 +228,20 @@ Story rigor summary:
   crm-engagement-tab         loose     Rails + Phlex, existing file modification
 ```
 
+Then the discovery recall result from Step 2b — every overlapping discovery, with its disposition:
+
+```
+Discovery recall:
+  disc-041  folded into crm-service-layer (persona classification was the open question)
+  disc-047  folded into crm-accounts-controller
+  leaving disc-052 open — consider tyrion discovery defer disc-052 if out of scope
+  leaving disc-058 open — consider tyrion discovery defer disc-058 if out of scope
+```
+
+Print the section even when nothing overlapped (`Discovery recall: no open discoveries overlap this
+epic`) — silence reads as "didn't check". Those `defer` commands are for the user to run, or not,
+after the import; never run them yourself.
+
 Ask: **"Does this look right? (yes / edit: <what to change> / abort)"**
 
 - **yes** — run:
@@ -247,6 +295,10 @@ tyrion status
 - Split off a new epic
 - Refine existing story titles or intent
 
+**Whenever a new epic is being shaped** — epic mode, or "split off a new epic" from refinement mode
+— run Branch A's **Step 2b discovery recall check** before drafting scenarios. Same read-only
+rules, same two dispositions, same callout lines in the Step 4 review.
+
 ### Step 3: Write to disk
 
 For each shaping decision:
@@ -292,5 +344,7 @@ Re-running shape with the same `--from` docs and the same project/epic is safe. 
 
 - Does not import without user approval ("yes")
 - Does not write to the DB before approval
+- Does not run `tyrion discovery defer` — ever. It surfaces overlapping discoveries and prints the
+  command; the decision to defer stays with the human, like every other DB write here
 - Does not mark any story as done or in-progress
 - Does not fill in TODO criteria — that is step 4 of `/tyrion-implement`
