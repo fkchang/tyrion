@@ -935,6 +935,29 @@ module Tyrion
       end
     end
 
+    # Upgrades a bare mark into a finding in place, keeping the same disc-NNN so
+    # every reference to it (a blocked story's blocked_on_discovery, a chat log)
+    # still resolves. Only a 'mark' is upgradable — a findings_ready row already
+    # has its finding, and an active_spike belongs to `spike done`. nil question
+    # preserves the mark's original wording; nil origin preserves its origin,
+    # same COALESCE contract as #close_spike.
+    def upgrade_mark(id, finding:, question: nil, origin: nil)
+      with_db do |db|
+        db.transaction(:immediate) do
+          disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+          raise "Discovery not found: #{id}" unless disc
+          raise "Discovery #{id} is #{disc['status']} — only a mark can be upgraded" unless disc['status'] == 'mark'
+
+          db.execute(
+            "UPDATE discoveries SET status='findings_ready', finding=?, " \
+            'question=COALESCE(?, question), origin=COALESCE(?, origin), updated_at=? WHERE id=?',
+            [finding, question, origin, now, id]
+          )
+          db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+        end
+      end
+    end
+
     # 'deferred' is deliberately absent — a repeat defer is a friendly no-op handled
     # by the command layer, not a state this method is ever asked to write over.
     DEFERRABLE_STATUSES = %w[mark findings_ready].freeze

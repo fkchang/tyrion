@@ -1427,8 +1427,26 @@ module Tyrion
 
     # ── discover ──────────────────────────────────────────────────────────
 
+    # Two forms sharing one verb, because they answer the same question at
+    # different times: with a mark-id it upgrades that mark non-interactively
+    # (an agent that already did the investigating and must not hang on a
+    # prompt); bare, it runs the original three-prompt organic capture.
+    # The positional id is the only discriminator — flags without an id fall
+    # through to the interactive path exactly as they did before.
     def self.cmd_discover(args, store, input: $stdin, output: $stdout)
-      origin = consume_auto_flag(args)
+      # Consumed first so the flag can never be read as the positional mark-id.
+      # nil (flag absent) means "create as human" below and "leave origin alone"
+      # on the upgrade path — the two defaults consume_auto_flag documents.
+      origin   = consume_auto_flag(args, default: nil)
+      question = extract_flag_value(args, '--question')
+      finding  = extract_flag_value(args, '--finding')
+
+      if (disc_id = args.first)
+        return cmd_discover_upgrade(disc_id, store, question: question, finding: finding,
+                                                    origin: origin, output: output)
+      end
+
+      origin ||= 'human'
       project, = resolve_project_epic(store, require_epic: false)
 
       question = prompt(input, output, "What were you trying to do? ")
@@ -1446,6 +1464,23 @@ module Tyrion
 
       response = prompt(input, output, "Spec this out now? [y/later/no] ").downcase
       output.puts "tyrion spike promote #{disc['id']}" if response == 'y'
+    end
+
+    # Non-interactive: no prompts, no fallback question. --finding is what makes
+    # a mark a finding, so its absence is a usage error rather than a prompt.
+    def self.cmd_discover_upgrade(disc_id, store, question:, finding:, origin:, output: $stdout)
+      die "Usage: tyrion discover <disc-id> --finding \"...\" [--question \"...\"] [--auto]" unless presence(finding)
+
+      project = resolve_project(store)
+      disc    = store.find_discovery(disc_id)
+      # A mark belonging to another project is "not found" from here — project
+      # scope is the boundary, and leaking its existence would be a false lead.
+      die "Discovery #{disc_id} not found" unless disc && disc['project_id'] == project['id']
+
+      disc = store.upgrade_mark(disc_id, finding: finding, question: presence(question), origin: origin)
+      output.puts "[findings_ready] #{disc['id']}"
+    rescue RuntimeError => e
+      die e.message
     end
 
     def self.prompt(input, output, label)
@@ -3530,6 +3565,7 @@ module Tyrion
         Discovery (SDRD spike loop) — add --auto on any of the four to record origin=agent:
           tyrion mark "description" [--auto]       Bookmark — instant breadcrumb with git context
           tyrion discover [--auto]                 Organic capture — question + finding → findings_ready
+          tyrion discover <disc-id> --finding "…"  Upgrade a mark → findings_ready, no prompts ([--question "…"])
           tyrion spike start "question" [--auto]   Frame a known unknown → active_spike
           tyrion spike done [--auto]               Close spike with finding + confidence + recommendation
           tyrion spike promote <disc-id>           Promote findings_ready → linked story

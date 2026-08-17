@@ -127,6 +127,9 @@ Good campaigns don't travel in straight lines. You're mid-story and spot somethi
 # Spot something worth remembering — log it instantly
 tyrion mark "the N+1 on project list will hurt at scale"
 
+# Later, once you've actually looked into that mark — no prompts
+tyrion discover disc-001 --finding "index on project_id fixes it" --auto
+
 # Frame a known unknown
 tyrion spike start "Is SQLite WAL fast enough under concurrent agents?"
 
@@ -208,6 +211,8 @@ tyrion wave next --with-pocket   Same, with tyrion pocket briefing appended belo
 
 tyrion mark "desc" [--auto]      Instant reconnaissance bookmark
 tyrion discover [--auto]         Organic capture — question + finding
+tyrion discover <disc-id> \
+  --finding "…" [--question "…"] Upgrade a mark → findings_ready, no prompts
 tyrion spike start "q" [--auto]  Frame a known unknown
 tyrion spike done [--auto]       Close with findings
 tyrion spike promote <disc-id>   Promote finding → story
