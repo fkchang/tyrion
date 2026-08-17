@@ -1413,16 +1413,42 @@ module Tyrion
     def self.cmd_mark(args, store)
       return puts "No active project." unless Repo.active_project
 
-      origin = consume_auto_flag(args)
-      project, = resolve_project_epic(store, require_epic: false)
+      origin        = consume_auto_flag(args)
+      project, epic = resolve_project_epic(store, require_epic: false)
+      # Read-only lane lookup, never resolve_my_story: filing a mark must not
+      # claim, adopt, or pin a story as a side effect of noticing something.
+      # No epic (or no story on this lane) is a normal outcome, not an error —
+      # the mark files with the provenance left nil rather than guessing.
+      story = epic && prime_story_for(store, epic, current_lane_token)
+
       disc = store.create_discovery(
-        project_id:  project['id'],
-        status:      'mark',
-        question:    args.first,
-        origin:      origin,
-        git_context: Repo.git_context_json
+        project_id:      project['id'],
+        epic_id:         epic && epic['id'],
+        source_story_id: story && story['id'],
+        status:          'mark',
+        question:        args.first,
+        origin:          origin,
+        git_context:     Repo.git_context_json
       )
-      puts "[mark] #{disc['id']}"
+      puts "[mark] #{disc['id']}#{mark_budget_suffix(store, story)}"
+    end
+
+    # The running per-story count is how an implementing agent self-enforces its
+    # mark budget — the implementing-agent skill forbids it from querying SQLite
+    # directly, so if this line doesn't say it, the agent cannot know it.
+    def self.mark_budget_suffix(store, story)
+      return '' unless story
+
+      " (#{ordinal(store.count_marks_from_story(story['id']))} mark filed this story)"
+    end
+
+    def self.ordinal(num)
+      suffix = if (11..13).cover?(num % 100)
+                 'th'
+               else
+                 { 1 => 'st', 2 => 'nd', 3 => 'rd' }.fetch(num % 10, 'th')
+               end
+      "#{num}#{suffix}"
     end
 
     # ── discover ──────────────────────────────────────────────────────────

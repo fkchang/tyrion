@@ -810,6 +810,7 @@ module Tyrion
     # ── Discoveries ────────────────────────────────────────────────────────
 
     def create_discovery(project_id:, status:, epic_id: nil, story_id: nil,
+                         source_story_id: nil,
                          question: nil, hypothesis: nil, exit_criteria: nil,
                          finding: nil, confidence: nil, recommendation: nil, git_context: nil,
                          origin: 'human')
@@ -824,8 +825,8 @@ module Tyrion
           )
           id = format('disc-%03d', seq)
           db.execute(
-            'INSERT INTO discoveries (id, project_id, epic_id, story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [id, project_id, epic_id, story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, t, t]
+            'INSERT INTO discoveries (id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, t, t]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
         end
@@ -889,6 +890,17 @@ module Tyrion
           "SELECT COUNT(*) FROM discoveries WHERE project_id = ? AND status = 'mark'",
           [project_id]
         ).to_i
+      end
+    end
+
+    # Everything ever filed from one story. Counts rows by source_story_id, not
+    # status, so a mark that has since been promoted or deferred still counts
+    # against the story's filing budget — it was still filed.
+    def count_marks_from_story(story_id)
+      return 0 unless story_id
+
+      with_db do |db|
+        db.get_first_value('SELECT COUNT(*) FROM discoveries WHERE source_story_id = ?', [story_id]).to_i
       end
     end
 
@@ -1504,6 +1516,17 @@ module Tyrion
       ['add_defer_reason_to_discoveries', lambda { |db|
         cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
         db.execute('ALTER TABLE discoveries ADD COLUMN defer_reason TEXT') unless cols.include?('defer_reason')
+      }],
+      ['add_source_story_id_to_discoveries', lambda { |db|
+        # Where the discovery was NOTICED, as opposed to story_id, which
+        # promote_discovery_to_story overwrites with the story the discovery
+        # BECAME. The two can't be one column: promotion would erase the
+        # provenance. Left NULL on pre-existing rows — their filing story is
+        # unknowable, and backfilling a guess would be a fabricated claim.
+        cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
+        next if cols.include?('source_story_id')
+
+        db.execute('ALTER TABLE discoveries ADD COLUMN source_story_id TEXT REFERENCES stories(id) ON DELETE SET NULL')
       }]
     ].freeze
 
