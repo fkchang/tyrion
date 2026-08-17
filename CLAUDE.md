@@ -54,6 +54,7 @@ Sinatra 4 + Phlex + phlex-sinatra prototype. Runs separately from the CLI gem �
 ```bash
 # Start/restart/stop (from anywhere, dev checkout only):
 tyrion web              # start if needed, open browser (alias: tyrion dashboard)
+tyrion web ambient      # start if needed, open /ambient?project=<slug> in a narrow app-mode window
 tyrion web restart      # pick up code changes
 tyrion web stop
 tyrion web status
@@ -66,6 +67,8 @@ cd web && TYRION_PROJECT=<slug> bundle exec ruby app.rb
 ```
 
 `lib/tyrion/web_server.rb` owns process lifecycle (PID file under `~/.tyrion/`, port-scan fallback, HTTP health-check polling, cross-platform browser open). `stop`/`restart` only ever kill a PID confirmed to be a `web/app.rb` process (command line + cwd check) — never just "whatever is squatting the port."
+
+`tyrion web ambient` reuses that same lifecycle and project resolution, then opens `WebServer.ambient_url(port, project)` — always `?project=<slug>`-scoped, because an already-running server may have been started for a different project than the one active in this shell. `WebServer.open_app_window` launches the first available Chrome-family binary (`APP_MODE_BROWSERS`, macOS absolute paths / Linux PATH names) with `--app=<url> --window-size=340,960` via `Process.spawn` **argument array** — no shell string, so a URL can never be interpolated into a command line. It returns `false` (never raises) when no browser is found or the launch fails, and the caller falls back to `WebServer.open_url` on the same URL. The URL is printed either way, including under `--no-open`: app mode is convenience, not a dependency — pinning any browser tab to that URL in a split pane is equally valid.
 
 **Key files:**
 - **`web/app.rb`** — Sinatra routes. One route per view + `GET /api/poll` for live monitoring. Mutations use PRG (Post/Redirect/Get) with `session[:flash]`. `with_flash` helper in `helpers` block DRYs up all POST error handling.
