@@ -205,7 +205,7 @@ RSpec.describe 'discovery origin (agent vs human)' do
       expect(out[/.*human finding.*/]).to include('[human]')
     end
 
-    it 'breaks the unformalized mark count down by origin' do
+    it 'tags each rendered mark row with its origin' do
       store.create_discovery(project_id: ctx.project['id'], status: 'mark',
                              question: 'm1', origin: 'agent')
       store.create_discovery(project_id: ctx.project['id'], status: 'mark',
@@ -213,7 +213,8 @@ RSpec.describe 'discovery origin (agent vs human)' do
 
       out, = capture_io { Tyrion::Commands.cmd_status([], store) }
 
-      expect(out).to match(/2 unformalized mark\(s\).*1 \[agent\].*1 \[human\]/)
+      expect(out[/.*m1.*/]).to include('[agent]')
+      expect(out[/.*m2.*/]).to include('[human]')
     end
   end
 

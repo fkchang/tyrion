@@ -498,6 +498,13 @@ module Tyrion
 
     # ── status ─────────────────────────────────────────────────────────────
 
+    # How many of the newest marks the DISCOVERIES lane spells out before collapsing
+    # the rest into a "(N more)" pointer, and how much of each one fits on its single
+    # line — a mark filed as a paragraph would otherwise wrap over the whole screen.
+    # 72 matches the NEEDS FOLLOW-UP rows just above it.
+    STATUS_MARKS_LIMIT     = 3
+    STATUS_MARK_TEXT_WIDTH = 72
+
     def self.cmd_status(args, store)
       project_slug = Repo.active_project
       epic_slug    = Repo.active_epic(token: current_lane_token)
@@ -678,12 +685,18 @@ module Tyrion
         findings_ready.each do |d|
           puts "  → #{d['id']}  #{Output.origin_tag(d['origin'])}  #{d['question']}  (tyrion spike promote #{d['id']})"
         end
-        if marks.any?
-          # Marks are a count here, not a per-row render — so the origin split rides the
-          # count line rather than being dropped on the way to the collapsed summary.
-          by_agent, by_human = marks.partition { |d| d['origin'] == 'agent' }.map(&:size)
-          puts "  #{marks.size} unformalized mark(s)  —  #{by_agent} #{Output.origin_tag('agent')}, #{by_human} #{Output.origin_tag('human')}"
+        # Marks render as rows now, newest first — a count told you something was filed
+        # but never what, so the origin split rides each row instead of a summary line.
+        # list_discoveries is oldest-first with no tiebreak; marks filed in the same second
+        # would order arbitrarily, so fall back to the id, which counts up per project.
+        newest_marks = marks.sort_by { |d| [d['created_at'].to_s, d['id'].to_s] }.reverse
+        newest_marks.first(STATUS_MARKS_LIMIT).each do |d|
+          text = presence(d['question']) || '(no description)'
+          text = "#{text[0, STATUS_MARK_TEXT_WIDTH - 1]}…" if text.length > STATUS_MARK_TEXT_WIDTH
+          puts "  ○ #{d['id']}  #{Output.origin_tag(d['origin'])}  #{text}"
         end
+        remaining = marks.size - STATUS_MARKS_LIMIT
+        puts Output.dim("  (#{remaining} more — tyrion discovery list --status marks)") if remaining > 0
         puts
       end
 

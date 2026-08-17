@@ -45,8 +45,8 @@ RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
     end
   end
 
-  context 'criterion 3 — mark discoveries show aggregate count in status output' do
-    it 'includes "2 unformalized mark" when two mark discoveries exist' do
+  context 'criterion 3 — mark discoveries show their text in status output' do
+    it 'lists both mark questions when two mark discoveries exist' do
       2.times do |i|
         store.create_discovery(
           project_id: project['id'],
@@ -57,7 +57,7 @@ RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
 
       out, = capture_io { Tyrion::Commands.cmd_status([], store) }
 
-      expect(out).to include('2 unformalized mark')
+      expect(out).to include('Mark note 0').and include('Mark note 1')
     end
   end
 
@@ -70,7 +70,7 @@ RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
   end
 
   context 'criterion 5 — mixed discovery types all render in status output' do
-    it 'shows all discovery ids, questions, promote hint, and mark count' do
+    it 'shows all discovery ids, questions, promote hint, and mark text' do
       spike_disc = store.create_discovery(
         project_id: project['id'],
         status:     'active_spike',
@@ -96,7 +96,7 @@ RSpec.describe 'Tyrion::Commands.cmd_status — discovery section' do
       expect(out).to include('Q1?')
       expect(out).to include(findings_disc['id'])
       expect(out).to include("tyrion spike promote #{findings_disc['id']}")
-      expect(out).to include('2 unformalized mark')
+      expect(out).to include('Mark 0').and include('Mark 1')
     end
   end
 end
