@@ -142,8 +142,24 @@ end
 get "/ambient" do
   d = TyrionWeb::Data.load_ambient_view(project_slug: params[:project])
   phlex Views::Ambient.new(
-    project: d[:project], marks: d[:marks], findings_ready_count: d[:findings_ready_count]
+    project: d[:project], marks: d[:marks], findings_ready_count: d[:findings_ready_count],
+    # Seeding the first-render token means an unchanged first poll repaints nothing.
+    token: TyrionWeb::Data.ambient_token(marks: d[:marks], findings_ready_count: d[:findings_ready_count])
   )
+end
+
+# Companion poll for the ambient pane. Resolution is deliberately the SAME call
+# the page render uses (fallback to the active project included) — a stricter
+# lookup here would have the poller disagree with what the page is showing and
+# blank a pane that is rendering fine. 404 is reserved for "no project resolved
+# at all," and even then the body is the renderable empty-state payload.
+get "/api/ambient_poll" do
+  content_type :json
+  d       = TyrionWeb::Data.load_ambient_view(project_slug: params[:project])
+  payload = TyrionWeb::Data.ambient_poll_payload(d)
+  halt 404, payload.to_json unless d[:project]
+
+  payload.to_json
 end
 
 # ── War Room ───────────────────────────────────────────────────────────────────

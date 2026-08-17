@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'digest'
 require 'tyrion'
 
 module TyrionWeb
@@ -186,6 +187,29 @@ module TyrionWeb
         project: project,
         marks: marks,
         findings_ready_count: store.list_discoveries(project_id: project['id'], status: 'findings_ready').size
+      }
+    end
+
+    # Ambient poll token — deliberately derived ONLY from the marks' ids and
+    # question text plus the findings_ready count. Aging is a pure function of
+    # created_at and wall-clock time, so folding it in here would make the token
+    # churn on every tick; the pane recomputes aging client-side instead.
+    def self.ambient_token(marks:, findings_ready_count:)
+      fingerprint = marks.map { |m| [m['id'], m['question']] } << findings_ready_count.to_i
+      Digest::SHA256.hexdigest(fingerprint.to_s)[0, 16]
+    end
+
+    # Everything the ambient pane needs to repaint BOTH sections — never just the
+    # token. Same shape whether or not a project resolved, so the 404 empty-state
+    # body is something the page can render rather than an error it can't.
+    def self.ambient_poll_payload(view)
+      marks = view[:marks]
+      count = view[:findings_ready_count].to_i
+
+      {
+        token: ambient_token(marks: marks, findings_ready_count: count),
+        marks: marks.map { |m| { id: m['id'], question: m['question'].to_s, created_at: m['created_at'] } },
+        findings_ready_count: count
       }
     end
 
