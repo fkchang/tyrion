@@ -79,15 +79,15 @@ RSpec.describe 'Tyrion::Commands.cmd_discovery_defer' do
       expect(out).not_to include(disc['id'])
     end
 
-    it 'drops out of the unformalized mark count in tyrion status' do
-      disc = discovery('mark')
+    it 'drops out of the marks shown in tyrion status' do
+      disc = discovery('mark', 'worth a second look?')
       out, = capture_io { Tyrion::Commands.cmd_status([], store) }
-      expect(out).to include('unformalized mark')
+      expect(out).to include('worth a second look?')
 
       capture_io { Tyrion::Commands.cmd_discovery_defer([disc['id']], store) }
 
       out, = capture_io { Tyrion::Commands.cmd_status([], store) }
-      expect(out).not_to include('unformalized mark')
+      expect(out).not_to include('worth a second look?')
     end
 
     it 'is excluded from the open-status discovery listings the web views query' do
