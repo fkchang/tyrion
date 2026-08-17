@@ -89,6 +89,7 @@ cd web && TYRION_PROJECT=<slug> bundle exec ruby app.rb
 `discoveries` table sits directly under `projects` (not epics). Two entry modes:
 - `tyrion mark "desc"` — zero-friction bookmark, status=`mark`
 - `tyrion discover` — 30-second organic capture, status=`findings_ready`
+- `tyrion discover <disc-id> --finding "…" [--question "…"]` — non-interactive upgrade of an existing `mark` to `findings_ready`
 - `tyrion spike start/done` — structured spike cycle, `active_spike` → `findings_ready`
 - `tyrion spike promote <disc-id>` — converts `findings_ready` → story with `born_from_discovery` traceability
 
@@ -115,6 +116,8 @@ Autonomous filing is the point of that dedup check: an implementing agent is exp
 **Gate-refusal on close** — `tyrion done` refuses (exits 1, lists each offending gate on `$stderr`) when any gate's *latest* result is `fail`, so a story can't be sealed over a failing quality gate. `--force` bypasses it and records the bypass as its own `force-close: PASS` gate note (metadata `detail: "overrode failing: <names>"`) so the override is itself traceable in `tyrion show`'s Gates section. A gate that failed but was later re-recorded as `pass` no longer blocks (only the latest result per gate name counts, matching how `print_gates_section` renders). Enforced in `cmd_done` via `latest_failing_gates` (commands.rb), which prefers the note's `metadata` `{gate,result}` and falls back to the body regex.
 
 **Epic archive** — `tyrion epic archive <slug>` sets `archived_at` (via `Store#archive_epic`); `tyrion epic unarchive <slug>` clears it (`Store#unarchive_epic`). Archived epics drop out of the main `tyrion epic list` into a separate `Archived:` section (shown with an `[archived]` marker) and move to the collapsed Archived section on the web roadmap; the web split keys off `archived_at` (`active_epics`/`archived_epics` in `web/lib/tyrion_web/data.rb`). The `archived_at` column is added idempotently via `MIGRATIONS`.
+
+**Non-interactive discover** — `tyrion discover` is one verb with two forms, discriminated *only* by a positional disc-id (flags alone still fall through to the interactive path, and `--auto` is consumed before the positional read so it can't be mistaken for an id). With an id it calls `cmd_discover_upgrade` → `Store#upgrade_mark`, which refuses anything whose status isn't `mark` (a `findings_ready` row already has its finding; an `active_spike` belongs to `spike done`) and keeps the same disc-NNN so existing references still resolve. `--finding` is required (its absence is a usage error, never a prompt); an omitted `--question` preserves the mark's original wording via `question=COALESCE(?, question)`, same contract as `close_spike`'s origin. A disc-id in another project is reported as plain "not found" — project scope is the boundary and leaking its existence would be a false lead. This is what makes the web Discoveries view's `tyrion discover disc-NNN` chip on mark rows a real command rather than a no-op.
 
 **Discovery IDs** — `disc-NNN` format, global sequential counter (not scoped per project), zero-padded to 3 digits, generated inside `db.transaction(:immediate)`. The counter is deliberately global — `disc-NNN` is the `discoveries` table primary key, so it must be unique across every project, and `create_discovery`'s `MAX(...)` lookup runs without a `project_id` filter for exactly that reason.
 
