@@ -29,6 +29,7 @@ Story status: `pending | in_progress | blocked | done | abandoned`. A unique ind
 ## Key Entry Points
 
 - `bin/tyrion` — the CLI (executable, gemspec entry point)
+- `bin/tyrion-backup` (+ `bin/tyrion_backup.rb`) — personal dev-box script, nightly `sqlite3 .backup` + GFS-lite retention of `~/.tyrion/tyrion.db`; not packaged in the gemspec, wired up via `~/Library/LaunchAgents/com.forrest.tyrion-backup.plist`
 - `lib/tyrion/commands.rb` — command dispatch
 - `lib/tyrion/store.rb` — sole DB access layer
 - `lib/tyrion/repo.rb`, `lib/tyrion/importer.rb` — repo registration, Gherkin import

@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Executable entry point — see bin/tyrion_backup.rb for the implementation
+# and header docs. Split out so the logic is require-able from specs (Ruby's
+# require/require_relative can't load an extensionless file directly).
+require_relative 'tyrion_backup'
+
+run!(ARGV.dup)
