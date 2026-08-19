@@ -1527,6 +1527,10 @@ module Tyrion
         next if cols.include?('source_story_id')
 
         db.execute('ALTER TABLE discoveries ADD COLUMN source_story_id TEXT REFERENCES stories(id) ON DELETE SET NULL')
+      }],
+      ['add_initiative_id_to_projects', lambda { |db|
+        cols = db.execute('PRAGMA table_info(projects)').map { |r| r['name'] }
+        db.execute('ALTER TABLE projects ADD COLUMN initiative_id TEXT') unless cols.include?('initiative_id')
       }]
     ].freeze
 
