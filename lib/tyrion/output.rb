@@ -95,6 +95,26 @@ module Tyrion
       [disc['headline'], disc['question']].find { |t| t && !t.empty? } || '(no description)'
     end
 
+    # Readable text for one Store#unmet_prereqs reason symbol. nil means "no
+    # parenthetical" — :active/:descendant_unsealed are the ordinary "not done
+    # yet" case and get no scary annotation; the others name why it will (or
+    # may never) resolve on its own, so the reader doesn't have to guess.
+    def self.prereq_reason_text(reason)
+      case reason
+      when :unknown   then 'unknown'
+      when :archived  then 'archived'
+      when :abandoned then 'abandoned — will never unblock'
+      when :paused    then 'paused'
+      end
+    end
+
+    # One shared rendering of a Store#unmet_prereqs array — every caller that
+    # shows "waiting on ..." (epic list, epic show, status, resume, prime)
+    # routes through this so the wording can't drift between surfaces.
+    def self.unmet_prereqs_text(unmet)
+      unmet.map { |u| (t = prereq_reason_text(u[:reason])) ? "#{u[:slug]} (#{t})" : u[:slug] }.join(', ')
+    end
+
     def self.dark_factory?(epic) = epic['mode'] == 'dark_factory'
 
     # Bare badge text, no leading space — callers own their own spacing.
