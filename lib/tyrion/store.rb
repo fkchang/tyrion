@@ -1089,7 +1089,7 @@ module Tyrion
     # ── Discoveries ────────────────────────────────────────────────────────
 
     def create_discovery(project_id:, status:, epic_id: nil, story_id: nil,
-                         source_story_id: nil,
+                         source_story_id: nil, parent_spike_id: nil,
                          question: nil, hypothesis: nil, exit_criteria: nil,
                          finding: nil, confidence: nil, recommendation: nil, git_context: nil,
                          origin: 'human', headline: nil)
@@ -1104,8 +1104,8 @@ module Tyrion
           )
           id = format('disc-%03d', seq)
           db.execute(
-            'INSERT INTO discoveries (id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, t, t]
+            'INSERT INTO discoveries (id, project_id, epic_id, story_id, source_story_id, parent_spike_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, project_id, epic_id, story_id, source_story_id, parent_spike_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, t, t]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
         end
@@ -1976,6 +1976,17 @@ module Tyrion
       ['add_initiative_id_to_projects', lambda { |db|
         cols = db.execute('PRAGMA table_info(projects)').map { |r| r['name'] }
         db.execute('ALTER TABLE projects ADD COLUMN initiative_id TEXT') unless cols.include?('initiative_id')
+      }],
+      ['add_parent_spike_id_to_discoveries', lambda { |db|
+        # Which active_spike (if any) was in flight when this mark was filed —
+        # auto-populated at `tyrion mark` creation time, no new flag. Self-referencing
+        # FK to discoveries(id), same nullable/no-backfill reasoning as source_story_id:
+        # pre-existing rows predate this column and their filing-time spike is
+        # unknowable, so they stay NULL rather than guessed.
+        cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
+        next if cols.include?('parent_spike_id')
+
+        db.execute('ALTER TABLE discoveries ADD COLUMN parent_spike_id TEXT REFERENCES discoveries(id) ON DELETE SET NULL')
       }]
     ].freeze
 
