@@ -1838,6 +1838,10 @@ module Tyrion
         db.execute('ALTER TABLE epics ADD COLUMN parent_epic_id TEXT REFERENCES epics(id) ON DELETE SET NULL') unless cols.include?('parent_epic_id')
         db.execute('ALTER TABLE epics ADD COLUMN depends_on TEXT') unless cols.include?('depends_on')
         db.execute('CREATE INDEX IF NOT EXISTS idx_epics_parent ON epics(parent_epic_id)')
+      }],
+      ['add_initiative_id_to_projects', lambda { |db|
+        cols = db.execute('PRAGMA table_info(projects)').map { |r| r['name'] }
+        db.execute('ALTER TABLE projects ADD COLUMN initiative_id TEXT') unless cols.include?('initiative_id')
       }]
     ].freeze
 

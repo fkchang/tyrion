@@ -177,9 +177,10 @@ module Tyrion
       when 'activate'    then cmd_project_activate(args, store)
       when 'sync'        then cmd_project_sync(args, store)
       when 'edit-about'  then cmd_project_edit_about(args, store)
+      when 'set-initiative' then cmd_project_set_initiative(args, store)
       else
         $stderr.puts "Unknown project subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion project [list|new|show|activate|sync|edit-about]"
+        $stderr.puts "Usage: tyrion project [list|new|show|activate|sync|edit-about|set-initiative]"
         exit 1
       end
     end
@@ -219,6 +220,7 @@ module Tyrion
       puts Output.bold("Project: #{project['name']} [#{project['slug']}]")
       puts "Status: #{Output.status_label(project['status'])}"
       puts "Repo:   #{project['primary_repo_identity'] || '(none)'}"
+      puts "Initiative: #{project['initiative_id']}" if presence(project['initiative_id'])
       puts
 
       if project['about_md'] && !project['about_md'].empty?
@@ -238,6 +240,19 @@ module Tyrion
       else
         puts "No epics yet. Import one: tyrion import features/<epic>.feature"
       end
+    end
+
+    def self.cmd_project_set_initiative(args, store)
+      initiative_id = args.shift
+      die "Usage: tyrion project set-initiative <id>" unless presence(initiative_id)
+
+      slug = Repo.active_project
+      die "No active project. Use: tyrion project activate <slug>" unless slug
+      project = store.find_project_by_slug(slug)
+      die "Project not found: #{slug}" unless project
+
+      store.update_project(project['id'], 'initiative_id' => initiative_id)
+      puts "Initiative set to: #{initiative_id}"
     end
 
     def self.cmd_project_activate(args, store)
