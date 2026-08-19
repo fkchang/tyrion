@@ -82,7 +82,7 @@ module Views
     # field. Markdown is interpreted for the free-text fields; confidence is
     # a short label, not prose, so it renders plain.
     def render_fields
-      render_plain_field('Confidence', @discovery['confidence'])
+      render_field('Confidence', @discovery['confidence'], markdown: false)
       render_field('Hypothesis', @discovery['hypothesis'])
       render_field('Exit criteria', @discovery['exit_criteria'])
       render_field('Finding', @discovery['finding'])
@@ -91,21 +91,16 @@ module Views
       render_field('Defer reason', @discovery['defer_reason'])
     end
 
-    def render_field(label, text)
+    def render_field(label, text, markdown: true)
       return unless text && !text.to_s.strip.empty?
 
       div(class: "dv-card-meta", style: "margin-top:10px") do
         div(style: field_label_style) { label }
-        div(class: "dv-md") { raw(safe(TyrionWeb::Presenter.markdown_lite(text))) }
-      end
-    end
-
-    def render_plain_field(label, text)
-      return unless text && !text.to_s.strip.empty?
-
-      div(class: "dv-card-meta", style: "margin-top:10px") do
-        div(style: field_label_style) { label }
-        plain text
+        if markdown
+          div(class: "dv-md") { raw(safe(TyrionWeb::Presenter.markdown_lite(text))) }
+        else
+          plain text
+        end
       end
     end
 
