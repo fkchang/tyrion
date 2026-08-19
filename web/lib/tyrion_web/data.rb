@@ -307,8 +307,8 @@ module TyrionWeb
     end
 
     def self.load_sidebar_data(project, epic)
-      return { stories: [], disc_summary: empty_disc_summary, epic_switcher: [] } unless project && epic
-      stories = store.stories_for_epic(epic['id'])
+      return { stories: [], disc_summary: empty_disc_summary, epic_switcher: [] } unless project
+      stories = epic ? store.stories_for_epic(epic['id']) : []
       disc_summary = load_discovery_summary(project['id'])
       { stories: stories, disc_summary: disc_summary, epic_switcher: epic_switcher_epics(project) }
     end
