@@ -1287,11 +1287,14 @@ module Tyrion
     # Deletion is the one truly irreversible discovery verb — everything else
     # (defer, upgrade_mark, close_spike) is a status flip that keeps the row
     # findable. So it refuses whenever something else still points at this
-    # row rather than only checking status: a promoted discovery IS a story
-    # (status=='promoted_to_story' is equivalent to story_id being set, since
-    # only promote_discovery_to_story ever writes story_id), and a blocked
-    # story's blocked_on_discovery would otherwise dangle with no FK to catch
-    # it (unlike born_from_discovery, which has ON DELETE SET NULL).
+    # row rather than only checking status: a promoted discovery IS a story,
+    # and status=='promoted_to_story' is the *stricter* check — every promotion
+    # sets story_id in the same transaction as the status flip, but story_id
+    # alone has ON DELETE SET NULL and could theoretically go nil while status
+    # doesn't, so keying off status is what actually guarantees the row below
+    # exists. A blocked story's blocked_on_discovery would otherwise dangle
+    # with no FK to catch it (unlike born_from_discovery, which has ON DELETE
+    # SET NULL).
     def delete_discovery(id)
       with_db do |db|
         db.transaction(:immediate) do
@@ -1300,14 +1303,13 @@ module Tyrion
 
           if disc['status'] == 'promoted_to_story'
             story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [disc['story_id']])
-            name  = story ? story['slug'] : disc['story_id']
-            raise "Discovery #{id} was promoted to story #{name} — cannot delete a discovery that became a story"
+            raise "Discovery #{id} was promoted to story #{story['slug']} — cannot delete a discovery that became a story"
           end
 
           blockers = db.execute('SELECT slug FROM stories WHERE blocked_on_discovery = ?', [id])
           unless blockers.empty?
-            names = blockers.map { |s| s['slug'] }.join(', ')
-            raise "Discovery #{id} is blocking #{names} — unblock before deleting"
+            names = blockers.map { |s| "tyrion unblock #{s['slug']}" }.join(', ')
+            raise "Discovery #{id} is blocking #{blockers.map { |s| s['slug'] }.join(', ')} — unblock first: #{names}"
           end
 
           db.execute('DELETE FROM discoveries WHERE id = ?', [id])

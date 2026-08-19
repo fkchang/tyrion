@@ -25,10 +25,17 @@ RSpec.describe 'Tyrion::Commands.cmd_discovery_delete' do
       expect(store.find_discovery(disc['id'])).to be_nil
     end
 
-    it 'echoes the deleted content so a mis-delete is one copy-paste from being re-filed' do
-      disc = discovery('mark', 'a CLI-parsing accident')
-      expect { Tyrion::Commands.cmd_discovery_delete([disc['id']], store) }
-        .to output(/a CLI-parsing accident/).to_stdout
+    it 'echoes the full row (not just the glance line) so a mis-delete is re-fileable' do
+      disc = store.create_discovery(
+        project_id: ctx.project['id'], status: 'findings_ready',
+        headline: 'a short headline', question: 'the raw question noticed',
+        finding: 'the actual finding', recommendation: 'do the thing'
+      )
+      out, = capture_io { Tyrion::Commands.cmd_discovery_delete([disc['id']], store) }
+      expect(out).to include('a short headline')
+      expect(out).to include('the raw question noticed')
+      expect(out).to include('the actual finding')
+      expect(out).to include('do the thing')
     end
   end
 
@@ -56,7 +63,7 @@ RSpec.describe 'Tyrion::Commands.cmd_discovery_delete' do
   end
 
   context 'criterion (blocked story) — a discovery a story is blocked on is refused, naming the story' do
-    it 'refuses deletion and names the blocked story slug' do
+    it 'refuses deletion and names the blocked story slug plus the unblock command' do
       story = store.create_story(epic_id: ctx.epic['id'], slug: 'the-blocked-story', title: 'The Blocked Story')
       disc  = discovery('findings_ready')
       store.block_story(story['id'], blocked_on: 'waiting on this', blocked_on_discovery: disc['id'])
@@ -66,7 +73,17 @@ RSpec.describe 'Tyrion::Commands.cmd_discovery_delete' do
       end
       expect(err).to include(disc['id'])
       expect(err).to include('the-blocked-story')
+      expect(err).to include('tyrion unblock the-blocked-story')
 
+      expect(store.find_discovery(disc['id'])).not_to be_nil
+    end
+
+    it 'the guard lives in the store, not just the CLI' do
+      story = store.create_story(epic_id: ctx.epic['id'], slug: 'blocked-at-store-level', title: 'Blocked')
+      disc  = discovery('findings_ready')
+      store.block_story(story['id'], blocked_on: 'waiting', blocked_on_discovery: disc['id'])
+
+      expect { store.delete_discovery(disc['id']) }.to raise_error(RuntimeError, /blocked-at-store-level/)
       expect(store.find_discovery(disc['id'])).not_to be_nil
     end
   end

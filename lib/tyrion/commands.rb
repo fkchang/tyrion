@@ -1819,6 +1819,14 @@ module Tyrion
       disc = store.find_discovery(disc_id)
       die "Discovery #{disc_id} not found" unless disc
 
+      print_discovery_detail(disc)
+    end
+
+    # Shared renderer for `discovery show` and `discovery delete`'s echo — one
+    # place that prints the full row, so a deleted discovery's echo can't drift
+    # into a shortened glance-surface rendering (Output.discovery_glance_text
+    # is deliberately lossy; a permanent delete is the one place that's wrong).
+    def self.print_discovery_detail(disc)
       puts "#{disc['id']}  [#{disc['status']}]  #{Output.origin_tag(disc['origin'])}"
       puts "Headline:       #{disc['headline']}" if disc['headline']
       puts "Question:       #{disc['question'] || '—'}"
@@ -1858,7 +1866,8 @@ module Tyrion
       die "Discovery #{disc_id} not found" unless disc && disc['project_id'] == project['id']
 
       deleted = store.delete_discovery(disc_id)
-      puts "[deleted] #{disc_id}  #{Output.discovery_glance_text(deleted)}"
+      puts "[deleted] #{disc_id}"
+      print_discovery_detail(deleted)
     rescue RuntimeError => e
       die e.message
     end
