@@ -230,13 +230,19 @@ module Tyrion
       end
 
       epics = store.list_epics(project['id'])
-      if epics.any?
-        puts Output.bold("Epics (#{epics.length}):")
-        epics.each do |e|
-          stories = store.stories_for_epic(e['id'])
-          done    = stories.count { |s| s['status'] == 'done' }
-          puts "  #{e['slug']}  #{e['name']}  #{done}/#{stories.length} done  [#{e['status']}]"
+      active_epics = epics.reject { |e| e['archived_at'] }
+      if active_epics.any?
+        puts Output.bold("Epics (#{active_epics.length}):")
+        graph = store.epic_graph(project['id'])
+        epic_tree_order(active_epics, graph).each do |e, depth, parent_archived|
+          indent      = '  ' * (depth + 1)
+          done, total, container = epic_progress(store, e, graph)
+          counts      = container ? "#{done}/#{total} sealed" : "#{done}/#{total} done"
+          parent_note = parent_archived ? " #{Output.dim('(parent archived)')}" : ''
+          puts "#{indent}#{e['slug']}  #{e['name']}  #{counts}  [#{e['status']}]#{parent_note}"
         end
+      elsif epics.any?
+        puts "No active epics (#{epics.length} archived). See: tyrion epic list"
       else
         puts "No epics yet. Import one: tyrion import features/<epic>.feature"
       end
@@ -356,28 +362,98 @@ module Tyrion
         return
       end
       active_slug = Repo.active_epic(token: current_lane_token)
+      graph = store.epic_graph(project['id'])
       active, archived = epics.partition { |e| e['archived_at'].nil? }
 
-      line = lambda do |e, extra_tag = ''|
-        stories    = store.stories_for_epic(e['id'])
-        done       = stories.count { |s| s['status'] == 'done' }
+      line = lambda do |e, extra_tag = '', depth: 0, parent_archived: false|
+        indent  = '  ' * depth
+        done, total, container = epic_progress(store, e, graph)
+        counts  = container ? "#{done}/#{total} sealed" : "#{done}/#{total}"
         # Only show status bracket for non-default statuses — avoids every epic
         # looking [active] when that's just the DB default, not the active pointer.
-        status_tag = e['status'] == 'active' ? '' : " [#{e['status']}]"
-        badge      = Output.epic_mode_badge(e)
-        mode_tag   = badge.empty? ? '' : " #{badge}"
-        pointer    = e['slug'] == active_slug ? " #{Output.cyan('← active')}" : ''
-        puts "#{e['slug']}  #{e['name']}  #{done}/#{stories.length}#{status_tag}#{mode_tag}#{extra_tag}#{pointer}"
+        status_tag  = e['status'] == 'active' ? '' : " [#{e['status']}]"
+        badge       = Output.epic_mode_badge(e)
+        mode_tag    = badge.empty? ? '' : " #{badge}"
+        pointer     = e['slug'] == active_slug ? " #{Output.cyan('← active')}" : ''
+        # Waiting only means something for an epic that would otherwise be
+        # workable — an already-archived/paused/abandoned/done epic has its
+        # own status_tag explaining why, so this stays quiet for those.
+        unmet       = e['status'] == 'active' && e['archived_at'].nil? ? store.unmet_prereqs(e, graph) : []
+        waiting_tag = unmet.empty? ? '' : " #{Output.yellow("waiting — requires: #{Output.unmet_prereqs_text(unmet)}")}"
+        parent_note = parent_archived ? " #{Output.dim('(parent archived)')}" : ''
+        puts "#{indent}#{e['slug']}  #{e['name']}  #{counts}#{status_tag}#{mode_tag}#{waiting_tag}#{parent_note}#{extra_tag}#{pointer}"
       end
 
-      active.each { |e| line.call(e) }
+      epic_tree_order(active, graph).each { |e, depth, parent_archived| line.call(e, depth: depth, parent_archived: parent_archived) }
 
       unless archived.empty?
         puts
         puts Output.dim("Archived:")
-        archived.each { |e| line.call(e, " #{Output.dim('[archived]')}") }
+        epic_tree_order(archived, graph).each do |e, depth, parent_archived|
+          line.call(e, " #{Output.dim('[archived]')}", depth: depth, parent_archived: parent_archived)
+        end
       end
     end
+
+    # Derived progress for one epic-list/epic-show line: a leaf (no
+    # descendants) shows its own story done/total, unchanged from before this
+    # story. A container (has descendants) shows sealed/total *epics*
+    # (itself + every descendant) instead — its own story fraction would
+    # under-report what a campaign actually contains. `container` tells the
+    # caller which wording ("sealed" vs bare fraction) applies.
+    def self.epic_progress(store, epic, graph)
+      descendant_ids = store.epic_descendants(epic['id'], graph)
+      if descendant_ids.empty?
+        stories = store.stories_for_epic(epic['id'])
+        [stories.count { |s| s['status'] == 'done' }, stories.length, false]
+      else
+        all_ids = [epic['id']] + descendant_ids
+        sealed  = all_ids.count { |id| graph[:epics][id]['status'] == 'done' }
+        [sealed, all_ids.length, true]
+      end
+    end
+    private_class_method :epic_progress
+
+    # Depth-first tree order restricted to one cmd_epic_list section (active
+    # or archived) — the shared traversal both the active tree and the
+    # Archived: tree walk. depth is relative to THIS section's own roots, not
+    # the epic's true depth in the full graph: a node whose real parent lives
+    # in the other section (the archived-parent/active-children case) becomes
+    # a root here at depth 0 rather than being silently dropped — there is no
+    # visible parent line above it to nest under. parent_archived flags that
+    # case specifically (real parent archived, this node isn't) so the caller
+    # can render "(parent archived)" instead of orphaning the child.
+    def self.epic_tree_order(section_epics, graph)
+      section_ids = section_epics.map { |e| e['id'] }
+      by_id       = section_epics.each_with_object({}) { |e, h| h[e['id']] = e }
+      roots       = section_epics.select { |e| !e['parent_epic_id'] || !section_ids.include?(e['parent_epic_id']) }
+
+      result = []
+      visit = lambda do |epic, depth|
+        parent          = epic['parent_epic_id'] && graph[:epics][epic['parent_epic_id']]
+        parent_archived = !!(parent && !section_ids.include?(parent['id']) && parent['archived_at'])
+        result << [epic, depth, parent_archived]
+        (graph[:children][epic['id']] || []).filter_map { |cid| by_id[cid] }
+                                             .each { |child| visit.call(child, depth + 1) }
+      end
+      roots.each { |r| visit.call(r, 0) }
+      result
+    end
+    private_class_method :epic_tree_order
+
+    # Ancestor breadcrumb ("campaign › sub-campaign › ") for a nested epic,
+    # root-first — empty string for a top-level epic. Shared by cmd_status and
+    # cmd_prime's two tiers so the crumb reads the same everywhere it appears;
+    # cmd_prime is the surface that survives /clear, which is why this exists
+    # at all — the graph must not live only in the reader's head.
+    def self.epic_ancestor_crumb(store, epic, graph)
+      ancestors = store.epic_ancestors(epic['id'], graph) # nearest-first ids
+      return '' if ancestors.empty?
+
+      slugs = ancestors.reverse.map { |aid| graph[:epics][aid]['slug'] }
+      "#{Output.dim("#{slugs.join(' › ')} ›")} "
+    end
+    private_class_method :epic_ancestor_crumb
 
     def self.cmd_epic_show(args, store)
       slug = args.first
@@ -392,6 +468,23 @@ module Tyrion
 
       puts Output.bold("Epic: #{epic['name']} [#{epic['slug']}]")
       puts "Status: #{epic['status']}  Project: #{project['slug']}"
+
+      graph = store.epic_graph(epic['project_id'])
+      if epic['parent_epic_id']
+        parent = graph[:epics][epic['parent_epic_id']]
+        puts "Parent: #{parent ? parent['slug'] : '(unknown)'}"
+      end
+
+      deps = JSON.parse(epic['depends_on'] || '[]')
+      if deps.any?
+        unmet_by_slug = store.unmet_prereqs(epic, graph).each_with_object({}) { |u, h| h[u[:slug]] = u[:reason] }
+        deps_text = deps.map { |d| (r = unmet_by_slug[d]) ? "#{d} (#{Output.prereq_reason_text(r) || 'not sealed yet'})" : d }.join(', ')
+        puts "Requires: #{deps_text}"
+      end
+
+      children_ids = graph[:children][epic['id']] || []
+      puts "Children: #{children_ids.map { |cid| graph[:epics][cid]['slug'] }.join(', ')}" if children_ids.any?
+
       puts
 
       if epic['intent'] && !epic['intent'].empty?
@@ -642,9 +735,11 @@ module Tyrion
         return
       end
 
+      graph      = store.epic_graph(project['id'])
+      crumb      = epic_ancestor_crumb(store, epic, graph)
       badge      = Output.epic_mode_badge(epic)
       mode_badge = badge.empty? ? '' : "  #{badge}"
-      puts "#{Output.bold('Epic:')}    #{epic['name']} [#{Output.dim(epic_slug)}]#{mode_badge}"
+      puts "#{Output.bold('Epic:')}    #{crumb}#{epic['name']} [#{Output.dim(epic_slug)}]#{mode_badge}"
 
       if epic['intent'] && !epic['intent'].empty?
         puts "           #{Output.dim(epic['intent'][0, 80])}#{'…' if epic['intent'].length > 80}"
@@ -653,6 +748,10 @@ module Tyrion
       if (drift_path = drift_changed_path(epic, Repo.worktree_root))
         print_drift_warning(drift_path, indent: '  ')
       end
+
+      # Same "otherwise it would explain itself" quiet-default as cmd_epic_list.
+      unmet = epic['status'] == 'active' && epic['archived_at'].nil? ? store.unmet_prereqs(epic, graph) : []
+      puts "  #{Output.yellow('⚠ waiting on:')} #{Output.unmet_prereqs_text(unmet)}" unless unmet.empty?
 
       puts
 
@@ -1485,10 +1584,14 @@ module Tyrion
       north_star   = project['about_md']&.lines&.first&.strip&.sub(/^#+\s*/, '')
       epic_stories = store.stories_for_epic(epic['id'])
       done_n       = epic_stories.count { |s| s['status'] == 'done' }
-      waiting      = store.unmet_prereqs(epic, store.epic_graph(epic['project_id']))
+      graph        = store.epic_graph(epic['project_id'])
+      waiting      = store.unmet_prereqs(epic, graph)
 
       puts north_star if presence(north_star)
-      puts "epic: #{epic['slug']} (#{done_n}/#{epic_stories.length})"
+      # Parent crumb here (not just in Tier 2) because a lane can land on
+      # Tier 1 with no story claimed yet — this is the surface most likely to
+      # be the very first thing an agent reads after /clear.
+      puts "epic: #{epic_ancestor_crumb(store, epic, graph)}#{epic['slug']} (#{done_n}/#{epic_stories.length})"
       if waiting.empty?
         puts "next: tyrion claim-next"
       else
@@ -1506,8 +1609,9 @@ module Tyrion
 
     def self.print_prime_tier2(epic, story, store, open_marks)
       stale_suffix = Output.stale?(story['last_note_at']) ? " #{Output.stale_label(story['last_note_at'])}" : ''
+      crumb        = epic_ancestor_crumb(store, epic, store.epic_graph(epic['project_id']))
 
-      puts "epic: #{epic['slug']}"
+      puts "epic: #{crumb}#{epic['slug']}"
       puts "story: #{story['slug']}#{stale_suffix}"
       puts "next: #{story['next_action']}" if presence(story['next_action'])
       puts "mode: dark_factory — orchestrate auto-advances waves; implement continues past done" if Output.dark_factory?(epic)
@@ -1923,10 +2027,14 @@ module Tyrion
       puts "#{Output.bold('Epic:')}    #{epic['name']} · #{done_n}/#{epic_stories.length} done#{intent_snippet}"
 
       all_epics   = store.list_epics(project['id'])
+      graph       = store.epic_graph(project['id'])
       open_parts  = all_epics.reject { |e| e['id'] == epic['id'] }.filter_map do |e|
         e_stories = store.stories_for_epic(e['id'])
         pending_n = e_stories.count { |s| %w[pending in_progress blocked].include?(s['status']) }
-        pending_n > 0 ? "#{e['slug']} (#{pending_n})" : nil
+        next nil unless pending_n > 0
+
+        waiting = e['status'] == 'active' && e['archived_at'].nil? && !store.unmet_prereqs(e, graph).empty?
+        "#{e['slug']} (#{pending_n})#{waiting ? " #{Output.dim('waiting')}" : ''}"
       end
       puts "#{Output.dim('Open:')}    #{open_parts.join(' · ')}" if open_parts.any?
       puts
