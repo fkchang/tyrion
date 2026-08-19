@@ -1162,6 +1162,58 @@ RSpec.describe Tyrion::Store do
         expect(store.find_epic_by_id(epic['id'])['status']).to eq('active')
       end
     end
+
+    describe '#seal_epic container invariant' do
+      it 'raises "nothing to seal" for a childless epic with zero stories (unchanged leaf behavior)' do
+        expect { store.seal_epic(epic['id']) }.to raise_error(/no stories.*nothing to seal/i)
+      end
+
+      it 'raises naming undone stories for a childless epic (unchanged leaf behavior)' do
+        add_done_story('a')
+        store.create_story(epic_id: epic['id'], slug: 'b', title: 'b')
+        expect { store.seal_epic(epic['id']) }.to raise_error(/not done.*b/)
+      end
+
+      it 'seals a container with zero of its own stories once every descendant is sealed' do
+        child = store.create_epic(project_id: project['id'], slug: 'child', name: 'child')
+        store.set_epic_parent(child['id'], epic['id'])
+        cs = store.create_story(epic_id: child['id'], slug: 'cs', title: 'cs')
+        store.complete_story(cs['id'], 'done', force: true)
+        store.seal_epic(child['id'])
+
+        store.seal_epic(epic['id'])
+        expect(store.find_epic_by_id(epic['id'])['status']).to eq('done')
+      end
+
+      it 'refuses a container whose descendant is not yet sealed' do
+        child = store.create_epic(project_id: project['id'], slug: 'child', name: 'child')
+        store.set_epic_parent(child['id'], epic['id'])
+        store.create_story(epic_id: child['id'], slug: 'cs', title: 'cs') # left pending, unsealed
+
+        expect { store.seal_epic(epic['id']) }.to raise_error(/descendant epic\(s\) not sealed.*child/)
+      end
+
+      it 'refuses a container whose own stories are not done even if descendants are sealed' do
+        child = store.create_epic(project_id: project['id'], slug: 'child', name: 'child')
+        store.set_epic_parent(child['id'], epic['id'])
+        cs = store.create_story(epic_id: child['id'], slug: 'cs', title: 'cs')
+        store.complete_story(cs['id'], 'done', force: true)
+        store.seal_epic(child['id'])
+        store.create_story(epic_id: epic['id'], slug: 'own', title: 'own') # left pending
+
+        expect { store.seal_epic(epic['id']) }.to raise_error(/own story\/stories not done.*own/)
+      end
+
+      it '--force seals a container over both an unsealed descendant and undone own stories' do
+        child = store.create_epic(project_id: project['id'], slug: 'child', name: 'child')
+        store.set_epic_parent(child['id'], epic['id'])
+        store.create_story(epic_id: child['id'], slug: 'cs', title: 'cs')
+        store.create_story(epic_id: epic['id'], slug: 'own', title: 'own')
+
+        store.seal_epic(epic['id'], force: true)
+        expect(store.find_epic_by_id(epic['id'])['status']).to eq('done')
+      end
+    end
   end
 
   describe 'MIGRATIONS — add_epic_relationships' do
@@ -1422,6 +1474,80 @@ RSpec.describe Tyrion::Store do
       graph = store.epic_graph(project['id'])
       unmet = store.unmet_prereqs(store.find_epic_by_id(child['id']), graph)
       expect(unmet).to eq [{ slug: 'prereq', reason: :active }]
+    end
+  end
+
+  describe '#ready_epics' do
+    let(:project) { make_project }
+
+    def sealed_epic(slug)
+      epic = make_epic(project_id: project['id'], slug: slug)
+      s = make_story(epic_id: epic['id'], slug: "#{slug}-story")
+      store.complete_story(s['id'], 'done', force: true)
+      store.seal_epic(epic['id'])
+      store.find_epic_by_id(epic['id'])
+    end
+
+    it 'includes an epic with no dependencies' do
+      make_epic(project_id: project['id'], slug: 'e')
+      expect(store.ready_epics(project['id']).map { |e| e['slug'] }).to include('e')
+    end
+
+    it 'excludes a waiting epic (unmet prerequisite)' do
+      make_epic(project_id: project['id'], slug: 'prereq')
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.add_epic_dependency(dependent['id'], 'prereq')
+      expect(store.ready_epics(project['id']).map { |e| e['slug'] }).not_to include('dependent')
+    end
+
+    it 'includes a dependent once its prerequisite is sealed' do
+      sealed_epic('prereq')
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.add_epic_dependency(dependent['id'], 'prereq')
+      expect(store.ready_epics(project['id']).map { |e| e['slug'] }).to include('dependent')
+    end
+
+    it 'excludes sealed, archived, abandoned, and paused epics' do
+      sealed = sealed_epic('sealed')
+      archived = make_epic(project_id: project['id'], slug: 'archived')
+      store.archive_epic(archived['id'])
+      abandoned = make_epic(project_id: project['id'], slug: 'abandoned-epic')
+      store.update_epic(abandoned['id'], 'status' => 'abandoned')
+      paused = make_epic(project_id: project['id'], slug: 'paused-epic')
+      store.update_epic(paused['id'], 'status' => 'paused')
+
+      slugs = store.ready_epics(project['id']).map { |e| e['slug'] }
+      expect(slugs).not_to include('sealed', 'archived', 'abandoned-epic', 'paused-epic')
+    end
+
+    it 'accepts a precomputed graph so a caller holding one avoids a second snapshot' do
+      make_epic(project_id: project['id'], slug: 'e')
+      graph = store.epic_graph(project['id'])
+      expect(store).not_to receive(:epic_graph)
+      expect(store.ready_epics(project['id'], graph: graph).map { |e| e['slug'] }).to include('e')
+    end
+  end
+
+  describe 'eligibility re-derives automatically on status changes' do
+    let(:project) { make_project }
+
+    it 're-locks a dependent when its sealed prerequisite is reopened' do
+      prereq = make_epic(project_id: project['id'], slug: 'prereq')
+      s = make_story(epic_id: prereq['id'], slug: 'prereq-story')
+      store.complete_story(s['id'], 'done', force: true)
+      store.seal_epic(prereq['id'])
+
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.add_epic_dependency(dependent['id'], 'prereq')
+      expect(store.ready_epics(project['id']).map { |e| e['slug'] }).to include('dependent')
+
+      # Reopens prereq via the same reverse-flip honesty path other stories use —
+      # claiming a new pending story on a done epic flips it back to active.
+      store.create_story(epic_id: prereq['id'], slug: 'prereq-story-2', title: 'again')
+      store.claim_next_story(prereq['id'])
+      expect(store.find_epic_by_id(prereq['id'])['status']).to eq('active')
+
+      expect(store.ready_epics(project['id']).map { |e| e['slug'] }).not_to include('dependent')
     end
   end
 

@@ -367,13 +367,45 @@ module Tyrion
       end
     end
 
+    # Container invariant: an epic with children may also hold its own
+    # stories, and seals when its own stories are done AND every descendant is
+    # sealed (a container with zero stories of its own passes that half
+    # vacuously — it's just orchestrating its children). A childless (leaf)
+    # epic keeps the original behavior exactly: zero stories raises "nothing
+    # to seal", any undone story raises naming it. `force` bypasses both
+    # halves of the container check the same way it bypasses the leaf check.
     def seal_epic(epic_id, force: false)
-      unless force || all_stories_done?(epic_id)
-        stories = stories_for_epic(epic_id)
-        undone  = stories.reject { |s| s['status'] == 'done' }
-        raise "Epic has no stories — nothing to seal." if stories.empty?
-        raise "#{undone.length} story/stories not done: #{undone.map { |s| s['slug'] }.join(', ')}"
+      epic = find_epic_by_id(epic_id)
+      raise "Epic not found: #{epic_id}" unless epic
+
+      graph = epic_graph(epic['project_id'])
+      children = graph[:children][epic_id] || []
+
+      if children.empty?
+        unless force || all_stories_done?(epic_id)
+          stories = stories_for_epic(epic_id)
+          undone  = stories.reject { |s| s['status'] == 'done' }
+          raise "Epic has no stories — nothing to seal." if stories.empty?
+          raise "#{undone.length} story/stories not done: #{undone.map { |s| s['slug'] }.join(', ')}"
+        end
+      else
+        own_stories = stories_for_epic(epic_id)
+        own_undone  = own_stories.reject { |s| s['status'] == 'done' }
+        unsealed_descendants = epic_descendants(epic_id, graph).reject do |did|
+          graph[:epics][did] && graph[:epics][did]['status'] == 'done'
+        end
+
+        unless force || (own_undone.empty? && unsealed_descendants.empty?)
+          reasons = []
+          reasons << "#{own_undone.length} of its own story/stories not done: #{own_undone.map { |s| s['slug'] }.join(', ')}" unless own_undone.empty?
+          unless unsealed_descendants.empty?
+            names = unsealed_descendants.filter_map { |did| graph[:epics][did]&.fetch('slug', nil) }
+            reasons << "descendant epic(s) not sealed: #{names.join(', ')}"
+          end
+          raise reasons.join('; ')
+        end
       end
+
       update_epic(epic_id, 'status' => 'done')
     end
 
@@ -389,25 +421,29 @@ module Tyrion
       with_db { |db| db.execute('SELECT * FROM epics WHERE project_id = ? ORDER BY created_at', [project_id]) }
     end
 
-    # The earliest-created epic (optionally excluding one) that still has at least
-    # one pending story. Skips done/abandoned and archived epics. Returns nil when
-    # nothing qualifies — the caller renders "All epics complete". `IS NOT ?` is
-    # NULL-safe so a nil exclude_epic_id matches every epic.
+    # Epics in the project that are actually workable right now: not sealed,
+    # archived, abandoned, or paused, and eligible per #unmet_prereqs (empty
+    # means ready). Accepts a precomputed +graph:+ so a caller that already
+    # holds one (e.g. #next_pending_epic, or a before/after unlock diff) never
+    # triggers a second #epic_graph snapshot. Ordered by created_at like
+    # #list_epics.
+    def ready_epics(project_id, graph: nil)
+      graph ||= epic_graph(project_id)
+      graph[:epics].values
+        .reject { |e| %w[done abandoned paused].include?(e['status']) || e['archived_at'] }
+        .select { |e| unmet_prereqs(e, graph).empty? }
+        .sort_by { |e| e['created_at'] }
+    end
+
+    # The earliest-created *ready* epic (optionally excluding one) that still
+    # has at least one pending story of its own — i.e. #ready_epics further
+    # narrowed to actionable work. Returns nil when nothing qualifies — the
+    # caller renders "All epics complete". A waiting epic (unmet prerequisite)
+    # is excluded the same as a done/abandoned/archived one, via #ready_epics.
     def next_pending_epic(project_id, exclude_epic_id: nil)
-      with_db do |db|
-        db.get_first_row(<<~SQL, [project_id, exclude_epic_id])
-          SELECT e.* FROM epics e
-          WHERE e.project_id = ?
-            AND e.id IS NOT ?
-            AND e.status NOT IN ('done', 'abandoned')
-            AND e.archived_at IS NULL
-            AND EXISTS (
-              SELECT 1 FROM stories s
-              WHERE s.epic_id = e.id AND s.status = 'pending'
-            )
-          ORDER BY e.created_at, e.rowid
-          LIMIT 1
-        SQL
+      graph = epic_graph(project_id)
+      ready_epics(project_id, graph: graph).find do |e|
+        e['id'] != exclude_epic_id && graph[:story_counts][e['id']]['pending'].positive?
       end
     end
 
