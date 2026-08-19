@@ -3908,7 +3908,8 @@ module Tyrion
           tyrion discover <disc-id> --finding "…"  Upgrade a mark → findings_ready, no prompts
                                                     ([--question "…"] [--headline "…"])
           tyrion spike start "question" [--auto]   Frame a known unknown → active_spike
-          tyrion spike done [--auto] [--verdict <v>] Close spike with finding + confidence + recommendation
+          tyrion spike done [--auto] [--verdict <v>]
+                                                    Close spike with finding + confidence + recommendation
                                                     (verdict: #{Store::VERDICTS.join('|')})
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
           tyrion discovery list [--status <alias>] List discoveries (aliases: active|marks|ready|promoted|deferred|all)
