@@ -72,8 +72,11 @@ RSpec.describe 'ambient poll' do
 
       # :text, not :question -- the payload carries the glance-surface fallback
       # (headline if set, else question), matching Output.discovery_glance_text.
+      # headline/question also ride along separately so the inline-expanded
+      # state (ambient's progressive disclosure) has full content to show.
       expect(payload[:marks]).to eq(
-        [{ id: 'disc-007', text: 'why is the poller flaky?', created_at: view[:marks].first['created_at'] }]
+        [{ id: 'disc-007', text: 'why is the poller flaky?', headline: nil,
+           question: 'why is the poller flaky?', created_at: view[:marks].first['created_at'] }]
       )
     end
 
@@ -140,7 +143,12 @@ RSpec.describe 'ambient poll' do
     end
 
     it 'repaints marks and the findings_ready line in the same apply()' do
-      apply_body = render[/function apply\(data\) \{(.*?)^\s*\}$/m, 1]
+      # Range-extract (not brace-matched) -- apply() now nests an `if` block for
+      # the inline-expand markup, so a naive "up to the first line-leading `}`"
+      # regex stops early. Bounding by the next function definition instead is
+      # robust to internal nesting.
+      html = render
+      apply_body = html[/function apply\(data\) \{.*?(?=\n\s*function poll\(\))/m]
 
       expect(apply_body).to include('marksHost.textContent')
       expect(apply_body).to include('readyLine.textContent')

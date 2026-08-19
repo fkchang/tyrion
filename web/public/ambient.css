@@ -46,6 +46,8 @@ body {
   color: var(--am-aged);
 }
 
+.am-mark-toggle { cursor: pointer; }
+
 .am-mark-q {
   margin-bottom: 2px;
   /* backstop for TRUNCATE_AT: caps at 2 lines even if a word wraps looser
@@ -61,18 +63,45 @@ body {
   font-size: 11px;
 }
 
-.am-mark-meta a {
-  color: inherit;
-  text-decoration: none;
-  border-bottom: 1px dotted var(--am-muted);
-}
-
-.am-mark-meta a:hover { border-bottom-style: solid; }
-
 /* Text label for aging, not just the border/color -- a glance surface has to
    be self-explanatory without already knowing what an orange bar means. */
 .am-stale-label { display: none; }
 .am-mark.aged .am-stale-label { display: inline; }
+
+/* Progressive disclosure: click .am-mark-toggle to reveal, no navigation.
+   Hidden by default -- the whole point of the compact/expand split is that
+   full text costs nothing to look at UNTIL you ask for it. */
+.am-mark-full { display: none; margin-top: 8px; }
+.am-mark.expanded .am-mark-full { display: block; }
+
+.am-mark-full-question {
+  font-size: 13px;
+  color: var(--am-text);
+  margin-bottom: 8px;
+}
+
+.am-mark-actions { display: flex; align-items: center; gap: 10px; }
+
+.am-mark-actions a {
+  color: var(--am-text);
+  font-size: 12px;
+  text-decoration: none;
+  border-bottom: 1px dotted var(--am-muted);
+}
+.am-mark-actions a:hover { border-bottom-style: solid; }
+
+.am-defer-form { display: inline; }
+.am-defer-form button {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--am-bg);
+  background: var(--am-text);
+  border: none;
+  border-radius: 3px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.am-defer-form button:hover { opacity: 0.85; }
 
 .am-ready {
   color: var(--am-muted);

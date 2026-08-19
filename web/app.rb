@@ -64,6 +64,19 @@ helpers do
   ensure
     redirect "/roadmap#{"?project=#{slug}" if slug}"
   end
+
+  # with_flash hardcodes redirect "/" (the Active Story page) — wrong for discovery
+  # mutations, which need to land back on the discovery itself or wherever the
+  # action was triggered from (e.g. the ambient pane). params[:return_to] lets a
+  # caller (the ambient inline-expand form) redirect somewhere other than the
+  # discovery's own page; absent, it defaults there, same shape as with_epic_flash.
+  def with_discovery_flash(disc_id)
+    session[:flash] = yield
+  rescue StandardError => e
+    session[:flash] = "Error: #{e.message}"
+  ensure
+    redirect params[:return_to] || "/discoveries/#{disc_id}"
+  end
 end
 
 # ── Active Story (default) ─────────────────────────────────────────────────────
@@ -130,6 +143,31 @@ get "/discoveries" do
     stories: base[:stories], disc_summary: base[:disc_summary],
     epic_switcher: base[:epic_switcher],
     project_slug: params[:project],
+    **base_git
+  )
+end
+
+get "/discoveries/:id" do
+  d = TyrionWeb::Data.load_discovery_show_view(params[:id])
+  unless d[:discovery]
+    proj = TyrionWeb::Data.resolve_active_project
+    epic = proj ? TyrionWeb::Data.resolve_active_epic(proj) : nil
+    base = TyrionWeb::Data.load_sidebar_data(proj, epic)
+    halt 404, phlex(Views::NotFoundView.new(
+      message: "Discovery #{params[:id]} not found.",
+      project: proj, epic: epic,
+      stories: base[:stories], disc_summary: base[:disc_summary],
+      epic_switcher: base[:epic_switcher],
+      **base_git
+    ))
+  end
+  flash = session.delete(:flash)
+  phlex Views::DiscoveryShow.new(
+    project: d[:project], epic: d[:epic], sidebar_epic: d[:sidebar_epic],
+    discovery: d[:discovery], epics: d[:epics],
+    stories: d[:stories], disc_summary: d[:disc_summary],
+    epic_switcher: d[:epic_switcher],
+    flash: flash,
     **base_git
   )
 end
@@ -281,4 +319,38 @@ end
 
 post "/epic/:slug/unarchive" do
   with_epic_flash { |epic| store.unarchive_epic(epic['id']); "Epic #{params[:slug]} unarchived" }
+end
+
+post "/discoveries/:id/defer" do
+  with_discovery_flash(params[:id]) do
+    reason = params[:reason]&.strip
+    store.defer_discovery(params[:id], reason: (reason.nil? || reason.empty?) ? nil : reason)
+    "Discovery #{params[:id]} deferred"
+  end
+end
+
+post "/discoveries/:id/promote" do
+  with_discovery_flash(params[:id]) do
+    disc = store.find_discovery(params[:id])
+    raise "discovery not found" unless disc
+
+    epic = store.find_epic(disc['project_id'], params[:epic_slug])
+    raise "epic not found" unless epic
+
+    title = params[:title]&.strip
+    title = disc['question'] if title.nil? || title.empty?
+    story = store.promote_discovery_to_story(
+      params[:id], epic_id: epic['id'], slug: Tyrion::Commands.slugify(title),
+      title: title, intent: disc['recommendation']
+    )
+    "Promoted to story #{story['slug']}"
+  end
+end
+
+post "/discoveries/:id/headline" do
+  with_discovery_flash(params[:id]) do
+    headline = params[:headline]&.strip
+    store.set_headline(params[:id], headline.nil? || headline.empty? ? nil : headline)
+    "Headline updated"
+  end
 end

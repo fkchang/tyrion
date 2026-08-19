@@ -49,12 +49,16 @@ module Views
       @project && (@project['slug'] || @project['name'] || '')
     end
 
-    # Deep link into the full Discoveries page — target=_blank so clicking
-    # from the narrow ambient pane doesn't navigate it away from the glance
-    # surface it's meant to stay pinned to. No escaping needed: project slugs
-    # are always slugify()'d (alphanumeric + hyphens) elsewhere in the app.
+    # The dedicated per-discovery page (design: 2026-08-18 discovery glance/detail
+    # spec) — target=_blank so clicking from the narrow ambient pane doesn't
+    # navigate it away from the glance surface it's meant to stay pinned to. No
+    # escaping needed: project slugs are always slugify()'d elsewhere in the app.
     def discovery_url(disc_id)
-      "/discoveries?project=#{project_slug}##{disc_id}"
+      "/discoveries/#{disc_id}"
+    end
+
+    def ambient_url
+      "/ambient?project=#{project_slug}"
     end
 
     # Zero open marks blanks this section only — the findings_ready line below
@@ -63,19 +67,43 @@ module Views
     # from; created_at also lets aging be recomputed without a round trip.
     def render_marks
       div(id: "am-marks") do
-        @marks.each do |m|
-          is_aged = aged?(m)
-          div(class: is_aged ? "am-mark aged" : "am-mark", data: { created_at: m['created_at'] }) do
-            div(class: "am-mark-q") { truncate(Tyrion::Output.discovery_glance_text(m)) }
-            div(class: "am-mark-meta") do
-              a(href: discovery_url(m['id']), target: "_blank", rel: "noopener") { m['id'] }
-              plain " · #{TyrionWeb::Presenter.time_ago(m['created_at'])}"
-              # Always in the DOM; CSS shows it only under .am-mark.aged, so
-              # refreshAging()'s class toggle (every tick, token or not) is
-              # the only thing that needs to control it — no separate JS path.
-              span(class: "am-stale-label") { " · stale" }
-            end
+        @marks.each { |m| render_mark(m) }
+      end
+    end
+
+    # Compact row (always visible) + a hidden expand section revealed on click —
+    # progressive disclosure in place, no navigation required for the common
+    # case. The expand section is server-rendered every time (not fetched on
+    # click) so it works with JS doing nothing but a class toggle.
+    def render_mark(m)
+      is_aged = aged?(m)
+      div(class: is_aged ? "am-mark aged" : "am-mark", data: { created_at: m['created_at'] }) do
+        div(class: "am-mark-toggle") do
+          div(class: "am-mark-q") { truncate(Tyrion::Output.discovery_glance_text(m)) }
+          div(class: "am-mark-meta") do
+            plain m['id']
+            plain " · #{TyrionWeb::Presenter.time_ago(m['created_at'])}"
+            # Always in the DOM; CSS shows it only under .am-mark.aged, so
+            # refreshAging()'s class toggle (every tick, token or not) is
+            # the only thing that needs to control it — no separate JS path.
+            span(class: "am-stale-label") { " · stale" }
           end
+        end
+        render_mark_full(m)
+      end
+    end
+
+    def render_mark_full(m)
+      div(class: "am-mark-full") do
+        if m['headline'] && m['headline'] != m['question']
+          div(class: "am-mark-full-question") { m['question'] }
+        end
+        div(class: "am-mark-actions") do
+          form(method: "post", action: "/discoveries/#{m['id']}/defer", class: "am-defer-form") do
+            input(type: "hidden", name: "return_to", value: ambient_url)
+            button(type: "submit") { "Defer" }
+          end
+          a(href: discovery_url(m['id']), target: "_blank", rel: "noopener") { "Open full view →" }
         end
       end
     end
@@ -127,32 +155,64 @@ module Views
               }
             }
 
+            var ambientUrl = '/ambient?project=' + encodeURIComponent(slug);
+
             // Marks list and findings_ready line always repaint together —
             // repainting one alone would leave the pane self-contradicting.
+            // NOTE: a repaint always collapses any expanded card back to
+            // compact (no expand-state carried across a real content change)
+            // — an accepted gap, not a bug: see the design spec's "deliberately
+            // out of scope" section.
             function apply(data) {
               marksHost.textContent = '';
               (data.marks || []).forEach(function (m) {
                 var wrap = document.createElement('div');
                 wrap.className = 'am-mark';
                 wrap.dataset.createdAt = m.created_at || '';
+
+                var toggle = document.createElement('div');
+                toggle.className = 'am-mark-toggle';
                 var q = document.createElement('div');
                 q.className = 'am-mark-q';
                 q.textContent = truncate(String(m.text || ''));
                 var meta = document.createElement('div');
                 meta.className = 'am-mark-meta';
-                var link = document.createElement('a');
-                link.href = '/discoveries?project=' + encodeURIComponent(slug) + '#' + m.id;
-                link.target = '_blank';
-                link.rel = 'noopener';
-                link.textContent = m.id;
-                meta.appendChild(link);
-                meta.appendChild(document.createTextNode(' \\u00b7 ' + timeAgo(m.created_at)));
+                meta.appendChild(document.createTextNode(m.id + ' \\u00b7 ' + timeAgo(m.created_at)));
                 var stale = document.createElement('span');
                 stale.className = 'am-stale-label';
                 stale.textContent = ' \\u00b7 stale';
                 meta.appendChild(stale);
-                wrap.appendChild(q);
-                wrap.appendChild(meta);
+                toggle.appendChild(q);
+                toggle.appendChild(meta);
+                wrap.appendChild(toggle);
+
+                var full = document.createElement('div');
+                full.className = 'am-mark-full';
+                if (m.headline && m.headline !== m.question) {
+                  var qFull = document.createElement('div');
+                  qFull.className = 'am-mark-full-question';
+                  qFull.textContent = m.question || '';
+                  full.appendChild(qFull);
+                }
+                var actions = document.createElement('div');
+                actions.className = 'am-mark-actions';
+                var deferForm = document.createElement('form');
+                deferForm.method = 'post';
+                deferForm.action = '/discoveries/' + m.id + '/defer';
+                deferForm.className = 'am-defer-form';
+                var returnTo = document.createElement('input');
+                returnTo.type = 'hidden'; returnTo.name = 'return_to'; returnTo.value = ambientUrl;
+                var deferBtn = document.createElement('button');
+                deferBtn.type = 'submit'; deferBtn.textContent = 'Defer';
+                deferForm.appendChild(returnTo); deferForm.appendChild(deferBtn);
+                var openLink = document.createElement('a');
+                openLink.href = '/discoveries/' + m.id;
+                openLink.target = '_blank'; openLink.rel = 'noopener';
+                openLink.textContent = 'Open full view \\u2192';
+                actions.appendChild(deferForm); actions.appendChild(openLink);
+                full.appendChild(actions);
+                wrap.appendChild(full);
+
                 marksHost.appendChild(wrap);
               });
               readyLine.textContent = (data.findings_ready_count || 0) + ' findings ready';
@@ -169,6 +229,13 @@ module Views
                 })
                 .catch(function () { refreshAging(); });
             }
+
+            // Delegated so it keeps working after apply() rebuilds #am-marks.
+            marksHost.addEventListener('click', function (ev) {
+              var toggle = ev.target.closest('.am-mark-toggle');
+              if (!toggle) return;
+              toggle.parentElement.classList.toggle('expanded');
+            });
 
             refreshAging();
             setInterval(poll, INTERVAL);

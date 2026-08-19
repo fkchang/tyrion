@@ -175,7 +175,7 @@ module TyrionWeb
     # slug falls back to the resolved active project instead of rendering an
     # empty page: the ambient pane is glance-only, so a stale bookmarked slug
     # should still show something true rather than a blank surface.
-    def self.load_ambient_view(project_slug: nil, mark_limit: 3)
+    def self.load_ambient_view(project_slug: nil, mark_limit: 10)
       slug    = project_slug&.strip&.then { |s| s.empty? ? nil : s }
       project = (slug && store.find_project_by_slug(slug)) || resolve_active_project
       return { project: nil, marks: [], findings_ready_count: 0 } unless project
@@ -211,8 +211,45 @@ module TyrionWeb
 
       {
         token: ambient_token(marks: marks, findings_ready_count: count),
-        marks: marks.map { |m| { id: m['id'], text: Tyrion::Output.discovery_glance_text(m), created_at: m['created_at'] } },
+        # headline/question separate (not just the merged `text`) so the
+        # inline-expanded state can show both — the compact glance text alone
+        # isn't enough once you're looking at more than the headline.
+        marks: marks.map { |m| { id: m['id'], text: Tyrion::Output.discovery_glance_text(m),
+                                  headline: m['headline'], question: m['question'], created_at: m['created_at'] } },
         findings_ready_count: count
+      }
+    end
+
+    # The dedicated per-discovery page (design: 2026-08-18 discovery glance/detail spec).
+    # epics: the promote-to-story epic picker's source — Store#promote_discovery_to_story
+    # requires a real epic_id with no safe default (the CLI gets one from
+    # .tyrion/active-epic, a lane concept with no web equivalent), so the form always
+    # needs a real list to choose from.
+    def self.load_discovery_show_view(disc_id)
+      disc = store.find_discovery(disc_id)
+      return { discovery: nil, project: nil, epic: nil, epics: [], stories: [], disc_summary: empty_disc_summary, epic_switcher: [], git_branch: 'unknown', dirty_count: 0 } unless disc
+
+      project = store.find_project_by_id(disc['project_id'])
+      # The discovery's TRUE epic (possibly nil, e.g. filed via `tyrion spike
+      # start`, which doesn't set epic_id) -- what the page's own content
+      # ("Epic: none -- filed as a standalone observation") must report
+      # accurately. sidebar_epic is different on purpose: it falls back to the
+      # resolved active epic (same fallback /about and the 404 view use) so
+      # Layout's sidebar has something to show instead of its "No active
+      # project" empty state, which is really "no epic," not "no project" --
+      # conflating the two would make the page falsely claim ownership of
+      # whatever epic happens to be active.
+      epic         = disc['epic_id'] && store.find_epic_by_id(disc['epic_id'])
+      sidebar_epic = epic || resolve_active_epic(project)
+
+      {
+        discovery: disc, project: project, epic: epic, sidebar_epic: sidebar_epic,
+        epics: project ? store.list_epics(project['id']) : [],
+        stories: sidebar_epic ? store.stories_for_epic(sidebar_epic['id']) : [],
+        disc_summary: project ? load_discovery_summary(project['id']) : empty_disc_summary,
+        epic_switcher: epic_switcher_epics(project),
+        git_branch:  safe_git_branch,
+        dirty_count: safe_dirty_count
       }
     end
 

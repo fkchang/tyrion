@@ -42,9 +42,15 @@ RSpec.describe 'TyrionWeb::Data.load_ambient_view' do
   end
 
   describe 'marks' do
-    it 'returns the newest 3 open marks, newest first' do
-      5.times { |i| mark("mark #{i}") }
+    it 'returns the newest 10 open marks by default, newest first' do
+      12.times { |i| mark("mark #{i}") }
       questions = TyrionWeb::Data.load_ambient_view(project_slug: 'am-proj')[:marks].map { |m| m['question'] }
+      expect(questions).to eq ['mark 11', 'mark 10', 'mark 9', 'mark 8', 'mark 7', 'mark 6', 'mark 5', 'mark 4', 'mark 3', 'mark 2']
+    end
+
+    it 'honours an explicit mark_limit' do
+      5.times { |i| mark("mark #{i}") }
+      questions = TyrionWeb::Data.load_ambient_view(project_slug: 'am-proj', mark_limit: 3)[:marks].map { |m| m['question'] }
       expect(questions).to eq ['mark 4', 'mark 3', 'mark 2']
     end
 
