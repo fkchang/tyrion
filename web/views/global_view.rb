@@ -7,7 +7,7 @@ module Views
       stale:     { label: "STALE",     css: "gv-status-stale"     },
       idle:      { label: "IDLE",      css: "gv-status-idle"      },
       done:      { label: "DONE",      css: "gv-status-done"      },
-      discovery: { label: "SPIKE",     css: "gv-status-discovery" },
+      discovery: { label: "DISCOVERY", css: "gv-status-discovery" },
     }.freeze
 
     def initialize(project_cards:, project:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0)

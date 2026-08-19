@@ -13,11 +13,10 @@ RSpec.describe 'TyrionWeb::Data.load_global_view' do
   let(:store)   { ctx.store }
   let(:project) { ctx.project }
 
-  before { TyrionWeb::Data.instance_variable_set(:@store, store) }
-  after  { TyrionWeb::Data.instance_variable_set(:@store, nil) }
+  before { allow(TyrionWeb::Data).to receive(:store).and_return(store) }
 
-  def card_for(project)
-    TyrionWeb::Data.load_global_view[:project_cards].find { |c| c[:project]['id'] == project['id'] }
+  def card_for(proj)
+    TyrionWeb::Data.load_global_view[:project_cards].find { |c| c[:project]['id'] == proj['id'] }
   end
 
   describe 'a project with zero epics but open discoveries' do
@@ -72,6 +71,13 @@ RSpec.describe 'TyrionWeb::Data.load_global_view' do
 
     it 'still reads :idle for a pending-only epic with no discoveries, as it does today' do
       store.create_story(epic_id: epic['id'], slug: 's1', title: 'S1')
+
+      expect(card_for(project)[:status]).to eq :idle
+    end
+
+    it 'still reads :idle for a pending-only epic even with open marks -- story activity outranks discovery activity' do
+      store.create_story(epic_id: epic['id'], slug: 's1', title: 'S1')
+      store.create_discovery(project_id: project['id'], question: 'noise', status: 'mark')
 
       expect(card_for(project)[:status]).to eq :idle
     end

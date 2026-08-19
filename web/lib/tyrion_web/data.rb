@@ -152,13 +152,17 @@ module TyrionWeb
         in_progress = active_epic ? store.in_progress_story(active_epic['id']) : nil
         total = done_count + pending_count + blocked_count + active_count
         disc_summary = load_discovery_summary(proj['id'])
-        has_discovery_activity = disc_summary[:spike] || disc_summary[:ready_count] > 0 || disc_summary[:mark_count] > 0
 
-        card_status = if active_count > 0
+        # Precedence is load-bearing: story activity of any kind outranks discovery
+        # activity, so :discovery only fires for a project with zero stories at all
+        # (the spike-only case that used to misreport as :idle). A project with
+        # pending stories AND open marks still reads :idle — the story lane stays
+        # the honest headline, and the discovery strip already carries the rest.
+        card_status = if active_count.positive?
           in_progress && TyrionWeb::Presenter.stale?(in_progress['last_note_at']) ? :stale : :active
-        elsif total > 0 && pending_count == 0 && blocked_count == 0 && active_count == 0
+        elsif total.positive? && done_count == total
           :done
-        elsif total == 0 && has_discovery_activity
+        elsif total.zero? && TyrionWeb::Presenter.discovery_activity?(disc_summary)
           :discovery
         else
           :idle
