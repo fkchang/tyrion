@@ -177,6 +177,31 @@ One story may contain multiple independent units of work. Identify natural seams
 
 Record all decisions. They go into the ledger after import (Step 5b) and are shown in the draft review.
 
+### Step 3c: Multi-epic decomposition detection
+
+**Do this once, after story extraction, before writing draft files.** Judge whether the
+input describes work larger than one epic — not by story count, but by whether the
+extracted stories cluster into two or more distinct arcs, each with its own intent, rather
+than one cohesive scenario set. Signals: the source document itself names phases,
+milestones, or epics; the extracted stories split into groups that don't share a single
+Given/When/Then narrative; or the scope is plainly "build X, then build Y on top of it."
+
+If the work fits one epic, skip this step — nothing changes.
+
+If it doesn't, propose a decomposition:
+- One **parent epic** — a container with no scenarios of its own, named for the umbrella
+  initiative (`features/<parent-slug>.feature` with just a `Feature:` line, no `Scenario:`
+  blocks).
+- Two or more **sub-epics**, each its own `.feature` file, holding the story clusters.
+- **Prerequisite edges** between sub-epics only when the source's own language orders them
+  ("first," "then," "after," "requires," "on top of"). Siblings with no ordering language
+  get no edge — don't invent sequencing that isn't in the source.
+
+This is shown as part of the Step 5 draft review and stays gated behind the same "yes"
+approval as everything else — never propose a decomposition without the exact
+`tyrion epic parent` / `tyrion epic depends add` commands sitting right next to the
+`tyrion import` lines that would enact it.
+
 ### Step 4: Write draft files
 
 Write exactly these files (create dirs as needed):
@@ -191,6 +216,9 @@ features/<epic-slug>.feature
 # Epic context sidecar — long-form narrative
 features/<epic-slug>.context.md
 ```
+
+**If Step 3c proposed a decomposition**, write one `features/<slug>.feature` per epic in the
+tree — the parent (scenario-less) plus every sub-epic — instead of a single file.
 
 **`.feature` format:**
 ```gherkin
@@ -247,11 +275,36 @@ Print the section even when nothing overlapped (`Discovery recall: no open disco
 epic`) — silence reads as "didn't check". Those `defer` commands are for the user to run, or not,
 after the import; never run them yourself.
 
+**If Step 3c proposed a decomposition**, show it too, with the exact commands that would enact
+it:
+
+```
+Epic tree proposal:
+  crm-rollout (parent)
+    crm-service-layer   — no prerequisite
+    crm-accounts-ui     — requires crm-service-layer
+
+  tyrion epic parent crm-service-layer crm-rollout
+  tyrion epic parent crm-accounts-ui crm-rollout
+  tyrion epic depends add crm-accounts-ui crm-service-layer
+```
+
 Ask: **"Does this look right? (yes / edit: <what to change> / abort)"**
 
-- **yes** — run:
+- **yes** — single epic: run:
   ```bash
   tyrion import features/<slug>.feature [--confirm-abandon if in-progress story exists]
+  tyrion status
+  ```
+  Multi-epic (Step 3c fired): import every feature file, parent, then wire the edges the
+  source actually ordered:
+  ```bash
+  tyrion import features/<parent-slug>.feature
+  tyrion import features/<sub-epic-1-slug>.feature
+  tyrion import features/<sub-epic-2-slug>.feature
+  tyrion epic parent <sub-epic-1-slug> <parent-slug>
+  tyrion epic parent <sub-epic-2-slug> <parent-slug>
+  tyrion epic depends add <sub-epic-2-slug> <sub-epic-1-slug>   # only if the source ordered them
   tyrion status
   ```
   Then proceed to Step 5b.

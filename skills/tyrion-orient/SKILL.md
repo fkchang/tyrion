@@ -38,3 +38,8 @@ After orient, you should know:
 - To start the next story: `/tyrion-implement` (no slug — claims next pending)
 - To start a specific story: `/tyrion-implement <slug>`
 - To see full detail on any story: `tyrion show <slug>`
+- To see the epic tree and what's actually ready: `tyrion epic list` (containment + waiting
+  reasons) and `tyrion epic waves` (the ready set, grouped by wave). Run these before picking
+  a next epic — `tyrion epic list` alone will show an epic as `[active]` with pending stories
+  even while it's `waiting` on an unmet prerequisite; `epic waves` is the one view that never
+  lists a waiting epic at all, so an agent restoring context is never left to pick one blind.
