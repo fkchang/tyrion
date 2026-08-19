@@ -222,6 +222,151 @@ module Tyrion
       with_db { |db| db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id]) }
     end
 
+    # ── Epic graph (containment + prerequisite) ───────────────────────────────
+    # One snapshot per call, built from a single with_db block — every epic in
+    # the project, per-epic story-status aggregates, and parent/child maps built
+    # in Ruby. Every downstream reader (unmet_prereqs, epic_ancestors,
+    # epic_descendants, and later stories' CLI/web layers) is a pure function
+    # over this snapshot — never a per-epic query.
+    #
+    # Shape: { epics: {id => row}, by_slug: {slug => row}, children: {id => [child_id,...]},
+    #          depends_on: {id => [slug,...]}, story_counts: {id => {'total'=>n, 'pending'=>n, ...}} }
+    def epic_graph(project_id)
+      with_db { |db| build_epic_graph(db, project_id) }
+    end
+
+    # A prerequisite slug is met when the epic it names is sealed (status
+    # 'done') and every descendant of it is also sealed. An epic is eligible
+    # when every prerequisite of itself, and of every ancestor (inherited down
+    # the tree), is met. Returns [] when eligible, else one
+    # {slug:, reason:} per unmet prerequisite — reason is :unknown (slug does
+    # not resolve in this project), :archived, :abandoned, :paused, :active
+    # (ordinary not-yet-sealed), or :descendant_unsealed (sealed itself but a
+    # descendant regressed — possible after a reopen). Unknown slugs resolve
+    # unmet, never ignored — the opposite of wave_plan's unknown-dep handling,
+    # because ignoring here would falsely mark work eligible.
+    def unmet_prereqs(epic, graph)
+      epic_id = epic['id']
+      slugs = (graph[:depends_on][epic_id] || []).dup
+      epic_ancestors(epic_id, graph).each { |aid| slugs.concat(graph[:depends_on][aid] || []) }
+      slugs.uniq.filter_map { |slug| unmet_reason_for(slug, graph) }
+    end
+
+    # Walks parent_epic_id up from epic_id, nearest first. A visited set on the
+    # parent link being followed means cycle residue in a hand-edited DB stops
+    # the walk instead of hanging it.
+    def epic_ancestors(epic_id, graph)
+      result = []
+      visited = Set.new
+      current_id = epic_id
+      loop do
+        current = graph[:epics][current_id]
+        break unless current
+        parent_id = current['parent_epic_id']
+        break unless parent_id
+        break if visited.include?(parent_id)
+        visited << parent_id
+        parent = graph[:epics][parent_id]
+        break unless parent
+        result << parent_id
+        current_id = parent_id
+      end
+      result
+    end
+
+    # Breadth-first walk of the children map below epic_id. A visited set
+    # guards the same cycle-residue case as epic_ancestors.
+    def epic_descendants(epic_id, graph)
+      result = []
+      visited = Set.new([epic_id])
+      queue = (graph[:children][epic_id] || []).dup
+      until queue.empty?
+        child_id = queue.shift
+        next if visited.include?(child_id)
+        visited << child_id
+        result << child_id
+        queue.concat(graph[:children][child_id] || [])
+      end
+      result
+    end
+
+    # Adds epic_id -> dep_slug (epic_id depends on dep_slug) after validating
+    # the combined containment-plus-dependency graph inside one
+    # transaction(:immediate) on one connection, so a two-connection
+    # check-then-write race can never create a cycle or a cross-relation
+    # deadlock. No-op (still validated-free) if the edge already exists.
+    def add_epic_dependency(epic_id, dep_slug)
+      with_db do |db|
+        db.transaction(:immediate) do
+          epic = db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id])
+          raise "Epic not found: #{epic_id}" unless epic
+
+          current = parse_row_depends_on(epic)
+          unless current.include?(dep_slug)
+            dep_epic = resolve_epic_slug_in_project!(db, dep_slug, epic['project_id'])
+            raise "#{epic['slug']} cannot depend on itself" if dep_epic['id'] == epic['id']
+
+            graph = build_epic_graph(db, epic['project_id'])
+            validate_dependency_edge!(graph, epic, dep_epic)
+
+            db.execute(
+              'UPDATE epics SET depends_on = ?, updated_at = ? WHERE id = ?',
+              [JSON.dump(current + [dep_slug]), now, epic_id]
+            )
+          end
+        end
+        db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id])
+      end
+    end
+
+    # Removes epic_id -> dep_slug. Removing an edge can never create a cycle
+    # or deadlock, so this only validates that the epic exists. No-op if the
+    # edge isn't present.
+    def remove_epic_dependency(epic_id, dep_slug)
+      with_db do |db|
+        db.transaction(:immediate) do
+          epic = db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id])
+          raise "Epic not found: #{epic_id}" unless epic
+
+          current = parse_row_depends_on(epic)
+          if current.include?(dep_slug)
+            remaining = current - [dep_slug]
+            db.execute(
+              'UPDATE epics SET depends_on = ?, updated_at = ? WHERE id = ?',
+              [remaining.empty? ? nil : JSON.dump(remaining), now, epic_id]
+            )
+          end
+        end
+        db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id])
+      end
+    end
+
+    # Sets (or, with parent_epic_id: nil, clears) epic_id's containing epic,
+    # validated against the combined graph the same way add_epic_dependency
+    # is — one transaction, one connection, cycle/self-reference/cross-project
+    # checks before the write.
+    def set_epic_parent(epic_id, parent_epic_id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          epic = db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id])
+          raise "Epic not found: #{epic_id}" unless epic
+
+          if parent_epic_id
+            raise "#{epic['slug']} cannot be its own parent" if parent_epic_id == epic_id
+            parent = db.get_first_row('SELECT * FROM epics WHERE id = ?', [parent_epic_id])
+            raise "Epic not found: #{parent_epic_id}" unless parent
+            raise "#{epic['slug']} and #{parent['slug']} are in different projects — epic containment cannot cross projects" if parent['project_id'] != epic['project_id']
+
+            graph = build_epic_graph(db, epic['project_id'])
+            validate_parent_change!(graph, epic, parent)
+          end
+
+          db.execute('UPDATE epics SET parent_epic_id = ?, updated_at = ? WHERE id = ?', [parent_epic_id, now, epic_id])
+        end
+        db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id])
+      end
+    end
+
     def seal_epic(epic_id, force: false)
       unless force || all_stories_done?(epic_id)
         stories = stories_for_epic(epic_id)
@@ -1280,6 +1425,135 @@ module Tyrion
       db.execute('UPDATE epics SET status=?, updated_at=? WHERE id=?', ['active', now, epic_id])
     end
 
+    # Shared core behind Store#epic_graph and the mutation methods (which build
+    # their own snapshot on the transaction's own connection rather than
+    # calling #epic_graph, to keep validate+write on one connection).
+    def build_epic_graph(db, project_id)
+      rows = db.execute('SELECT * FROM epics WHERE project_id = ?', [project_id])
+      epics = {}
+      by_slug = {}
+      rows.each do |row|
+        epics[row['id']] = row
+        by_slug[row['slug']] = row
+      end
+
+      children = {}
+      epics.each_key { |id| children[id] = [] }
+      depends_on = {}
+      rows.each do |row|
+        parent_id = row['parent_epic_id']
+        children[parent_id] << row['id'] if parent_id && children.key?(parent_id)
+        depends_on[row['id']] = parse_row_depends_on(row)
+      end
+
+      story_counts = {}
+      epics.each_key { |id| story_counts[id] = { 'total' => 0, 'pending' => 0, 'in_progress' => 0, 'blocked' => 0, 'done' => 0, 'abandoned' => 0 } }
+      unless epics.empty?
+        placeholders = epics.keys.map { '?' }.join(',')
+        db.execute("SELECT epic_id, status, COUNT(*) AS n FROM stories WHERE epic_id IN (#{placeholders}) GROUP BY epic_id, status", epics.keys).each do |r|
+          counts = story_counts[r['epic_id']]
+          next unless counts
+          counts['total'] += r['n'].to_i
+          counts[r['status']] = r['n'].to_i if counts.key?(r['status'])
+        end
+      end
+
+      { epics: epics, by_slug: by_slug, children: children, depends_on: depends_on, story_counts: story_counts }
+    end
+
+    # Malformed depends_on JSON is never allowed to raise — a corrupt row must
+    # not break `tyrion status`. Treated as empty, with a one-line warning.
+    def parse_row_depends_on(row)
+      raw = row['depends_on']
+      return [] if raw.nil? || raw.to_s.strip.empty?
+      JSON.parse(raw)
+    rescue JSON::ParserError
+      warn "tyrion: epic #{row['slug']} has malformed depends_on JSON — treating as empty"
+      []
+    end
+
+    def unmet_reason_for(slug, graph)
+      prereq = graph[:by_slug][slug]
+      return { slug: slug, reason: :unknown } unless prereq
+      # "Met" is checked first: archived is a display flag, not a completion
+      # flag, so a sealed-and-archived prerequisite still counts as met — only
+      # an *unsealed* archived epic reports :archived as the reason.
+      return nil if epic_sealed_with_descendants?(prereq['id'], graph)
+      return { slug: slug, reason: :archived } if prereq['archived_at']
+      return { slug: slug, reason: :abandoned } if prereq['status'] == 'abandoned'
+      return { slug: slug, reason: :paused } if prereq['status'] == 'paused'
+      { slug: slug, reason: prereq['status'] == 'done' ? :descendant_unsealed : :active }
+    end
+
+    def epic_sealed_with_descendants?(epic_id, graph)
+      epic = graph[:epics][epic_id]
+      return false unless epic && epic['status'] == 'done'
+      epic_descendants(epic_id, graph).all? { |did| graph[:epics][did] && graph[:epics][did]['status'] == 'done' }
+    end
+
+    def resolve_epic_slug_in_project!(db, slug, project_id)
+      epic = db.get_first_row('SELECT * FROM epics WHERE slug = ? AND project_id = ?', [slug, project_id])
+      return epic if epic
+
+      cross = db.get_first_row('SELECT * FROM epics WHERE slug = ?', [slug])
+      raise "#{slug} is in a different project — epic dependencies cannot cross projects" if cross
+
+      raise "Epic not found: #{slug}"
+    end
+
+    # Rejects a new epic -> dep_epic dependency edge that would: depend on an
+    # ancestor or descendant (the two cross-relation deadlock shapes — see
+    # features/epic-relationships.context.md), or close a cycle in the plain
+    # dependency graph.
+    def validate_dependency_edge!(graph, epic, dep_epic)
+      ancestors = epic_ancestors(epic['id'], graph)
+      descendants = epic_descendants(epic['id'], graph)
+      raise "#{epic['slug']} cannot depend on its own ancestor #{dep_epic['slug']}" if ancestors.include?(dep_epic['id'])
+      raise "#{epic['slug']} cannot depend on its own descendant #{dep_epic['slug']}" if descendants.include?(dep_epic['id'])
+      return unless dependency_reachable?(graph, from: dep_epic['id'], to: epic['id'])
+
+      raise "#{epic['slug']} cannot depend on #{dep_epic['slug']} — would create a dependency cycle"
+    end
+
+    # True when `to` is reachable from `from` by following existing depends_on
+    # edges — i.e. adding an edge from `to` to `from` would close a cycle.
+    def dependency_reachable?(graph, from:, to:, visited: Set.new)
+      return true if from == to
+      return false if visited.include?(from)
+      visited << from
+      (graph[:depends_on][from] || []).any? do |slug|
+        next_epic = graph[:by_slug][slug]
+        next_epic && dependency_reachable?(graph, from: next_epic['id'], to: to, visited: visited)
+      end
+    end
+
+    # Rejects a containment change that would: make epic its own parent, make
+    # epic a parent of its own descendant (containment cycle), or place epic
+    # (or any of its descendants) into the same lineage as an existing
+    # dependency edge — the two cross-relation deadlock shapes, checked in
+    # both directions.
+    def validate_parent_change!(graph, epic, parent)
+      descendants = epic_descendants(epic['id'], graph)
+      raise "#{epic['slug']} cannot be parented to its own descendant #{parent['slug']}" if descendants.include?(parent['id'])
+
+      self_and_below = [epic['id']] + descendants
+      new_ancestry = [parent['id']] + epic_ancestors(parent['id'], graph)
+
+      self_and_below.each do |a_id|
+        new_ancestry.each do |b_id|
+          next if a_id == b_id
+          a_row = graph[:epics][a_id]
+          b_row = graph[:epics][b_id]
+          next unless a_row && b_row
+
+          a_deps = graph[:depends_on][a_id] || []
+          b_deps = graph[:depends_on][b_id] || []
+          raise "cannot set parent: #{a_row['slug']} depends on #{b_row['slug']}, which would become its ancestor" if a_deps.include?(b_row['slug'])
+          raise "cannot set parent: #{b_row['slug']} depends on #{a_row['slug']}, which would become its descendant" if b_deps.include?(a_row['slug'])
+        end
+      end
+    end
+
     # busy_timeout MUST be set before journal_mode=WAL — switching to WAL
     # acquires a brief exclusive lock; without a timeout already applied that
     # first PRAGMA can raise BusyException under concurrent writers.
@@ -1554,6 +1828,16 @@ module Tyrion
         next if cols.include?('headline')
 
         db.execute('ALTER TABLE discoveries ADD COLUMN headline TEXT')
+      }],
+      ['add_epic_relationships', lambda { |db|
+        # parent_epic_id: containment — a campaign is just a root epic with children,
+        # nesting indefinitely, no new noun. depends_on: prerequisite, JSON array of
+        # epic slugs mirroring the stories.depends_on precedent (store.rb:304) rather
+        # than a join table. See features/epic-relationships.context.md.
+        cols = db.execute('PRAGMA table_info(epics)').map { |r| r['name'] }
+        db.execute('ALTER TABLE epics ADD COLUMN parent_epic_id TEXT REFERENCES epics(id) ON DELETE SET NULL') unless cols.include?('parent_epic_id')
+        db.execute('ALTER TABLE epics ADD COLUMN depends_on TEXT') unless cols.include?('depends_on')
+        db.execute('CREATE INDEX IF NOT EXISTS idx_epics_parent ON epics(parent_epic_id)')
       }]
     ].freeze
 

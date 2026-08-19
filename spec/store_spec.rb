@@ -1163,4 +1163,390 @@ RSpec.describe Tyrion::Store do
       end
     end
   end
+
+  describe 'MIGRATIONS — add_epic_relationships' do
+    def epics_columns
+      store.send(:with_db) { |db| db.execute('PRAGMA table_info(epics)').map { |r| r['name'] } }
+    end
+
+    def epics_index_names
+      store.send(:with_db) { |db| db.execute('PRAGMA index_list(epics)').map { |r| r['name'] } }
+    end
+
+    it 'epics has parent_epic_id and depends_on columns after setup_db' do
+      expect(epics_columns).to include('parent_epic_id', 'depends_on')
+    end
+
+    it 'idx_epics_parent index exists' do
+      expect(epics_index_names).to include('idx_epics_parent')
+    end
+
+    it 'migration is idempotent — setup_db can run twice without error' do
+      expect { store.send(:setup_db) }.not_to raise_error
+      expect(epics_columns).to include('parent_epic_id', 'depends_on')
+    end
+
+    it 'preserves a pre-migration epic row across the migration (migration-replay regression)' do
+      path = File.join(tmpdir, 'legacy-epics.db')
+      legacy_db = SQLite3::Database.new(path)
+      legacy_db.results_as_hash = true
+      Tyrion::Store::DDL.split(';').each do |stmt|
+        s = stmt.strip
+        legacy_db.execute(s) unless s.empty?
+      end
+      Tyrion::Store::MIGRATIONS.each do |name, fn|
+        break if name == 'add_epic_relationships'
+        fn.call(legacy_db)
+      end
+
+      pid = SecureRandom.uuid
+      eid = SecureRandom.uuid
+      t = '2026-01-01T00:00:00.000000Z'
+      legacy_db.execute(
+        'INSERT INTO projects (id, slug, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [pid, 'legacy-proj', 'Legacy Project', 'active', t, t]
+      )
+      legacy_db.execute(
+        'INSERT INTO epics (id, project_id, slug, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [eid, pid, 'legacy-epic', 'Legacy Epic', 'active', t, t]
+      )
+      legacy_db.close
+
+      migrated_store = Tyrion::Store.new(db_path: path) # runs setup_db -> runs add_epic_relationships this time
+      row = migrated_store.send(:with_db) { |db| db.get_first_row('SELECT * FROM epics WHERE id = ?', [eid]) }
+
+      expect(row).to include(
+        'id' => eid, 'project_id' => pid, 'slug' => 'legacy-epic', 'name' => 'Legacy Epic',
+        'status' => 'active', 'created_at' => t, 'updated_at' => t
+      )
+      expect(row['parent_epic_id']).to be_nil
+      expect(row['depends_on']).to be_nil
+
+      expect { migrated_store.set_epic_parent(eid, nil) }.not_to raise_error
+    end
+  end
+
+  describe '#epic_graph' do
+    let(:project) { make_project }
+
+    it 'returns a snapshot with every epic in the project, keyed by id and slug' do
+      a = make_epic(project_id: project['id'], slug: 'a', name: 'A')
+      b = make_epic(project_id: project['id'], slug: 'b', name: 'B')
+      graph = store.epic_graph(project['id'])
+      expect(graph[:epics].keys).to match_array([a['id'], b['id']])
+      expect(graph[:by_slug]['a']['id']).to eq a['id']
+      expect(graph[:by_slug]['b']['id']).to eq b['id']
+    end
+
+    it 'excludes epics from other projects' do
+      other = make_project(slug: 'other-proj')
+      make_epic(project_id: other['id'], slug: 'other-epic')
+      a = make_epic(project_id: project['id'], slug: 'a')
+      graph = store.epic_graph(project['id'])
+      expect(graph[:epics].keys).to eq [a['id']]
+    end
+
+    it 'builds a parent -> children map' do
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      child  = make_epic(project_id: project['id'], slug: 'child')
+      store.set_epic_parent(child['id'], parent['id'])
+      graph = store.epic_graph(project['id'])
+      expect(graph[:children][parent['id']]).to eq [child['id']]
+      expect(graph[:children][child['id']]).to eq []
+    end
+
+    it 'parses depends_on into an array keyed by epic id' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      make_epic(project_id: project['id'], slug: 'b')
+      store.add_epic_dependency(a['id'], 'b')
+      graph = store.epic_graph(project['id'])
+      expect(graph[:depends_on][a['id']]).to eq ['b']
+    end
+
+    it 'treats malformed depends_on JSON as empty and warns on stderr' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      store.send(:with_db) { |db| db.execute('UPDATE epics SET depends_on = ? WHERE id = ?', ['not json', a['id']]) }
+      graph = nil
+      expect { graph = store.epic_graph(project['id']) }.to output(/malformed depends_on/).to_stderr
+      expect(graph[:depends_on][a['id']]).to eq []
+    end
+
+    it 'computes per-epic story-status aggregates in one snapshot' do
+      epic = make_epic(project_id: project['id'], slug: 'e')
+      s1 = make_story(epic_id: epic['id'], slug: 's1')
+      make_story(epic_id: epic['id'], slug: 's2')
+      store.complete_story(s1['id'], 'done', force: true)
+      graph = store.epic_graph(project['id'])
+      counts = graph[:story_counts][epic['id']]
+      expect(counts['total']).to eq 2
+      expect(counts['done']).to eq 1
+      expect(counts['pending']).to eq 1
+    end
+
+    it 'gives a zero-count entry to an epic with no stories' do
+      epic = make_epic(project_id: project['id'], slug: 'e')
+      graph = store.epic_graph(project['id'])
+      expect(graph[:story_counts][epic['id']]).to eq(
+        'total' => 0, 'pending' => 0, 'in_progress' => 0, 'blocked' => 0, 'done' => 0, 'abandoned' => 0
+      )
+    end
+  end
+
+  describe '#epic_ancestors and #epic_descendants' do
+    let(:project) { make_project }
+
+    it 'walks ancestors up to the root, nearest first' do
+      root = make_epic(project_id: project['id'], slug: 'root')
+      mid  = make_epic(project_id: project['id'], slug: 'mid')
+      leaf = make_epic(project_id: project['id'], slug: 'leaf')
+      store.set_epic_parent(mid['id'], root['id'])
+      store.set_epic_parent(leaf['id'], mid['id'])
+      graph = store.epic_graph(project['id'])
+      expect(store.epic_ancestors(leaf['id'], graph)).to eq [mid['id'], root['id']]
+      expect(store.epic_ancestors(root['id'], graph)).to eq []
+    end
+
+    it 'walks all descendants regardless of depth' do
+      root = make_epic(project_id: project['id'], slug: 'root')
+      c1   = make_epic(project_id: project['id'], slug: 'c1')
+      c2   = make_epic(project_id: project['id'], slug: 'c2')
+      gc   = make_epic(project_id: project['id'], slug: 'gc')
+      store.set_epic_parent(c1['id'], root['id'])
+      store.set_epic_parent(c2['id'], root['id'])
+      store.set_epic_parent(gc['id'], c1['id'])
+      graph = store.epic_graph(project['id'])
+      expect(store.epic_descendants(root['id'], graph)).to match_array([c1['id'], c2['id'], gc['id']])
+      expect(store.epic_descendants(gc['id'], graph)).to eq []
+    end
+
+    it 'does not hang on cycle residue in a hand-edited DB' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      b = make_epic(project_id: project['id'], slug: 'b')
+      # set_epic_parent would refuse this — hand-edit the cycle directly, as a
+      # corrupted/hand-edited DB might contain.
+      store.send(:with_db) do |db|
+        db.execute('UPDATE epics SET parent_epic_id = ? WHERE id = ?', [b['id'], a['id']])
+        db.execute('UPDATE epics SET parent_epic_id = ? WHERE id = ?', [a['id'], b['id']])
+      end
+      graph = store.epic_graph(project['id'])
+      expect(store.epic_ancestors(a['id'], graph).length).to be <= 2
+      expect(store.epic_descendants(a['id'], graph).length).to be <= 2
+    end
+  end
+
+  describe '#unmet_prereqs' do
+    let(:project) { make_project }
+
+    def sealed_epic(slug)
+      epic = make_epic(project_id: project['id'], slug: slug)
+      s = make_story(epic_id: epic['id'], slug: "#{slug}-story")
+      store.complete_story(s['id'], 'done', force: true)
+      store.seal_epic(epic['id'])
+      store.find_epic_by_id(epic['id'])
+    end
+
+    it 'is empty when the epic has no dependencies' do
+      epic = make_epic(project_id: project['id'], slug: 'e')
+      graph = store.epic_graph(project['id'])
+      expect(store.unmet_prereqs(epic, graph)).to eq []
+    end
+
+    it 'is empty when every prerequisite is sealed' do
+      sealed_epic('prereq')
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.add_epic_dependency(dependent['id'], 'prereq')
+      graph = store.epic_graph(project['id'])
+      expect(store.unmet_prereqs(store.find_epic_by_id(dependent['id']), graph)).to eq []
+    end
+
+    it 'reports :active for an unsealed prerequisite' do
+      make_epic(project_id: project['id'], slug: 'prereq')
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.add_epic_dependency(dependent['id'], 'prereq')
+      graph = store.epic_graph(project['id'])
+      unmet = store.unmet_prereqs(store.find_epic_by_id(dependent['id']), graph)
+      expect(unmet).to eq [{ slug: 'prereq', reason: :active }]
+    end
+
+    it 'reports :unknown for a dependency slug that resolves to nothing, never silently dropped' do
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.send(:with_db) do |db|
+        db.execute('UPDATE epics SET depends_on = ? WHERE id = ?', [JSON.dump(['ghost']), dependent['id']])
+      end
+      graph = store.epic_graph(project['id'])
+      unmet = store.unmet_prereqs(store.find_epic_by_id(dependent['id']), graph)
+      expect(unmet).to eq [{ slug: 'ghost', reason: :unknown }]
+    end
+
+    it 'reports :archived for an unsealed archived prerequisite' do
+      prereq = make_epic(project_id: project['id'], slug: 'prereq')
+      store.archive_epic(prereq['id'])
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.add_epic_dependency(dependent['id'], 'prereq')
+      graph = store.epic_graph(project['id'])
+      unmet = store.unmet_prereqs(store.find_epic_by_id(dependent['id']), graph)
+      expect(unmet).to eq [{ slug: 'prereq', reason: :archived }]
+    end
+
+    it 'treats a sealed-and-archived prerequisite as met — archived is a display flag, not a completion flag' do
+      prereq = sealed_epic('prereq')
+      store.archive_epic(prereq['id'])
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.add_epic_dependency(dependent['id'], 'prereq')
+      graph = store.epic_graph(project['id'])
+      expect(store.unmet_prereqs(store.find_epic_by_id(dependent['id']), graph)).to eq []
+    end
+
+    it 'reports :abandoned and :paused for their respective statuses' do
+      abandoned = make_epic(project_id: project['id'], slug: 'abandoned-epic')
+      store.update_epic(abandoned['id'], 'status' => 'abandoned')
+      paused = make_epic(project_id: project['id'], slug: 'paused-epic')
+      store.update_epic(paused['id'], 'status' => 'paused')
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.send(:with_db) do |db|
+        db.execute('UPDATE epics SET depends_on = ? WHERE id = ?', [JSON.dump(%w[abandoned-epic paused-epic]), dependent['id']])
+      end
+      graph = store.epic_graph(project['id'])
+      unmet = store.unmet_prereqs(store.find_epic_by_id(dependent['id']), graph)
+      expect(unmet).to match_array(
+        [{ slug: 'abandoned-epic', reason: :abandoned }, { slug: 'paused-epic', reason: :paused }]
+      )
+    end
+
+    it 'inherits ancestor prerequisites down the tree' do
+      make_epic(project_id: project['id'], slug: 'prereq')
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      child  = make_epic(project_id: project['id'], slug: 'child')
+      store.add_epic_dependency(parent['id'], 'prereq')
+      store.set_epic_parent(child['id'], parent['id'])
+      graph = store.epic_graph(project['id'])
+      unmet = store.unmet_prereqs(store.find_epic_by_id(child['id']), graph)
+      expect(unmet).to eq [{ slug: 'prereq', reason: :active }]
+    end
+  end
+
+  describe '#add_epic_dependency and #remove_epic_dependency' do
+    let(:project) { make_project }
+
+    it 'adds a dependency edge, stored as a JSON array of slugs' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      make_epic(project_id: project['id'], slug: 'b')
+      store.add_epic_dependency(a['id'], 'b')
+      row = store.find_epic_by_id(a['id'])
+      expect(JSON.parse(row['depends_on'])).to eq ['b']
+    end
+
+    it 'is idempotent when the edge already exists' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      make_epic(project_id: project['id'], slug: 'b')
+      store.add_epic_dependency(a['id'], 'b')
+      store.add_epic_dependency(a['id'], 'b')
+      row = store.find_epic_by_id(a['id'])
+      expect(JSON.parse(row['depends_on'])).to eq ['b']
+    end
+
+    it 'raises for an unknown dep slug' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      expect { store.add_epic_dependency(a['id'], 'ghost') }.to raise_error(/Epic not found: ghost/)
+    end
+
+    it 'raises for a self-dependency' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      expect { store.add_epic_dependency(a['id'], 'a') }.to raise_error(/cannot depend on itself/)
+    end
+
+    it 'raises for a dep slug that resolves in a different project' do
+      other = make_project(slug: 'other-proj')
+      make_epic(project_id: other['id'], slug: 'cross')
+      a = make_epic(project_id: project['id'], slug: 'a')
+      expect { store.add_epic_dependency(a['id'], 'cross') }.to raise_error(/different project/)
+    end
+
+    it 'raises for a plain dependency cycle' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      b = make_epic(project_id: project['id'], slug: 'b')
+      store.add_epic_dependency(a['id'], 'b')
+      expect { store.add_epic_dependency(b['id'], 'a') }.to raise_error(/cycle/)
+    end
+
+    it 'raises when a descendant would depend on its own ancestor' do
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      child  = make_epic(project_id: project['id'], slug: 'child')
+      store.set_epic_parent(child['id'], parent['id'])
+      expect { store.add_epic_dependency(child['id'], 'parent') }.to raise_error(/ancestor/)
+    end
+
+    it 'raises when an ancestor would depend on its own descendant' do
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      child  = make_epic(project_id: project['id'], slug: 'child')
+      store.set_epic_parent(child['id'], parent['id'])
+      expect { store.add_epic_dependency(parent['id'], 'child') }.to raise_error(/descendant/)
+    end
+
+    it 'removes an existing dependency edge, storing NULL when the array empties' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      make_epic(project_id: project['id'], slug: 'b')
+      store.add_epic_dependency(a['id'], 'b')
+      store.remove_epic_dependency(a['id'], 'b')
+      row = store.find_epic_by_id(a['id'])
+      expect(row['depends_on']).to be_nil
+    end
+
+    it 'is a no-op removing an edge that does not exist' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      expect { store.remove_epic_dependency(a['id'], 'ghost') }.not_to raise_error
+    end
+  end
+
+  describe '#set_epic_parent' do
+    let(:project) { make_project }
+
+    it 'sets containment' do
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      child  = make_epic(project_id: project['id'], slug: 'child')
+      store.set_epic_parent(child['id'], parent['id'])
+      expect(store.find_epic_by_id(child['id'])['parent_epic_id']).to eq parent['id']
+    end
+
+    it 'clears containment with nil' do
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      child  = make_epic(project_id: project['id'], slug: 'child')
+      store.set_epic_parent(child['id'], parent['id'])
+      store.set_epic_parent(child['id'], nil)
+      expect(store.find_epic_by_id(child['id'])['parent_epic_id']).to be_nil
+    end
+
+    it 'raises for self-parenting' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      expect { store.set_epic_parent(a['id'], a['id']) }.to raise_error(/own parent/)
+    end
+
+    it 'raises for a containment cycle (parenting to a descendant)' do
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      child  = make_epic(project_id: project['id'], slug: 'child')
+      store.set_epic_parent(child['id'], parent['id'])
+      expect { store.set_epic_parent(parent['id'], child['id']) }.to raise_error(/descendant/)
+    end
+
+    it 'raises for a parent in a different project' do
+      other = make_project(slug: 'other-proj')
+      cross = make_epic(project_id: other['id'], slug: 'cross')
+      a = make_epic(project_id: project['id'], slug: 'a')
+      expect { store.set_epic_parent(a['id'], cross['id']) }.to raise_error(/different project/)
+    end
+
+    it 'raises for a cross-relation deadlock — child already depends on the epic being made its parent' do
+      child = make_epic(project_id: project['id'], slug: 'child')
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      store.add_epic_dependency(child['id'], 'parent')
+      expect { store.set_epic_parent(child['id'], parent['id']) }.to raise_error(/would become its ancestor/)
+    end
+
+    it 'raises for a cross-relation deadlock — the new parent already depends on the child' do
+      child = make_epic(project_id: project['id'], slug: 'child')
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      store.add_epic_dependency(parent['id'], 'child')
+      expect { store.set_epic_parent(child['id'], parent['id']) }.to raise_error(/would become its descendant/)
+    end
+  end
 end
