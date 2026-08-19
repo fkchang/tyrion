@@ -172,6 +172,8 @@ module Views
                     knownToken = data.token;
                     label.textContent = 'updating…';
                     setTimeout(function() { window.location.reload(); }, 400);
+                  } else {
+                    label.textContent = 'monitoring';
                   }
                 })
                 .catch(function() {

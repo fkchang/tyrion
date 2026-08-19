@@ -129,6 +129,13 @@ RSpec.describe 'discoveries poll' do
       )
     end
 
+    it 'actually shows the aging badge once a findings_ready row is past the threshold' do
+      past_threshold = disc('disc-004', 'q', created_at: age_iso(5))
+      html = render(findings_ready: [past_threshold])
+
+      expect(html).to include('dv-aging-badge')
+    end
+
     it 'reuses active_story.rb\'s #poll-badge/#poll-dot ids so shared.css\'s fade-in/pulse animations apply' do
       html = render
 
