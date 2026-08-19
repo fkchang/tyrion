@@ -248,5 +248,23 @@ RSpec.describe 'discovery origin (agent vs human)' do
       out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
       expect(out).not_to match(/Verdict:/)
     end
+
+    it 'omits the Verdict line for a deferred mark -- deferred alone does not imply scoreable' do
+      d = store.create_discovery(project_id: ctx.project['id'], status: 'mark', question: 'q5')
+      store.defer_discovery(d['id'], reason: 'not worth pursuing')
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
+      expect(out).not_to match(/Verdict:/)
+    end
+
+    it 'still shows a recorded verdict after the scored finding is later deferred' do
+      store.create_discovery(project_id: ctx.project['id'], status: 'active_spike', question: 'q6')
+      spike = store.active_spike_for(ctx.project['id'])
+      disc  = store.close_spike(spike['id'], finding: 'f', confidence: 'high', recommendation: 'r', verdict: 'partial')
+      store.defer_discovery(disc['id'], reason: 'shelved')
+
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([disc['id']], store) }
+      expect(out).to match(/\[deferred\]/)
+      expect(out).to match(/Verdict:\s+partial/)
+    end
   end
 end

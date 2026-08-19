@@ -1227,6 +1227,15 @@ module Tyrion
     # it didn't, but the spike surfaced what's true instead. partial: some held, some didn't.
     VERDICTS = %w[confirmed falsified falsified_alternative partial].freeze
 
+    # Statuses guaranteed to have passed through #close_spike, where an omitted --verdict
+    # is a real, known "unscored" (not just "never had the chance"). A bare status denylist
+    # (e.g. "not mark, not active_spike") gets this wrong: a mark can be deferred without
+    # ever reaching close_spike, landing on 'deferred' -- a status this allowlist excludes,
+    # same as 'mark' itself. A row with an actual verdict value renders it regardless of
+    # status (see cmd_discovery_show) -- this list only governs when a *missing* verdict is
+    # worth announcing as "(unscored)" versus staying silent.
+    SCOREABLE_STATUSES = %w[findings_ready promoted_to_story].freeze
+
     # origin is who *filed* the discovery, set at spike start. A close only overwrites it
     # when the closer explicitly claims authorship (origin: 'agent' from --auto); passing
     # nil preserves whatever is stored, so closing an agent-framed spike without the flag
@@ -2003,7 +2012,7 @@ module Tyrion
         cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
         next if cols.include?('verdict')
 
-        allowed = Tyrion::Store::VERDICTS.map { |v| "'#{v}'" }.join(',')
+        allowed = VERDICTS.map { |v| "'#{v}'" }.join(',')
         db.execute("ALTER TABLE discoveries ADD COLUMN verdict TEXT CHECK(verdict IS NULL OR verdict IN (#{allowed}))")
       }]
     ].freeze

@@ -1819,12 +1819,16 @@ module Tyrion
       die "Discovery #{disc_id} not found" unless disc
 
       puts "#{disc['id']}  [#{disc['status']}]  #{Output.origin_tag(disc['origin'])}"
-      # Gated to statuses that can ever carry a verdict (only Store#close_spike writes one,
-      # on the active_spike -> findings_ready transition) -- a mark or a still-open spike
-      # printing "(unscored)" would be a permanently meaningless line on the most common
-      # discovery type, not an honest "nothing recorded yet".
-      unless %w[mark active_spike].include?(disc['status'])
-        puts "Verdict:        #{disc['verdict'] ? Output.verdict_label(disc['verdict']) : '(unscored)'}"
+      # An actual verdict value always renders, whatever the current status (a scored
+      # finding that was later deferred still carries the score it was given). A *missing*
+      # verdict only renders as "(unscored)" on Store::SCOREABLE_STATUSES -- statuses
+      # guaranteed to have passed through close_spike. A denylist on status alone gets this
+      # wrong: a mark can be deferred without ever reaching close_spike, and 'deferred'
+      # is not a status this allowlist can tell apart from a scored one by name alone --
+      # so a bare mark, live or deferred, correctly stays silent rather than printing a
+      # meaningless "(unscored)".
+      if disc['verdict'] || Store::SCOREABLE_STATUSES.include?(disc['status'])
+        puts "Verdict:        #{Output.verdict_label(disc['verdict']) || '(unscored)'}"
       end
       puts "Headline:       #{disc['headline']}" if disc['headline']
       puts "Question:       #{disc['question'] || '—'}"
