@@ -57,6 +57,49 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_done' do
     end
   end
 
+  context 'criterion 4 — closed with --verdict' do
+    let(:output) { StringIO.new }
+
+    before do
+      input = StringIO.new("finding text\nhigh\nrec text\n")
+      Tyrion::Commands.cmd_spike_done(['--verdict', 'falsified_alternative'], store, input: input, output: output)
+    end
+
+    let(:disc_id) { output.string[/\[findings_ready\] (disc-\d+)/, 1] }
+
+    it 'stores the verdict independent of status' do
+      disc = store.find_discovery(disc_id)
+      expect(disc['status']).to eq 'findings_ready'
+      expect(disc['verdict']).to eq 'falsified_alternative'
+    end
+  end
+
+  context 'criterion 4 — closed without --verdict' do
+    let(:output) { StringIO.new }
+
+    before do
+      input = StringIO.new("finding text\nhigh\nrec text\n")
+      Tyrion::Commands.cmd_spike_done([], store, input: input, output: output)
+    end
+
+    let(:disc_id) { output.string[/\[findings_ready\] (disc-\d+)/, 1] }
+
+    it 'leaves verdict nil rather than defaulting to confirmed' do
+      disc = store.find_discovery(disc_id)
+      expect(disc['verdict']).to be_nil
+    end
+  end
+
+  context 'criterion 4 — invalid --verdict value' do
+    it 'exits with an error and does not close the spike' do
+      _out, err = capture_io do
+        expect { Tyrion::Commands.cmd_spike_done(['--verdict', 'bogus'], store) }.to raise_error(SystemExit)
+      end
+      expect(err).to match(/[Uu]nknown verdict/)
+      expect(store.active_spike_for(ctx.project['id'])).not_to be_nil
+    end
+  end
+
   context 'criterion 3 — invalid confidence values are re-prompted until valid' do
     let(:output) { StringIO.new }
 

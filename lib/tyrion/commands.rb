@@ -1819,6 +1819,7 @@ module Tyrion
       die "Discovery #{disc_id} not found" unless disc
 
       puts "#{disc['id']}  [#{disc['status']}]  #{Output.origin_tag(disc['origin'])}"
+      puts "Verdict:        #{disc['verdict'] || '(unscored)'}"
       puts "Headline:       #{disc['headline']}" if disc['headline']
       puts "Question:       #{disc['question'] || '—'}"
       puts "Finding:        #{disc['finding'] || '—'}"
@@ -1891,8 +1892,17 @@ module Tyrion
       output.puts "[active_spike] #{disc['id']}"
     end
 
+    # confirmed: hypothesis held. falsified: it didn't, no alternative found. falsified_alternative:
+    # it didn't, but the spike surfaced what's true instead. partial: some held, some didn't.
+    VALID_VERDICTS = %w[confirmed falsified falsified_alternative partial].freeze
+
     def self.cmd_spike_done(args, store, input: $stdin, output: $stdout)
-      origin = consume_auto_flag(args, default: nil)
+      origin  = consume_auto_flag(args, default: nil)
+      verdict = extract_flag_value(args, '--verdict')
+      if verdict && !VALID_VERDICTS.include?(verdict)
+        die "Unknown verdict '#{verdict}'. Valid: #{VALID_VERDICTS.join(', ')}"
+      end
+
       project, = resolve_project_epic(store, require_epic: false)
 
       spike = store.active_spike_for(project['id'])
@@ -1903,7 +1913,8 @@ module Tyrion
       recommendation = prompt(input, output, "Recommendation: ")
 
       disc = store.close_spike(spike['id'], finding: presence(finding), confidence: confidence,
-                                            recommendation: presence(recommendation), origin: origin)
+                                            recommendation: presence(recommendation), origin: origin,
+                                            verdict: verdict)
       output.puts "[findings_ready] #{disc['id']}"
     end
 

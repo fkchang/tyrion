@@ -225,5 +225,21 @@ RSpec.describe 'discovery origin (agent vs human)' do
       out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
       expect(out).to include('[agent]')
     end
+
+    it 'renders verdict distinctly from status' do
+      store.create_discovery(project_id: ctx.project['id'], status: 'active_spike', question: 'q2')
+      spike = store.active_spike_for(ctx.project['id'])
+      disc  = store.close_spike(spike['id'], finding: 'f', confidence: 'high', recommendation: 'r', verdict: 'confirmed')
+
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([disc['id']], store) }
+      expect(out).to match(/\[findings_ready\]/)
+      expect(out).to match(/Verdict:\s+confirmed/)
+    end
+
+    it 'shows unscored when no verdict was recorded' do
+      d = store.create_discovery(project_id: ctx.project['id'], status: 'mark', question: 'q3')
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
+      expect(out).to match(/Verdict:\s+\(unscored\)/)
+    end
   end
 end

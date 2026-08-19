@@ -48,6 +48,13 @@ module Views
       span(class: tag[:css]) { tag[:text] }
     end
 
+    def render_verdict(disc)
+      tag = TyrionWeb::Presenter.verdict_tag(disc['verdict'])
+      return unless tag
+
+      span(class: tag[:css]) { tag[:text] }
+    end
+
     def render_spike_section
       div(class: "dv-section") do
         div(class: "dv-section-header") do
@@ -85,6 +92,7 @@ module Views
             div(class: "dv-card-id") do
               plain "#{d['id']} · found #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
               render_origin(d)
+              render_verdict(d)
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
             div(class: "dv-card-headline") { d['headline'] } if d['headline']
