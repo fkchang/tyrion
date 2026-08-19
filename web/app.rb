@@ -75,7 +75,20 @@ helpers do
   rescue StandardError => e
     session[:flash] = "Error: #{e.message}"
   ensure
-    redirect params[:return_to] || "/discoveries/#{disc_id}"
+    redirect safe_return_to(disc_id)
+  end
+
+  # params[:return_to] is user-controlled input reflected straight into a
+  # redirect -- an open redirect (`return_to=//evil.com` or `return_to=https://evil.com`)
+  # without validation. Only a same-site absolute path is accepted; anything
+  # else (missing, protocol-relative "//", a full URL, or a leading backslash
+  # -- some browsers still normalize "/\evil.com" to "//evil.com") falls back
+  # to the discovery's own page.
+  def safe_return_to(disc_id)
+    back = params[:return_to]
+    return "/discoveries/#{disc_id}" unless back.is_a?(String) && back.match?(%r{\A/[^/\\]})
+
+    back
   end
 end
 
@@ -182,7 +195,12 @@ get "/ambient" do
   phlex Views::Ambient.new(
     project: d[:project], marks: d[:marks], findings_ready_count: d[:findings_ready_count],
     # Seeding the first-render token means an unchanged first poll repaints nothing.
-    token: TyrionWeb::Data.ambient_token(marks: d[:marks], findings_ready_count: d[:findings_ready_count])
+    token: TyrionWeb::Data.ambient_token(marks: d[:marks], findings_ready_count: d[:findings_ready_count]),
+    # The inline Defer form redirects back here via return_to -- without
+    # reading/rendering this, success and failure both looked identical
+    # (nothing visibly happens), and the message would ambush an unrelated
+    # page later instead.
+    flash: session.delete(:flash)
   )
 end
 

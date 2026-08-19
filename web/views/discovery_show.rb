@@ -69,11 +69,22 @@ module Views
       span(class: tag[:css]) { tag[:text] }
     end
 
+    # Each field rendered on its own presence -- recommendation in particular
+    # must not be gated behind confidence being set. A discovery can carry a
+    # recommendation without a confidence rating, and this page's whole job is
+    # showing the full record; hiding the most actionable field behind an
+    # unrelated null check defeated that.
     def render_findings
+      lines = []
+      lines << "Finding: #{@discovery['finding']}" if @discovery['finding']
+      lines << "Confidence: #{@discovery['confidence']}" if @discovery['confidence']
+      lines << "Recommendation: #{@discovery['recommendation']}" if @discovery['recommendation']
+
       div(class: "dv-card-meta") do
-        plain "Finding: #{@discovery['finding']}" if @discovery['finding']
-        br if @discovery['finding'] && @discovery['confidence']
-        plain "Confidence: #{@discovery['confidence']} · Recommendation: #{@discovery['recommendation']}" if @discovery['confidence']
+        lines.each_with_index do |line, i|
+          br if i.positive?
+          plain line
+        end
       end
     end
 

@@ -14,11 +14,12 @@ module Views
     TRUNCATE_AT = 72
     POLL_INTERVAL_MS = 60_000   # slower than the story pane's 30s — glance surface, not a monitor
 
-    def initialize(project:, marks: [], findings_ready_count: 0, token: nil)
+    def initialize(project:, marks: [], findings_ready_count: 0, token: nil, flash: nil)
       @project              = project
       @marks                = marks || []
       @findings_ready_count = findings_ready_count.to_i
       @token                = token
+      @flash                = flash
     end
 
     def view_template
@@ -34,6 +35,7 @@ module Views
           if @project.nil?
             div(class: "am-empty") { "no project" }
           else
+            render_flash
             div(class: "am-project") { project_slug }
             render_marks
             render_ready_line
@@ -59,6 +61,15 @@ module Views
 
     def ambient_url
       "/ambient?project=#{project_slug}"
+    end
+
+    # Success and error land in the identical session[:flash] slot (with_discovery_flash
+    # can't tell the two apart at write time) -- distinguish on render by the "Error:"
+    # prefix, same convention roadmap.rb's flash already uses.
+    def render_flash
+      return unless @flash
+
+      div(class: @flash.start_with?("Error:") ? "am-flash am-flash-error" : "am-flash") { @flash }
     end
 
     # Zero open marks blanks this section only — the findings_ready line below

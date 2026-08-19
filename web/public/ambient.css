@@ -27,6 +27,16 @@ body {
   word-break: break-word;
 }
 
+.am-flash {
+  font-size: 12px;
+  padding: 6px 10px;
+  margin-bottom: 12px;
+  border-radius: 3px;
+  background: var(--am-border);
+  color: var(--am-text);
+}
+.am-flash-error { color: var(--am-aged); }
+
 .am-project {
   color: var(--am-muted);
   font-size: 11px;
