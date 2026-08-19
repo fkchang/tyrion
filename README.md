@@ -209,6 +209,10 @@ tyrion wave set <slug> <N> [why] Pin story to wave N regardless of topo sort (wa
 tyrion wave next                 Print first fully-pending wave as newline-delimited slugs
 tyrion wave next --with-pocket   Same, with tyrion pocket briefing appended below each slug
 
+tyrion epic parent <slug> <parent> Set containing epic (--none clears it)
+tyrion epic depends add/rm <slug> <dep> Add/remove that epic <slug> must run after epic <dep>
+tyrion epic waves                Runnable-only wave plan honoring containment + prerequisites
+
 tyrion mark "desc" [--auto]      Instant reconnaissance bookmark
 tyrion discover [--auto]         Organic capture — question + finding
 tyrion discover <disc-id> \

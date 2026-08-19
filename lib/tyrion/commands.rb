@@ -338,9 +338,12 @@ module Tyrion
       when 'archive'   then cmd_epic_archive(args, store)
       when 'unarchive' then cmd_epic_unarchive(args, store)
       when 'mode'      then cmd_epic_mode(args, store)
+      when 'parent'    then cmd_epic_parent(args, store)
+      when 'depends'   then cmd_epic_depends(args, store)
+      when 'waves'     then cmd_epic_waves(args, store)
       else
         $stderr.puts "Unknown epic subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion epic [list|show|activate|pause|complete|archive|unarchive|mode]"
+        $stderr.puts "Usage: tyrion epic [list|show|activate|pause|complete|archive|unarchive|mode|parent|depends|waves]"
         exit 1
       end
     end
@@ -504,6 +507,93 @@ module Tyrion
       stored_mode = value == 'shape' ? nil : value # shape is the canonical NULL
       store.update_epic(epic['id'], 'mode' => stored_mode)
       puts "Epic mode set: #{epic['name']} [#{slug}] -> #{value}"
+    end
+
+    def self.cmd_epic_parent(args, store)
+      slug       = args.shift
+      parent_arg = args.shift
+      die "Usage: tyrion epic parent <slug> <parent-slug> | tyrion epic parent <slug> --none" unless slug && parent_arg
+
+      project = resolve_project(store)
+      epic    = store.find_epic(project['id'], slug)
+      die "Epic not found: #{slug}" unless epic
+
+      if parent_arg == '--none'
+        store.set_epic_parent(epic['id'], nil)
+        puts "Epic #{slug} parent cleared."
+      else
+        parent_epic = store.find_epic(project['id'], parent_arg)
+        die "Epic not found: #{parent_arg}" unless parent_epic
+        store.set_epic_parent(epic['id'], parent_epic['id'])
+        puts "Epic #{slug} parent set to #{parent_arg}."
+      end
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    def self.cmd_epic_depends(args, store)
+      subcmd = args.shift
+      case subcmd
+      when 'add' then cmd_epic_depends_add(args, store)
+      when 'rm'  then cmd_epic_depends_rm(args, store)
+      else
+        die "Usage: tyrion epic depends add <slug> <dep-slug> | tyrion epic depends rm <slug> <dep-slug>"
+      end
+    end
+
+    def self.cmd_epic_depends_add(args, store)
+      slug, dep_slug = args
+      die "Usage: tyrion epic depends add <slug> <dep-slug>" unless slug && dep_slug
+
+      project = resolve_project(store)
+      epic    = store.find_epic(project['id'], slug)
+      die "Epic not found: #{slug}" unless epic
+
+      current = JSON.parse(epic['depends_on'] || '[]')
+      if current.include?(dep_slug)
+        puts "#{slug} already depends on #{dep_slug}"
+      else
+        store.add_epic_dependency(epic['id'], dep_slug)
+        puts "#{Output.green('+')} #{slug} now depends on #{dep_slug}"
+      end
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    def self.cmd_epic_depends_rm(args, store)
+      slug, dep_slug = args
+      die "Usage: tyrion epic depends rm <slug> <dep-slug>" unless slug && dep_slug
+
+      project = resolve_project(store)
+      epic    = store.find_epic(project['id'], slug)
+      die "Epic not found: #{slug}" unless epic
+
+      current = JSON.parse(epic['depends_on'] || '[]')
+      if current.include?(dep_slug)
+        store.remove_epic_dependency(epic['id'], dep_slug)
+        puts "#{Output.red('-')} #{slug} no longer depends on #{dep_slug}"
+      else
+        puts "#{slug} does not depend on #{dep_slug}"
+      end
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    def self.cmd_epic_waves(_args, store)
+      project = resolve_project(store)
+      graph   = store.epic_graph(project['id'])
+      waves   = store.epic_wave_plan(graph)
+      if waves.empty?
+        puts Output.dim("No runnable epics in this project.")
+        return
+      end
+      waves.each do |wave_num, slugs|
+        if wave_num == :cycle
+          puts "#{Output.red('Cycle')}: #{slugs.join(', ')} (circular dependency — fix with tyrion epic depends rm)"
+        else
+          puts "#{Output.bold("Wave #{wave_num}")}: #{slugs.join(', ')}"
+        end
+      end
     end
 
     def self.cmd_import(args, store)
@@ -3619,6 +3709,13 @@ module Tyrion
           tyrion epic activate <slug>              Set active epic for this worktree
           tyrion epic pause <slug>                 Pause an epic
           tyrion epic complete [slug] [--force]    Seal an epic as done (all stories must be done)
+          tyrion epic archive <slug>               Archive an epic (hides it from epic list)
+          tyrion epic unarchive <slug>             Restore an archived epic
+          tyrion epic mode <slug> [dark_factory|shape]  Get/set epic autonomy mode
+          tyrion epic parent <slug> <parent>       Set slug's containing epic (--none clears it)
+          tyrion epic depends add <slug> <dep>     Record that epic <slug> must run after epic <dep>
+          tyrion epic depends rm <slug> <dep>      Remove an epic-level dependency
+          tyrion epic waves                        Show epic wave plan — runnable epics only
 
         Import:
           tyrion import <file.feature>             Import gherkin scenarios as stories
