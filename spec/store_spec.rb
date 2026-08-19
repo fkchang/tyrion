@@ -1549,4 +1549,101 @@ RSpec.describe Tyrion::Store do
       expect { store.set_epic_parent(child['id'], parent['id']) }.to raise_error(/would become its descendant/)
     end
   end
+
+  describe '#epic_wave_plan' do
+    let(:project) { make_project }
+
+    def graph
+      store.epic_graph(project['id'])
+    end
+
+    it 'assigns all runnable epics to wave 1 when there are no dependencies' do
+      make_epic(project_id: project['id'], slug: 'a')
+      make_epic(project_id: project['id'], slug: 'b')
+      waves = store.epic_wave_plan(graph)
+      expect(waves[1]).to match_array(%w[a b])
+      expect(waves.size).to eq 1
+    end
+
+    it 'places a dependent epic in a later wave than its prerequisite' do
+      a = make_epic(project_id: project['id'], slug: 'a')
+      make_epic(project_id: project['id'], slug: 'b')
+      store.add_epic_dependency(a['id'], 'b')
+      waves = store.epic_wave_plan(graph)
+      expect(waves[1]).to eq ['b']
+      expect(waves[2]).to eq ['a']
+    end
+
+    it 'excludes sealed (done) epics from the plan entirely' do
+      done = make_epic(project_id: project['id'], slug: 'done-epic')
+      s = make_story(epic_id: done['id'], slug: 'done-story')
+      store.complete_story(s['id'], 'done', force: true)
+      store.seal_epic(done['id'])
+      make_epic(project_id: project['id'], slug: 'active-epic')
+      waves = store.epic_wave_plan(graph)
+      expect(waves.values.flatten).not_to include('done-epic')
+      expect(waves.values.flatten).to include('active-epic')
+    end
+
+    it 'excludes archived epics from the plan entirely' do
+      archived = make_epic(project_id: project['id'], slug: 'archived-epic')
+      store.archive_epic(archived['id'])
+      make_epic(project_id: project['id'], slug: 'active-epic')
+      waves = store.epic_wave_plan(graph)
+      expect(waves.values.flatten).not_to include('archived-epic')
+    end
+
+    it 'excludes abandoned epics from the plan entirely' do
+      abandoned = make_epic(project_id: project['id'], slug: 'abandoned-epic')
+      store.update_epic(abandoned['id'], 'status' => 'abandoned')
+      make_epic(project_id: project['id'], slug: 'active-epic')
+      waves = store.epic_wave_plan(graph)
+      expect(waves.values.flatten).not_to include('abandoned-epic')
+    end
+
+    it 'treats a dependency on a sealed epic as already met (ignored, not blocking)' do
+      done = make_epic(project_id: project['id'], slug: 'done-epic')
+      s = make_story(epic_id: done['id'], slug: 'done-story')
+      store.complete_story(s['id'], 'done', force: true)
+      store.seal_epic(done['id'])
+      dependent = make_epic(project_id: project['id'], slug: 'dependent')
+      store.add_epic_dependency(dependent['id'], 'done-epic')
+      waves = store.epic_wave_plan(graph)
+      expect(waves[1]).to eq ['dependent']
+    end
+
+    it "honors an inherited ancestor prerequisite — a child of a waiting epic doesn't jump ahead" do
+      prereq = make_epic(project_id: project['id'], slug: 'prereq')
+      parent = make_epic(project_id: project['id'], slug: 'parent')
+      child  = make_epic(project_id: project['id'], slug: 'child')
+      store.add_epic_dependency(parent['id'], 'prereq')
+      store.set_epic_parent(child['id'], parent['id'])
+      waves = store.epic_wave_plan(graph)
+      expect(waves[1]).to eq ['prereq']
+      expect(waves[2]).to match_array(%w[parent child])
+    end
+
+    it 'surfaces cyclic epics under :cycle key' do
+      # add_epic_dependency refuses any edge that would create a cycle, so
+      # cycle residue can only exist via a hand-edited DB — same setup as the
+      # #epic_ancestors and #epic_descendants cycle-residue test above.
+      x = make_epic(project_id: project['id'], slug: 'x')
+      y = make_epic(project_id: project['id'], slug: 'y')
+      store.send(:with_db) do |db|
+        db.execute('UPDATE epics SET depends_on = ? WHERE id = ?', [JSON.dump(['y']), x['id']])
+        db.execute('UPDATE epics SET depends_on = ? WHERE id = ?', [JSON.dump(['x']), y['id']])
+      end
+      waves = store.epic_wave_plan(graph)
+      expect(waves[:cycle]).to match_array(%w[x y])
+      expect(waves.keys.reject { |k| k == :cycle }).to be_empty
+    end
+
+    it 'returns an empty hash when the project has no runnable epics' do
+      done = make_epic(project_id: project['id'], slug: 'done-epic')
+      s = make_story(epic_id: done['id'], slug: 'done-story')
+      store.complete_story(s['id'], 'done', force: true)
+      store.seal_epic(done['id'])
+      expect(store.epic_wave_plan(graph)).to eq({})
+    end
+  end
 end

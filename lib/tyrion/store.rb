@@ -367,6 +367,57 @@ module Tyrion
       end
     end
 
+    # Topological layering over runnable epics only — a ready-set view, not a
+    # topology dump of everything in the project. Sealed (status 'done'),
+    # archived (archived_at set), and abandoned epics are excluded from the
+    # graph entirely before layering: they are not work still to be run.
+    # Each epic's effective prerequisite set for layering purposes is its own
+    # depends_on PLUS everything unmet_prereqs would inherit from ancestors
+    # (epic_ancestors' depends_on), so a child of a waiting epic never lands
+    # in an earlier wave than its ancestor's prerequisites allow. A prereq
+    # slug pointing outside the runnable set (unknown, or itself excluded as
+    # sealed/archived/abandoned) is treated as already met — same "ignore
+    # what isn't known" contract as story-level wave_plan. Cycle residue
+    # surfaces under :cycle the same way wave_plan's does.
+    def epic_wave_plan(graph)
+      runnable = graph[:epics].values.reject { |e| e['status'] == 'done' || e['archived_at'] || e['status'] == 'abandoned' }
+
+      effective_deps = runnable.to_h do |e|
+        slugs = (graph[:depends_on][e['id']] || []).dup
+        epic_ancestors(e['id'], graph).each { |aid| slugs.concat(graph[:depends_on][aid] || []) }
+        [e['slug'], slugs.uniq]
+      end
+
+      known = effective_deps.keys.to_set
+      dependents = Hash.new { |h, k| h[k] = [] }
+      in_degree  = Hash.new(0)
+
+      effective_deps.each do |slug, prereqs|
+        prereqs.each do |prereq|
+          next unless known.include?(prereq)
+          dependents[prereq] << slug
+          in_degree[slug]    += 1
+        end
+      end
+
+      waves = {}
+      wave  = 1
+      queue = known.select { |s| in_degree[s].zero? }.sort
+      until queue.empty?
+        waves[wave] = queue
+        queue = queue.flat_map { |s| dependents[s] }
+                     .select { |d| (in_degree[d] -= 1).zero? }
+                     .sort
+        wave += 1
+      end
+
+      assigned = waves.values.flatten.to_set
+      cycled = known.reject { |s| assigned.include?(s) }
+      waves[:cycle] = cycled.sort unless cycled.empty?
+
+      waves
+    end
+
     def seal_epic(epic_id, force: false)
       unless force || all_stories_done?(epic_id)
         stories = stories_for_epic(epic_id)
