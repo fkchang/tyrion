@@ -1642,11 +1642,18 @@ module Tyrion
       # No epic (or no story on this lane) is a normal outcome, not an error —
       # the mark files with the provenance left nil rather than guessing.
       story = epic && prime_story_for(store, epic, current_lane_token)
+      # Auto-linkage, no new flag: the project's in-flight spike at filing time.
+      # Project-scoped, unlike source_story_id above — a spike is project-global by
+      # construction (idx_one_active_spike_per_project), so there is no lane-scoped
+      # spike to prefer. This records co-occurrence, not causation: another lane's
+      # spike will stamp this mark, and that is the honest reading of the column.
+      active_spike = store.active_spike_for(project['id'])
 
       disc = store.create_discovery(
         project_id:      project['id'],
         epic_id:         epic && epic['id'],
         source_story_id: story && story['id'],
+        parent_spike_id: active_spike && active_spike['id'],
         status:          'mark',
         question:        args.first,
         origin:          origin,
