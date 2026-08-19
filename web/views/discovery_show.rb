@@ -57,7 +57,7 @@ module Views
           render_origin
         end
         div(class: "dv-card-headline") { d['headline'] } if d['headline']
-        div(class: "dv-card-q") { raw(TyrionWeb::Presenter.markdown_lite(d['question'])) }
+        div(class: "dv-card-q dv-md") { raw(safe(TyrionWeb::Presenter.markdown_lite(d['question']))) }
         render_fields
         render_epic_line
         render_child_marks if @child_marks.any?
@@ -74,12 +74,13 @@ module Views
     # Every field beyond question/headline, each on its own presence -- a
     # discovery can carry a recommendation without a confidence rating (or a
     # verdict without a finding), and this page's whole job is showing the
-    # full record, so no field is gated behind another. `verdict` is read
-    # defensively: the column is added by a sibling story landing in
-    # parallel, so on a checkout without it yet `d['verdict']` is simply nil
-    # and the field is skipped, same as any other unset field. Markdown is
-    # interpreted for the free-text fields; confidence is a short label, not
-    # prose, so it renders plain.
+    # full record, so no field is gated behind another. This is the same
+    # field set Commands.cmd_discovery_show prints for the CLI (plus
+    # `verdict`, this epic's addition, and nested marks). `verdict` has no
+    # column yet -- landing via a sibling story in parallel -- so it reads as
+    # nil and is skipped until that story merges, same as any other unset
+    # field. Markdown is interpreted for the free-text fields; confidence is
+    # a short label, not prose, so it renders plain.
     def render_fields
       render_plain_field('Confidence', @discovery['confidence'])
       render_field('Hypothesis', @discovery['hypothesis'])
@@ -87,6 +88,7 @@ module Views
       render_field('Finding', @discovery['finding'])
       render_field('Recommendation', @discovery['recommendation'])
       render_field('Verdict', @discovery['verdict'])
+      render_field('Defer reason', @discovery['defer_reason'])
     end
 
     def render_field(label, text)
@@ -94,7 +96,7 @@ module Views
 
       div(class: "dv-card-meta", style: "margin-top:10px") do
         div(style: field_label_style) { label }
-        div { raw(TyrionWeb::Presenter.markdown_lite(text)) }
+        div(class: "dv-md") { raw(safe(TyrionWeb::Presenter.markdown_lite(text))) }
       end
     end
 

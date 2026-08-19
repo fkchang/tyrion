@@ -242,7 +242,7 @@ module TyrionWeb
     # needs a real list to choose from.
     def self.load_discovery_show_view(disc_id)
       disc = store.find_discovery(disc_id)
-      return { discovery: nil, project: nil, epic: nil, epics: [], stories: [], disc_summary: empty_disc_summary, epic_switcher: [], git_branch: 'unknown', dirty_count: 0 } unless disc
+      return { discovery: nil, project: nil, epic: nil, epics: [], stories: [], disc_summary: empty_disc_summary, epic_switcher: [], child_marks: [], git_branch: 'unknown', dirty_count: 0 } unless disc
 
       project = store.find_project_by_id(disc['project_id'])
       # The discovery's TRUE epic (possibly nil, e.g. filed via `tyrion spike

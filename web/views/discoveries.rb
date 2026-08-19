@@ -56,7 +56,7 @@ module Views
         end
         div(class: "dv-card spike", id: @spike['id']) do
           div(class: "dv-card-id") do
-            plain "#{@spike['id']} · started #{TyrionWeb::Presenter.time_ago(@spike['created_at'])}"
+            a(href: "/discoveries/#{@spike['id']}", class: "dv-card-id-link") { "#{@spike['id']} · started #{TyrionWeb::Presenter.time_ago(@spike['created_at'])}" }
             render_origin(@spike)
           end
           div(class: "dv-card-q") { "\"#{@spike['question']}\"" }
@@ -83,7 +83,7 @@ module Views
           aging = age_days >= 3
           div(class: "dv-card ready", id: d['id']) do
             div(class: "dv-card-id") do
-              plain "#{d['id']} · found #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
+              a(href: "/discoveries/#{d['id']}", class: "dv-card-id-link") { "#{d['id']} · found #{TyrionWeb::Presenter.time_ago(d['created_at'])}" }
               render_origin(d)
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
@@ -115,7 +115,7 @@ module Views
           aging = age_days >= 14
           div(class: "dv-card mark", id: d['id']) do
             div(class: "dv-card-id") do
-              plain "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
+              a(href: "/discoveries/#{d['id']}", class: "dv-card-id-link") { "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}" }
               render_origin(d)
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
