@@ -66,6 +66,13 @@ RSpec.describe 'suggest next epic on a drained epic' do
       make_epic('alpha', pending: 0)
       expect(store.next_pending_epic(project['id'])).to be_nil
     end
+
+    it 'skips a waiting epic (unmet prerequisite) even though it has pending work' do
+      alpha = make_epic('alpha')
+      beta  = make_epic('beta')
+      store.add_epic_dependency(alpha['id'], 'beta')
+      expect(store.next_pending_epic(project['id'])['slug']).to eq('beta')
+    end
   end
 
   # ── cmd_done (criteria 1-3) ───────────────────────────────────────────────
@@ -134,6 +141,29 @@ RSpec.describe 'suggest next epic on a drained epic' do
       # nothing drained → should not print the suggestion
       out, = capture_io { Tyrion::Commands.cmd_claim_next([], store) }
       expect(out).not_to match(/complete\. Next:/)
+    end
+  end
+
+  # ── print_next_epic_suggestion reports the whole ready set ──────────────
+  describe 'print_next_epic_suggestion with more than one ready epic' do
+    it 'lists every ready epic rather than picking one arbitrarily' do
+      make_epic('beta')
+      make_epic('gamma')
+      last = done_story('last')
+      out = StringIO.new
+      Tyrion::Commands.print_next_epic_suggestion(store, epic, output: out)
+      expect(out.string).to match(/Ready: beta, gamma/)
+    end
+
+    it 'never includes a waiting epic in the ready set' do
+      beta  = make_epic('beta')
+      gamma = make_epic('gamma')
+      store.add_epic_dependency(gamma['id'], 'beta')
+      last = done_story('last')
+      out = StringIO.new
+      Tyrion::Commands.print_next_epic_suggestion(store, epic, output: out)
+      expect(out.string).to match(/Next: tyrion epic activate beta/)
+      expect(out.string).not_to match(/gamma/)
     end
   end
 end

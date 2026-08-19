@@ -422,6 +422,8 @@ module Tyrion
       epic    = store.find_epic(project['id'], slug)
       die "Epic not found: #{slug}" unless epic
 
+      warn_if_epic_waiting(store, epic)
+
       token = current_lane_token
       if token
         set_active_epic_for_lane(slug, token: token)
@@ -450,20 +452,12 @@ module Tyrion
       epic    = store.find_epic(project['id'], slug)
       die "Epic not found: #{slug}" unless epic
 
-      unless force || store.all_stories_done?(epic['id'])
-        stories = store.stories_for_epic(epic['id'])
-        undone  = stories.reject { |s| s['status'] == 'done' }
-        if stories.empty?
-          die "Epic '#{slug}' has no stories. Nothing to seal."
-        else
-          die "Epic '#{slug}' has #{undone.length} story/stories not done: " \
-              "#{undone.map { |s| s['slug'] }.join(', ')}. Finish them or pass --force."
-        end
-      end
-
-      store.update_epic(epic['id'], 'status' => 'done')
+      unlocked = seal_epic_and_report_unlocks(store, epic, force: !!force)
       puts "Epic #{slug} sealed as done."
       puts Output.dim("Tip: /tyrion-changelog #{slug} — add a changelog entry for this epic.")
+      print_unlocked_epics(unlocked)
+    rescue RuntimeError => e
+      die e.message
     end
 
     def self.cmd_epic_archive(args, store)
@@ -978,6 +972,7 @@ module Tyrion
       die "Usage: tyrion start <slug> [--steal]" unless slug
 
       _project, epic = resolve_project_epic(store)
+      warn_if_epic_waiting(store, epic)
       story = store.find_story(epic['id'], slug)
       die "Story not found: #{slug} in epic #{epic['slug']}" unless story
 
@@ -1397,6 +1392,7 @@ module Tyrion
 
     def self.cmd_claim_next(args, store)
       _project, epic = resolve_project_epic(store)
+      warn_if_epic_waiting(store, epic)
       if epic_drained?(store, epic['id'])
         print_next_epic_suggestion(store, epic)
         return
@@ -1489,10 +1485,15 @@ module Tyrion
       north_star   = project['about_md']&.lines&.first&.strip&.sub(/^#+\s*/, '')
       epic_stories = store.stories_for_epic(epic['id'])
       done_n       = epic_stories.count { |s| s['status'] == 'done' }
+      waiting      = store.unmet_prereqs(epic, store.epic_graph(epic['project_id']))
 
       puts north_star if presence(north_star)
       puts "epic: #{epic['slug']} (#{done_n}/#{epic_stories.length})"
-      puts "next: tyrion claim-next"
+      if waiting.empty?
+        puts "next: tyrion claim-next"
+      else
+        puts "epic waiting on: #{waiting.map { |u| "#{u[:slug]} (#{u[:reason]})" }.join(', ')}"
+      end
       puts "full context: tyrion resume"
       print_prime_marks_line(open_marks)
       puts
@@ -2461,9 +2462,10 @@ module Tyrion
 
       answer = prompt(input, output, "All #{count} stories done. Seal epic #{epic['slug']} as complete? [y/N] ")
       if answer.downcase == 'y'
-        store.update_epic(epic['id'], 'status' => 'done')
+        unlocked = seal_epic_and_report_unlocks(store, epic)
         output.puts "Epic #{epic['slug']} sealed as done."
         output.puts Output.dim("Tip: /tyrion-changelog #{epic['slug']} — add a changelog entry for this epic.")
+        print_unlocked_epics(unlocked, output: output)
       else
         output.puts "Tip: run `tyrion epic complete #{epic['slug']}` when ready to seal."
       end
@@ -2476,15 +2478,61 @@ module Tyrion
       store.stories_for_epic(epic_id).none? { |s| %w[pending in_progress].include?(s['status']) }
     end
 
-    # Renders the next-epic suggestion for a drained epic: the activate hint for
-    # the earliest-created epic with pending stories, or "All epics complete".
+    # Renders the next-epic suggestion for a drained epic: the whole ready set
+    # with actionable (pending-story) work, not one arbitrary pick — a waiting
+    # epic (unmet prerequisite) is never among them, via Store#ready_epics. The
+    # single-candidate case keeps the exact original wording so existing
+    # callers/specs pinning it see no change.
     def self.print_next_epic_suggestion(store, epic, output: $stdout)
-      nxt = store.next_pending_epic(epic['project_id'], exclude_epic_id: epic['id'])
-      if nxt
-        output.puts "Epic '#{epic['slug']}' complete. Next: tyrion epic activate #{nxt['slug']}"
-      else
+      graph = store.epic_graph(epic['project_id'])
+      candidates = store.ready_epics(epic['project_id'], graph: graph)
+                        .reject { |e| e['id'] == epic['id'] }
+                        .select { |e| graph[:story_counts][e['id']]['pending'].positive? }
+
+      case candidates.length
+      when 0
         output.puts "All epics complete"
+      when 1
+        output.puts "Epic '#{epic['slug']}' complete. Next: tyrion epic activate #{candidates.first['slug']}"
+      else
+        output.puts "Epic '#{epic['slug']}' complete. Ready: #{candidates.map { |e| e['slug'] }.join(', ')} — tyrion epic activate <slug>"
       end
+    end
+
+    # Non-blocking warning for every path that lets an agent begin work in an
+    # epic (tyrion start, claim-next, epic activate): if the epic itself is
+    # waiting on an unmet prerequisite, name it and the escape hatch, but never
+    # refuse — that hard-refuse treatment is reserved for a *blocked story*
+    # (tyrion start's separate, stricter guard).
+    def self.warn_if_epic_waiting(store, epic)
+      graph = store.epic_graph(epic['project_id'])
+      unmet = store.unmet_prereqs(epic, graph)
+      return if unmet.empty?
+
+      reasons = unmet.map { |u| "#{u[:slug]} (#{u[:reason]})" }.join(', ')
+      puts Output.yellow("⚠  Epic '#{epic['slug']}' is waiting on: #{reasons}")
+      puts Output.dim("   Escape hatch: tyrion epic depends rm #{epic['slug']} <dep-slug>")
+    end
+
+    # Seals epic through Store#seal_epic (which owns the container invariant
+    # and the honesty rules) and reports which OTHER epics that seal just made
+    # eligible, as a before/after diff of Store#ready_epics. The one
+    # chokepoint all three seal call sites (cmd_epic_complete,
+    # maybe_prompt_epic_seal, web POST /epic/:slug/seal) route through, so
+    # none of them can seal by writing status directly and bypass either the
+    # container invariant or this announcement.
+    def self.seal_epic_and_report_unlocks(store, epic, force: false)
+      before_ids = store.ready_epics(epic['project_id']).map { |e| e['id'] }
+      store.seal_epic(epic['id'], force: force)
+      store.ready_epics(epic['project_id']).reject { |e| before_ids.include?(e['id']) }
+    end
+
+    # Shared rendering for seal_epic_and_report_unlocks' diff — used by both
+    # seal call sites that print to a Ruby IO (web's flash message builds its
+    # own string instead).
+    def self.print_unlocked_epics(unlocked, output: $stdout)
+      return if unlocked.empty?
+      output.puts "Unlocked: #{unlocked.map { |e| e['slug'] }.join(', ')} — now eligible (tyrion epic activate <slug>)"
     end
 
     # ── unstart ────────────────────────────────────────────────────────────

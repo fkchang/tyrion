@@ -271,7 +271,12 @@ post "/stories/:id/next_action" do
 end
 
 post "/epic/:slug/seal" do
-  with_epic_flash { |epic| store.seal_epic(epic['id']); "Epic #{params[:slug]} sealed ✓" }
+  with_epic_flash do |epic|
+    unlocked = Tyrion::Commands.seal_epic_and_report_unlocks(store, epic)
+    msg = "Epic #{params[:slug]} sealed ✓"
+    msg += " — unlocked: #{unlocked.map { |e| e['slug'] }.join(', ')}" unless unlocked.empty?
+    msg
+  end
 end
 
 post "/epic/:slug/unarchive" do
