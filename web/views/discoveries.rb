@@ -2,11 +2,12 @@
 
 module Views
   class DiscoveriesView < Phlex::HTML
-    def initialize(project:, spike:, findings_ready:, marks:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0, project_slug: nil)
+    def initialize(project:, spike:, findings_ready:, marks:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0, project_slug: nil, token: nil)
       @project = project; @spike = spike; @findings_ready = findings_ready; @marks = marks
       @epic = epic; @stories = stories; @disc_summary = disc_summary
       @epic_switcher = epic_switcher
       @git_branch = git_branch; @dirty_count = dirty_count; @project_slug = project_slug
+      @token = token
     end
 
     def view_template
@@ -133,15 +134,20 @@ module Views
       end
     end
 
+    POLL_INTERVAL_MS = 30_000
+
     # Live polling, reload-on-change — same pattern as active_story.rb's
     # /api/poll badge, scoped to the /discoveries index only (see this
     # story's scope note: the per-discovery show page is a separate story).
+    # Reuses active_story.rb's #poll-badge/#poll-dot ids (each page has its
+    # own DOM, so no collision) so shared.css's fade-in/pulse animations
+    # apply here for free instead of needing their own copy.
     def render_monitor_badge
-      div(id: "discoveries-poll-badge",
+      div(id: "poll-badge",
           style: "position:fixed;bottom:16px;right:16px;background:rgba(20,16,10,.88);border:1px solid rgba(180,140,80,.35);border-radius:20px;padding:6px 14px;display:flex;align-items:center;gap:6px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--amber-dim);z-index:900;backdrop-filter:blur(4px);cursor:default;user-select:none;",
-          data: { project: @project['slug'] }) do
-        span(id: "discoveries-poll-dot", style: "width:7px;height:7px;border-radius:50%;background:var(--amber);display:inline-block;") {}
-        span(id: "discoveries-poll-label") { "monitoring" }
+          data: { project: @project['slug'], token: @token }) do
+        span(id: "poll-dot", style: "width:7px;height:7px;border-radius:50%;background:var(--amber);display:inline-block;") {}
+        span(id: "poll-label") { "monitoring" }
       end
     end
 
@@ -149,23 +155,25 @@ module Views
       script do
         raw safe(<<~JS)
           (function() {
-            var badge = document.getElementById('discoveries-poll-badge');
+            var badge = document.getElementById('poll-badge');
             if (!badge) return;
             var slug = badge.dataset.project;
-            var dot = document.getElementById('discoveries-poll-dot');
-            var label = document.getElementById('discoveries-poll-label');
-            var knownToken = null;
-            var INTERVAL = 30000;
+            var dot = document.getElementById('poll-dot');
+            var label = document.getElementById('poll-label');
+            // Seeded from the page's own render (same reason /ambient seeds its
+            // token) -- no null-sentinel bootstrap branch, and a stray falsy
+            // token from a 404 poll response is simply ignored below rather
+            // than latching and wedging the poller open.
+            var knownToken = badge.dataset.token || null;
+            var INTERVAL = #{POLL_INTERVAL_MS};
 
             function poll() {
               fetch('/api/discoveries_poll?project=' + encodeURIComponent(slug))
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                   dot.style.background = 'var(--amber)';
-                  if (knownToken === null) {
+                  if (data.token && data.token !== knownToken) {
                     knownToken = data.token;
-                    label.textContent = 'monitoring';
-                  } else if (data.token !== knownToken) {
                     label.textContent = 'updating…';
                     setTimeout(function() { window.location.reload(); }, 400);
                   }
