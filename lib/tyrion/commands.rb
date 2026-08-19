@@ -1850,11 +1850,15 @@ module Tyrion
       disc_id = args.shift
       die "Usage: tyrion discovery delete <disc-id>" unless disc_id
 
-      disc = store.find_discovery(disc_id)
-      die "Discovery #{disc_id} not found" unless disc
+      project = resolve_project(store)
+      disc    = store.find_discovery(disc_id)
+      # A discovery belonging to another project is "not found" from here —
+      # project scope is the boundary, same as cmd_discover_upgrade — and
+      # since delete is irreversible, leaking a cross-project id is worse here.
+      die "Discovery #{disc_id} not found" unless disc && disc['project_id'] == project['id']
 
-      store.delete_discovery(disc_id)
-      puts "[deleted] #{disc_id}"
+      deleted = store.delete_discovery(disc_id)
+      puts "[deleted] #{disc_id}  #{Output.discovery_glance_text(deleted)}"
     rescue RuntimeError => e
       die e.message
     end
@@ -3910,6 +3914,7 @@ module Tyrion
           tyrion discovery list [--status <alias>] List discoveries (aliases: active|marks|ready|promoted|deferred|all)
           tyrion discovery show <disc-id>          Show full discovery detail
           tyrion discovery defer <disc-id> ["why"] Retire an open mark/finding with a reason
+          tyrion discovery delete <disc-id>        Permanently remove a discovery (refused if promoted or blocking a story)
           tyrion discovery search "<term>"         Search discoveries (all statuses; silent if no match)
           tyrion discovery headline <disc-id> "…"  Set/update the glance-surface headline (ambient, status, list)
 

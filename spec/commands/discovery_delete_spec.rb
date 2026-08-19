@@ -25,12 +25,10 @@ RSpec.describe 'Tyrion::Commands.cmd_discovery_delete' do
       expect(store.find_discovery(disc['id'])).to be_nil
     end
 
-    it 'is a real row removal, not a status flip' do
-      disc = discovery('mark')
-      capture_io { Tyrion::Commands.cmd_discovery_delete([disc['id']], store) }
-
-      row = store.send(:with_db) { |db| db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [disc['id']]) }
-      expect(row).to be_nil
+    it 'echoes the deleted content so a mis-delete is one copy-paste from being re-filed' do
+      disc = discovery('mark', 'a CLI-parsing accident')
+      expect { Tyrion::Commands.cmd_discovery_delete([disc['id']], store) }
+        .to output(/a CLI-parsing accident/).to_stdout
     end
   end
 
@@ -57,6 +55,22 @@ RSpec.describe 'Tyrion::Commands.cmd_discovery_delete' do
     end
   end
 
+  context 'criterion (blocked story) — a discovery a story is blocked on is refused, naming the story' do
+    it 'refuses deletion and names the blocked story slug' do
+      story = store.create_story(epic_id: ctx.epic['id'], slug: 'the-blocked-story', title: 'The Blocked Story')
+      disc  = discovery('findings_ready')
+      store.block_story(story['id'], blocked_on: 'waiting on this', blocked_on_discovery: disc['id'])
+
+      _out, err = capture_io do
+        expect { Tyrion::Commands.cmd_discovery_delete([disc['id']], store) }.to raise_error(SystemExit)
+      end
+      expect(err).to include(disc['id'])
+      expect(err).to include('the-blocked-story')
+
+      expect(store.find_discovery(disc['id'])).not_to be_nil
+    end
+  end
+
   context 'unknown disc-id' do
     it 'prints not found and exits 1' do
       _out, err = capture_io do
@@ -64,6 +78,19 @@ RSpec.describe 'Tyrion::Commands.cmd_discovery_delete' do
       end
       expect(err).to include('disc-999')
       expect(err).to include('not found')
+    end
+  end
+
+  context 'project scope — same boundary as cmd_discover_upgrade' do
+    it 'reports not found (not a leak) for a discovery belonging to another project, and does not delete it' do
+      other   = store.create_project(slug: 'other-proj', name: 'Other')
+      foreign = store.create_discovery(project_id: other['id'], status: 'mark', question: 'theirs')
+
+      _out, err = capture_io do
+        expect { Tyrion::Commands.cmd_discovery_delete([foreign['id']], store) }.to raise_error(SystemExit)
+      end
+      expect(err).to include('not found')
+      expect(store.find_discovery(foreign['id'])).not_to be_nil
     end
   end
 
