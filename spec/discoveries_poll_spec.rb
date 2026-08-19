@@ -116,6 +116,19 @@ RSpec.describe 'discoveries poll' do
       expect(html).to include('data-token="tok123"')
     end
 
+    # Locks the view's "⚠ aging" badge to the exact same predicate the token
+    # fingerprints (TyrionWeb::Data.aged?) -- a divergence here means a tab can
+    # show the badge on one side of the threshold while the token (and thus the
+    # reload it triggers) flips on the other.
+    it 'renders the aging badge in lockstep with TyrionWeb::Data.aged?' do
+      just_under = disc('disc-003', 'q', created_at: age_iso(2.7))
+      html = render(findings_ready: [just_under])
+
+      expect(html.include?('dv-aging-badge')).to eq(
+        TyrionWeb::Data.aged?(just_under['created_at'], TyrionWeb::Data::READY_AGING_DAYS)
+      )
+    end
+
     it 'reuses active_story.rb\'s #poll-badge/#poll-dot ids so shared.css\'s fade-in/pulse animations apply' do
       html = render
 

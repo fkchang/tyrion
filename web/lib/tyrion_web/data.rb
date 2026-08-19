@@ -181,9 +181,11 @@ module TyrionWeb
       { project: project, spike: spike, findings_ready: findings_ready, marks: marks }
     end
 
-    # Aging thresholds shared with Views::DiscoveriesView's own badge rendering
-    # (render_ready_section / render_marks_section) — kept here too so the token
-    # can fingerprint what the page actually renders (see discoveries_token).
+    # Aging thresholds — the single source both the token (discoveries_token,
+    # below) and Views::DiscoveriesView's badge rendering (render_ready_section
+    # / render_marks_section) call through .aged? for, so the "⚠ aging" badge
+    # and the fingerprint that decides whether to reload can never disagree
+    # about which side of the threshold a row is on.
     READY_AGING_DAYS = 3
     MARK_AGING_DAYS  = 14
 

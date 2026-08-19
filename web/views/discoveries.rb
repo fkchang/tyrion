@@ -84,8 +84,7 @@ module Views
           div(class: "dv-section-title") { "findings_ready — #{@findings_ready.size} #{@findings_ready.size == 1 ? 'discovery' : 'discoveries'}" }
         end
         @findings_ready.each do |d|
-          age_days = d['created_at'] ? ((Time.now - Time.parse(d['created_at'])) / 86400).round : 0
-          aging = age_days >= 3
+          aging = TyrionWeb::Data.aged?(d['created_at'], TyrionWeb::Data::READY_AGING_DAYS)
           div(class: "dv-card ready", id: d['id']) do
             div(class: "dv-card-id") do
               plain "#{d['id']} · found #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
@@ -114,10 +113,7 @@ module Views
           div(class: "dv-section-title") { "marks — #{@marks.size} unformalized" }
         end
         @marks.each do |d|
-          # Unrounded so the badge flips at a full 14 days, not at 13.5 like the
-          # rounded age findings_ready uses.
-          age_days = d['created_at'] ? (Time.now - Time.parse(d['created_at'])) / 86400 : 0
-          aging = age_days >= 14
+          aging = TyrionWeb::Data.aged?(d['created_at'], TyrionWeb::Data::MARK_AGING_DAYS)
           div(class: "dv-card mark", id: d['id']) do
             div(class: "dv-card-id") do
               plain "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
@@ -169,7 +165,7 @@ module Views
 
             function poll() {
               fetch('/api/discoveries_poll?project=' + encodeURIComponent(slug))
-                .then(function(r) { return r.json(); })
+                .then(function(r) { if (!r.ok) throw new Error('poll'); return r.json(); })
                 .then(function(data) {
                   dot.style.background = 'var(--amber)';
                   if (data.token && data.token !== knownToken) {

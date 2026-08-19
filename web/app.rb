@@ -166,10 +166,11 @@ end
 
 # Reload-on-change companion for the Discoveries index — resolution mirrors
 # load_discoveries_view exactly so the poller can never disagree with what the
-# page itself resolved to. Unlike /api/ambient_poll, load_discoveries_view has
-# no nil-project fallback, so an unresolved project really does 404 here; the
-# page's seeded token means a stray null from this branch is inert rather than
-# wedging the poller (see Views::DiscoveriesView's poll JS).
+# page itself resolved to. Unlike /api/ambient_poll, an unknown ?project= slug
+# does NOT fall back to the active project here — the index is a scoped page,
+# not a glance pane, so it 404s rather than silently showing another project's
+# discoveries; the page's seeded token means a stray null from this branch is
+# inert rather than wedging the poller (see Views::DiscoveriesView's poll JS).
 get "/api/discoveries_poll" do
   content_type :json
   d = TyrionWeb::Data.load_discoveries_view(project_slug: params[:project])
