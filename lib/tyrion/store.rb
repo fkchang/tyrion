@@ -1284,6 +1284,24 @@ module Tyrion
       end
     end
 
+    def delete_discovery(id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+          raise "Discovery not found: #{id}" unless disc
+
+          if disc['status'] == 'promoted_to_story'
+            story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [disc['story_id']])
+            name  = story ? (story['slug'] || story['id']) : disc['story_id']
+            raise "Discovery #{id} was promoted to story #{name} — cannot delete a discovery that became a story"
+          end
+
+          db.execute('DELETE FROM discoveries WHERE id = ?', [id])
+          disc
+        end
+      end
+    end
+
     def promote_discovery_to_story(disc_id, epic_id:, slug:, title:, intent:)
       with_db do |db|
         db.transaction(:immediate) do

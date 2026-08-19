@@ -1746,10 +1746,11 @@ module Tyrion
       when 'list'     then cmd_discovery_list(args, store)
       when 'show'     then cmd_discovery_show(args, store)
       when 'defer'    then cmd_discovery_defer(args, store)
+      when 'delete'   then cmd_discovery_delete(args, store)
       when 'search'   then cmd_discovery_search(args, store)
       when 'headline' then cmd_discovery_headline(args, store)
       else
-        die "Usage: tyrion discovery [list|show|defer|search|headline]"
+        die "Usage: tyrion discovery [list|show|defer|delete|search|headline]"
       end
     end
 
@@ -1841,6 +1842,19 @@ module Tyrion
       return puts "already deferred, nothing to do: #{defer_summary(disc)}" if disc['status'] == 'deferred'
 
       puts "[deferred] #{defer_summary(store.defer_discovery(disc_id, reason: reason))}"
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    def self.cmd_discovery_delete(args, store)
+      disc_id = args.shift
+      die "Usage: tyrion discovery delete <disc-id>" unless disc_id
+
+      disc = store.find_discovery(disc_id)
+      die "Discovery #{disc_id} not found" unless disc
+
+      store.delete_discovery(disc_id)
+      puts "[deleted] #{disc_id}"
     rescue RuntimeError => e
       die e.message
     end
