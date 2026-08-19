@@ -46,6 +46,19 @@ Then record the arc in the project ABOUT.md `## Timeline` section so the next ag
 - YYYY-MM-DD | <epic-slug> shipped (N/N) | review: <one-line finding> | spawned: <slug>
 ```
 
+**Then look at what the seal just unlocked — don't go silent on next-epic choice.** `tyrion
+epic complete` already prints a line naming any epic whose last unmet prerequisite was this
+one:
+
+```
+Unlocked: <slug> — now eligible (tyrion epic activate <slug>)
+```
+
+When that line appears, don't just note it — offer to act on it: ask the user whether to run
+`tyrion epic activate <slug>` now (or, for more than one unlocked epic, `tyrion epic waves`
+to see them grouped and let the user pick). When the line is absent, say so plainly ("nothing
+else was waiting on this epic") rather than leaving next-epic choice unaddressed.
+
 ## Honesty flip
 
 Sealing is reversible by reality: if a story in a sealed epic is later started, claimed, blocked, or a new pending story is imported, the epic automatically flips back to `active`. You never have to un-seal manually.

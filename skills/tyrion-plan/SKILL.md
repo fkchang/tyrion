@@ -58,17 +58,23 @@ With this skill:
    `codex-vet` gate in the ledger. This is the first-class form of "write up a
    plan, have Codex vet it, then ingest into tyrion."
 
-3. **Also produce a feature file.** The plan's stories → Gherkin scenarios:
-   - One epic per major initiative
+3. **Also produce a feature file — or several.** The plan's stories → Gherkin scenarios:
+   - One epic per cohesive arc, not one epic per plan. A plan that genuinely spans more than
+     one arc (a foundation phase other work builds on, or two independent tracks) gets one
+     `.feature` file per epic rather than being flattened into a single artificial epic.
+   - When it does span more than one epic, note the ordering the plan implies (phase 2 needs
+     phase 1 done) — that becomes a `tyrion epic depends add` edge at import time, below.
    - One scenario per story, with the narrative (As a / In order to / I want)
      and sharp Given/When/Then criteria
    - The plan's Verification section IS the UAT runbook for each story's Step 7.5
-   - Save to `features/<epic-slug>.feature`
+   - Save to `features/<epic-slug>.feature` (one file per epic)
 
 4. On `ExitPlanMode` — when the user approves — **the first action is:**
    ```bash
    tyrion import features/<epic-slug>.feature
-   tyrion epic activate <epic-slug>
+   # repeat per epic if the plan spanned more than one, then wire any ordering:
+   tyrion epic depends add <later-epic-slug> <earlier-epic-slug>
+   tyrion epic activate <epic-slug>   # the epic with no unmet prereqs — the one to start on
    ```
    Then immediately invoke `/tyrion-implement` for the first story.
 
@@ -77,8 +83,9 @@ With this skill:
 **Do not write any code yet.** First:
 
 ```bash
-tyrion import features/<epic-slug>.feature   # ingest the plan into the ledger
-tyrion epic activate <epic-slug>             # set it as the active epic
+tyrion import features/<epic-slug>.feature   # ingest the plan into the ledger — once per epic
+tyrion epic depends add <later-epic-slug> <earlier-epic-slug>   # only if the plan spans >1 epic
+tyrion epic activate <epic-slug>             # set the startable epic as active
 tyrion status                                # confirm all stories are pending
 ```
 
