@@ -44,12 +44,16 @@ module Views
     private
 
     def render_origin(disc)
-      tag = TyrionWeb::Presenter.origin_tag(disc['origin'])
-      span(class: tag[:css]) { tag[:text] }
+      render_tag(TyrionWeb::Presenter.origin_tag(disc['origin']))
     end
 
     def render_verdict(disc)
-      tag = TyrionWeb::Presenter.verdict_tag(disc['verdict'])
+      render_tag(TyrionWeb::Presenter.verdict_tag(disc['verdict']))
+    end
+
+    # origin_tag always returns a tag; verdict_tag returns nil when unscored (nothing
+    # honest to show) -- one nil guard here covers both callers.
+    def render_tag(tag)
       return unless tag
 
       span(class: tag[:css]) { tag[:text] }

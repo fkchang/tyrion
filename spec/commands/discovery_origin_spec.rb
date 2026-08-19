@@ -226,20 +226,27 @@ RSpec.describe 'discovery origin (agent vs human)' do
       expect(out).to include('[agent]')
     end
 
-    it 'renders verdict distinctly from status' do
+    it 'renders a humanized verdict distinctly from status' do
       store.create_discovery(project_id: ctx.project['id'], status: 'active_spike', question: 'q2')
       spike = store.active_spike_for(ctx.project['id'])
-      disc  = store.close_spike(spike['id'], finding: 'f', confidence: 'high', recommendation: 'r', verdict: 'confirmed')
+      disc  = store.close_spike(spike['id'], finding: 'f', confidence: 'high', recommendation: 'r',
+                                              verdict: 'falsified_alternative')
 
       out, = capture_io { Tyrion::Commands.cmd_discovery_show([disc['id']], store) }
       expect(out).to match(/\[findings_ready\]/)
-      expect(out).to match(/Verdict:\s+confirmed/)
+      expect(out).to match(/Verdict:\s+falsified alternative/)
     end
 
-    it 'shows unscored when no verdict was recorded' do
-      d = store.create_discovery(project_id: ctx.project['id'], status: 'mark', question: 'q3')
+    it 'shows unscored for a findings_ready discovery closed without --verdict' do
+      d = store.create_discovery(project_id: ctx.project['id'], status: 'findings_ready', question: 'q3')
       out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
       expect(out).to match(/Verdict:\s+\(unscored\)/)
+    end
+
+    it 'omits the Verdict line entirely for a mark (can never carry one)' do
+      d = store.create_discovery(project_id: ctx.project['id'], status: 'mark', question: 'q4')
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
+      expect(out).not_to match(/Verdict:/)
     end
   end
 end

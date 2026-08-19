@@ -1819,7 +1819,13 @@ module Tyrion
       die "Discovery #{disc_id} not found" unless disc
 
       puts "#{disc['id']}  [#{disc['status']}]  #{Output.origin_tag(disc['origin'])}"
-      puts "Verdict:        #{disc['verdict'] || '(unscored)'}"
+      # Gated to statuses that can ever carry a verdict (only Store#close_spike writes one,
+      # on the active_spike -> findings_ready transition) -- a mark or a still-open spike
+      # printing "(unscored)" would be a permanently meaningless line on the most common
+      # discovery type, not an honest "nothing recorded yet".
+      unless %w[mark active_spike].include?(disc['status'])
+        puts "Verdict:        #{disc['verdict'] ? Output.verdict_label(disc['verdict']) : '(unscored)'}"
+      end
       puts "Headline:       #{disc['headline']}" if disc['headline']
       puts "Question:       #{disc['question'] || '—'}"
       puts "Finding:        #{disc['finding'] || '—'}"
@@ -1860,7 +1866,9 @@ module Tyrion
       when 'promote' then cmd_spike_promote(args, store)
       else
         $stderr.puts "Unknown spike subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion spike start \"your question\" [--auto]\n       tyrion spike done [--auto]\n       tyrion spike promote <disc-id>"
+        $stderr.puts "Usage: tyrion spike start \"your question\" [--auto]\n" \
+                     "       tyrion spike done [--auto] [--verdict <#{Store::VERDICTS.join('|')}>]\n" \
+                     "       tyrion spike promote <disc-id>"
         exit 1
       end
     end
@@ -1892,16 +1900,10 @@ module Tyrion
       output.puts "[active_spike] #{disc['id']}"
     end
 
-    # confirmed: hypothesis held. falsified: it didn't, no alternative found. falsified_alternative:
-    # it didn't, but the spike surfaced what's true instead. partial: some held, some didn't.
-    VALID_VERDICTS = %w[confirmed falsified falsified_alternative partial].freeze
-
     def self.cmd_spike_done(args, store, input: $stdin, output: $stdout)
       origin  = consume_auto_flag(args, default: nil)
       verdict = extract_flag_value(args, '--verdict')
-      if verdict && !VALID_VERDICTS.include?(verdict)
-        die "Unknown verdict '#{verdict}'. Valid: #{VALID_VERDICTS.join(', ')}"
-      end
+      die "Unknown verdict '#{verdict}'. Valid: #{Store::VERDICTS.join(', ')}" if verdict && !Store::VERDICTS.include?(verdict)
 
       project, = resolve_project_epic(store, require_epic: false)
 
@@ -3902,7 +3904,8 @@ module Tyrion
           tyrion discover <disc-id> --finding "…"  Upgrade a mark → findings_ready, no prompts
                                                     ([--question "…"] [--headline "…"])
           tyrion spike start "question" [--auto]   Frame a known unknown → active_spike
-          tyrion spike done [--auto]               Close spike with finding + confidence + recommendation
+          tyrion spike done [--auto] [--verdict <v>] Close spike with finding + confidence + recommendation
+                                                    (verdict: #{Store::VERDICTS.join('|')})
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
           tyrion discovery list [--status <alias>] List discoveries (aliases: active|marks|ready|promoted|deferred|all)
           tyrion discovery show <disc-id>          Show full discovery detail

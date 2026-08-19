@@ -1264,7 +1264,7 @@
   .dv-card.ready { border-left: 3px solid var(--cyan); }
   .dv-card.mark  { border-left: 3px solid rgba(107,75,34,.5); background: var(--parchment-aged); }
   .dv-card-id { font-size: 12px; color: var(--ink-faint); margin-bottom: 5px; display: flex; align-items: center; gap: 8px; }
-  .dv-origin {
+  .dv-origin, .dv-verdict {
     display: inline-block;
     font-size: 10px;
     border-radius: 3px;
@@ -1274,15 +1274,7 @@
   }
   .dv-origin.agent { color: #1f6f7a; background: rgba(31,111,122,.09); border: 1px solid rgba(31,111,122,.4); }
   .dv-origin.human { color: var(--ink-faint); background: rgba(107,75,34,.06); border: 1px solid rgba(107,75,34,.3); }
-  .dv-verdict {
-    display: inline-block;
-    font-size: 10px;
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-family: 'IBM Plex Mono', monospace;
-    letter-spacing: .04em;
-    text-transform: uppercase;
-  }
+  .dv-verdict { text-transform: uppercase; }
   .dv-verdict-confirmed             { color: var(--emerald); background: var(--emerald-bg); border: 1px solid var(--emerald); }
   .dv-verdict-falsified             { color: var(--crimson); background: var(--crimson-bg); border: 1px solid var(--crimson-border); }
   .dv-verdict-falsified-alternative { color: var(--violet);  background: var(--violet-bg);  border: 1px solid var(--violet-border); }

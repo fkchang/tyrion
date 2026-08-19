@@ -152,7 +152,7 @@ module TyrionWeb
     def self.verdict_tag(verdict)
       return nil unless verdict
 
-      { text: verdict, css: "dv-verdict dv-verdict-#{verdict.tr('_', '-')}" }
+      { text: Tyrion::Output.verdict_label(verdict), css: "dv-verdict dv-verdict-#{verdict.tr('_', '-')}" }
     end
 
     def self.epic_seal_glyph(epic, active_epic_id)

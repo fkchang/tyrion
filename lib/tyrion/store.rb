@@ -1217,6 +1217,16 @@ module Tyrion
       end
     end
 
+    # The verdict vocabulary, colocated with the column it scores (see the
+    # add_verdict_to_discoveries migration's CHECK below, which enumerates the same four
+    # values) and the only method that ever writes one (#close_spike) -- so command-layer
+    # validation has exactly one source to read instead of a second copy that can drift out
+    # of step with what the schema actually accepts.
+    #
+    # confirmed: hypothesis held. falsified: it didn't, no alternative found. falsified_alternative:
+    # it didn't, but the spike surfaced what's true instead. partial: some held, some didn't.
+    VERDICTS = %w[confirmed falsified falsified_alternative partial].freeze
+
     # origin is who *filed* the discovery, set at spike start. A close only overwrites it
     # when the closer explicitly claims authorship (origin: 'agent' from --auto); passing
     # nil preserves whatever is stored, so closing an agent-framed spike without the flag
@@ -1993,10 +2003,8 @@ module Tyrion
         cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
         next if cols.include?('verdict')
 
-        db.execute(
-          "ALTER TABLE discoveries ADD COLUMN verdict TEXT " \
-          "CHECK(verdict IS NULL OR verdict IN ('confirmed','falsified','falsified_alternative','partial'))"
-        )
+        allowed = Tyrion::Store::VERDICTS.map { |v| "'#{v}'" }.join(',')
+        db.execute("ALTER TABLE discoveries ADD COLUMN verdict TEXT CHECK(verdict IS NULL OR verdict IN (#{allowed}))")
       }]
     ].freeze
 
