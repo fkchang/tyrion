@@ -1624,11 +1624,18 @@ module Tyrion
       args.delete('--auto') ? 'agent' : default
     end
 
+    MARK_USAGE = %(Usage: tyrion mark "description" [--headline "…"] [--auto])
+
     def self.cmd_mark(args, store)
       return puts "No active project." unless Repo.active_project
 
-      origin        = consume_auto_flag(args)
-      headline      = extract_flag_value(args, '--headline')
+      origin   = consume_auto_flag(args)
+      headline = extract_flag_value(args, '--headline')
+      # Anything left that's still flag-shaped (--foo), wherever it landed, is an
+      # unrecognized flag — die instead of silently folding it into the question (disc-026).
+      unknown = args.find { |a| a.start_with?('--') }
+      die "Unknown flag #{unknown}\n#{MARK_USAGE}" if unknown
+
       project, epic = resolve_project_epic(store, require_epic: false)
       # Read-only lane lookup, never resolve_my_story: filing a mark must not
       # claim, adopt, or pin a story as a side effect of noticing something.

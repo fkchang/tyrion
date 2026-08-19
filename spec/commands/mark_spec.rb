@@ -52,4 +52,39 @@ RSpec.describe 'tyrion mark' do
       expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
     end
   end
+
+  describe 'unrecognized flags' do
+    it 'exits with a usage error on stderr and creates no discovery, flag first' do
+      ctx # materialise worktree stubs first
+
+      expect { Tyrion::Commands.cmd_mark(['--list'], store) }.to raise_error(SystemExit)
+        .and output(/Unknown flag --list/).to_stderr
+
+      expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
+    end
+
+    it 'also rejects an unrecognized flag that lands after the description' do
+      ctx
+
+      expect { Tyrion::Commands.cmd_mark(['some description', '--typo', 'x'], store) }
+        .to raise_error(SystemExit).and output(/Unknown flag --typo/).to_stderr
+
+      expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
+    end
+  end
+
+  # --auto still working alongside free text (recognized flags unaffected) is already
+  # covered by discovery_origin_spec.rb's 'tyrion mark' examples — no need to duplicate here.
+
+  describe 'free-text content that is not flag-shaped' do
+    it 'is accepted unchanged even when it starts with a single dash' do
+      ctx
+
+      out, = capture_io { Tyrion::Commands.cmd_mark(['-1 off by one somewhere'], store) }
+
+      disc_id = out.match(/\[mark\] (disc-\d+)/)[1]
+      disc = store.find_discovery(disc_id)
+      expect(disc['question']).to eq '-1 off by one somewhere'
+    end
+  end
 end
