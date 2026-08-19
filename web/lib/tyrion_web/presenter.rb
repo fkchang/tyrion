@@ -145,6 +145,27 @@ module TyrionWeb
       { text: Tyrion::Output.origin_label(origin), css: css }
     end
 
+    # Both expect the {spike:, ready_count:, mark_count:} shape
+    # Data.load_discovery_summary returns (global-view-discovery-momentum).
+
+    def self.discovery_activity?(disc_summary)
+      return true if disc_summary[:spike]
+      disc_summary[:ready_count].positive? || disc_summary[:mark_count].positive?
+    end
+
+    # One-line summary for a project card that has no epic story activity to
+    # describe instead.
+    def self.discovery_summary_text(disc_summary)
+      parts = []
+      parts << 'spike active' if disc_summary[:spike]
+      parts << "#{disc_summary[:ready_count]} ready to promote" if disc_summary[:ready_count].positive?
+      if disc_summary[:mark_count].positive?
+        n = disc_summary[:mark_count]
+        parts << "#{n} mark#{'s' unless n == 1}"
+      end
+      parts.join(' · ')
+    end
+
     def self.epic_seal_glyph(epic, active_epic_id)
       if epic['status'] == 'done'       then '✓'
       elsif epic['id'] == active_epic_id then '⚑'
