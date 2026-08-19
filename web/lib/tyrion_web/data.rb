@@ -151,11 +151,15 @@ module TyrionWeb
 
         in_progress = active_epic ? store.in_progress_story(active_epic['id']) : nil
         total = done_count + pending_count + blocked_count + active_count
+        disc_summary = load_discovery_summary(proj['id'])
+        has_discovery_activity = disc_summary[:spike] || disc_summary[:ready_count] > 0 || disc_summary[:mark_count] > 0
 
         card_status = if active_count > 0
           in_progress && TyrionWeb::Presenter.stale?(in_progress['last_note_at']) ? :stale : :active
         elsif total > 0 && pending_count == 0 && blocked_count == 0 && active_count == 0
           :done
+        elsif total == 0 && has_discovery_activity
+          :discovery
         else
           :idle
         end
@@ -163,7 +167,7 @@ module TyrionWeb
         {
           project: proj, active_epic: active_epic, in_progress: in_progress,
           done: done_count, pending: pending_count, blocked: blocked_count, active: active_count,
-          total: total, last_note_at: last_note_at, status: card_status
+          total: total, last_note_at: last_note_at, status: card_status, disc_summary: disc_summary
         }
       end
 
