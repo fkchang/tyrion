@@ -176,7 +176,11 @@ module TyrionWeb
 
       spike          = store.active_spike_for(project['id'])
       findings_ready = store.list_discoveries(project_id: project['id'], status: 'findings_ready')
+      # A mark filed under an active_spike (parent_spike_id set) is shown nested
+      # under that spike's own show page instead -- excluded here so it isn't
+      # listed twice.
       marks          = store.list_discoveries(project_id: project['id'], status: 'mark')
+                             .reject { |m| m['parent_spike_id'] }
 
       { project: project, spike: spike, findings_ready: findings_ready, marks: marks }
     end
@@ -253,12 +257,22 @@ module TyrionWeb
       epic         = disc['epic_id'] && store.find_epic_by_id(disc['epic_id'])
       sidebar_epic = epic || resolve_active_epic(project)
 
+      # Marks filed under this discovery while it was the project's active_spike
+      # (parent_spike_id == disc['id']) -- shown nested here instead of on the
+      # flat /discoveries index (load_discoveries_view excludes them for the
+      # same reason). Scoped to status='mark' to mirror exactly what got
+      # excluded there; a mark that has since moved on (promoted, deferred)
+      # keeps its own show page rather than reappearing nested on this one.
+      child_marks = project ? store.list_discoveries(project_id: project['id'], status: 'mark')
+                                    .select { |m| m['parent_spike_id'] == disc['id'] } : []
+
       {
         discovery: disc, project: project, epic: epic, sidebar_epic: sidebar_epic,
         epics: project ? store.list_epics(project['id']) : [],
         stories: sidebar_epic ? store.stories_for_epic(sidebar_epic['id']) : [],
         disc_summary: project ? load_discovery_summary(project['id']) : empty_disc_summary,
         epic_switcher: epic_switcher_epics(project),
+        child_marks: child_marks,
         git_branch:  safe_git_branch,
         dirty_count: safe_dirty_count
       }

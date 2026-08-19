@@ -181,6 +181,7 @@ get "/discoveries/:id" do
     discovery: d[:discovery], epics: d[:epics],
     stories: d[:stories], disc_summary: d[:disc_summary],
     epic_switcher: d[:epic_switcher],
+    child_marks: d[:child_marks],
     flash: flash,
     **base_git
   )

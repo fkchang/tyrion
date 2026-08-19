@@ -1,8 +1,39 @@
 # frozen_string_literal: true
 
+require 'cgi'
+require 'phlex'
+
 module TyrionWeb
   module Presenter
     STALE_HOURS = 4
+
+    # A string already known to be safe to inject as raw HTML (its content was
+    # escaped up front, before any tags were added). Phlex's `raw` requires a
+    # Phlex::SGML::SafeObject -- this is the minimal wrapper, not a general
+    # "trust me" escape hatch.
+    class SafeHTML < String
+      include Phlex::SGML::SafeObject
+    end
+
+    # Minimal markdown -- not a general renderer. Spike/discovery prose is
+    # short free text (question, hypothesis, finding, recommendation), so this
+    # covers what that prose actually uses: paragraphs, inline code, bold,
+    # italic. No gem dependency (discoveries-markdown-rendering, a sibling
+    # story, owns building the real shared helper once dispatched -- this is
+    # the "reasonable minimal approach" called for until then). Input is
+    # HTML-escaped FIRST, so every markup char below is one this method added
+    # itself -- there is no path from raw user text to an unescaped tag.
+    def self.markdown_lite(text)
+      return SafeHTML.new('') if text.nil? || text.strip.empty?
+
+      escaped = CGI.escapeHTML(text)
+      escaped.gsub!(/`([^`\n]+)`/, '<code>\1</code>')
+      escaped.gsub!(/\*\*([^*\n]+)\*\*/, '<strong>\1</strong>')
+      escaped.gsub!(/(?<!\*)\*([^*\n]+)\*(?!\*)/, '<em>\1</em>')
+
+      html = escaped.split(/\n{2,}/).map { |para| "<p>#{para.gsub("\n", '<br>')}</p>" }.join
+      SafeHTML.new(html)
+    end
 
     def self.story_status(status)
       case status
