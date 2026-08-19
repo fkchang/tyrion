@@ -99,4 +99,48 @@ RSpec.describe 'TyrionWeb::Data.load_roadmap_view' do
       end
     end
   end
+
+  # web-epic-tree: unmet/child_stats/graph decoration for the new
+  # :waiting/:container presenter states -- all derived from a single
+  # epic_graph snapshot, no per-epic queries.
+  describe 'criterion 4/5: unmet + child_stats decoration' do
+    before do
+      store.set_epic_parent(epic_b['id'], epic_a['id'])
+      store.create_epic(project_id: project['id'], slug: 'blocker', name: 'Blocker')
+      store.add_epic_dependency(epic_b['id'], 'blocker')
+      make_story(epic_id: epic_b['id'], slug: 's1')
+    end
+
+    it 'decorates a leaf epic with its unmet prerequisites' do
+      eb = all_epics.find { |e| e['slug'] == 'ep-b' }
+      expect(eb['unmet'].map { |u| u[:slug] }).to eq ['blocker']
+      expect(eb['child_stats']).to be_nil
+    end
+
+    it 'decorates a container epic (has descendants, no own stories) with sealed roll-up counts' do
+      ea = all_epics.find { |e| e['slug'] == 'ep-a' }
+      expect(ea['child_stats']).to eq(done: 0, total: 2)
+    end
+
+    it 'clears unmet once the prerequisite is sealed' do
+      blocker = all_epics.find { |e| e['slug'] == 'blocker' }
+      store.update_epic(blocker['id'], 'status' => 'done')
+      eb = TyrionWeb::Data.load_roadmap_view(project_slug: 'rm-proj')[:active_epics].find { |e| e['slug'] == 'ep-b' }
+      expect(eb['unmet']).to eq []
+    end
+  end
+
+  describe 'criterion 6: graph: is the single epic_graph snapshot everything else was decorated from' do
+    before { epic_a; epic_b }
+
+    it 'is present and contains every epic in the project' do
+      expect(result[:graph][:by_slug].keys).to contain_exactly('ep-a', 'ep-b')
+    end
+
+    it 'is the empty-safe EMPTY_EPIC_GRAPH shape when no project resolves' do
+      view = TyrionWeb::Data.load_roadmap_view(project_slug: 'no-such-project')
+      expect(view[:project]).to be_nil
+      expect(view[:graph]).to eq(TyrionWeb::Data::EMPTY_EPIC_GRAPH)
+    end
+  end
 end

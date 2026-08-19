@@ -7,8 +7,8 @@ RSpec.describe 'TyrionWeb::Presenter.epic_state' do
   let(:epic_id) { 42 }
   let(:active_epic_id) { nil }
 
-  def epic(status: 'active', archived_at: nil)
-    { 'id' => epic_id, 'status' => status, 'archived_at' => archived_at }
+  def epic(status: 'active', archived_at: nil, unmet: [], child_stats: nil)
+    { 'id' => epic_id, 'status' => status, 'archived_at' => archived_at, 'unmet' => unmet, 'child_stats' => child_stats }
   end
 
   def story(status:, last_note_at: nil)
@@ -144,6 +144,87 @@ RSpec.describe 'TyrionWeb::Presenter.epic_state' do
     let(:stories) { [story(status: 'in_progress', last_note_at: stale_ts)] }
     it 'label includes the hours-idle string' do
       expect(subject[:label]).to match(/\dh ago|\d+h/)
+    end
+  end
+
+  # ── criterion 14: container ──────────────────────────────────────────────────
+  # web-epic-tree: a zero-own-story epic with descendants (child_stats set)
+  # reads :container instead of :empty, showing the derived sealed roll-up.
+  context 'zero own stories, child_stats present (has descendants)' do
+    let(:epic_opts) { { child_stats: { done: 1, total: 3 } } }
+    let(:stories) { [] }
+
+    it 'state is :container' do
+      expect(subject[:state]).to eq :container
+    end
+
+    it 'label reports the sealed-descendant roll-up' do
+      expect(subject[:label]).to eq 'container · 1/3 sealed'
+    end
+  end
+
+  # :sealed outranks :container -- a sealed empty container (every child
+  # sealed, none of its own stories) still reads sealed, not container.
+  context 'status is done, zero own stories, child_stats present' do
+    let(:epic_opts) { { status: 'done', child_stats: { done: 3, total: 3 } } }
+    let(:stories) { [] }
+
+    it 'state is :sealed' do
+      expect(subject[:state]).to eq :sealed
+    end
+  end
+
+  context 'child_stats present but the epic has its own stories too' do
+    let(:epic_opts) { { child_stats: { done: 1, total: 3 } } }
+    let(:stories) { [story(status: 'pending')] }
+
+    it 'does not read as :container' do
+      expect(subject[:state]).not_to eq :container
+    end
+  end
+
+  # ── criterion 15: waiting ────────────────────────────────────────────────────
+  # web-epic-tree: an active epic with an unmet prerequisite and no stories
+  # in flight reads :waiting.
+  context 'active, unmet prerequisite, no in_progress stories' do
+    let(:epic_opts) { { unmet: [{ slug: 'other-epic', reason: :active }] } }
+    let(:stories) { [story(status: 'pending')] }
+
+    it 'state is :waiting' do
+      expect(subject[:state]).to eq :waiting
+    end
+
+    it 'label names the unmet prerequisite' do
+      expect(subject[:label]).to include('waiting').and include('other-epic')
+    end
+  end
+
+  # :active/:cold outrank :waiting -- in-progress work still reads
+  # active/cold even if a prerequisite later regressed.
+  context 'unmet prerequisite but a fresh in_progress story' do
+    let(:epic_opts) { { unmet: [{ slug: 'other-epic', reason: :active }] } }
+    let(:stories) { [story(status: 'in_progress', last_note_at: fresh_ts)] }
+
+    it 'state is :active, not :waiting' do
+      expect(subject[:state]).to eq :active
+    end
+  end
+
+  context 'unmet prerequisite but a stale in_progress story' do
+    let(:epic_opts) { { unmet: [{ slug: 'other-epic', reason: :active }] } }
+    let(:stories) { [story(status: 'in_progress', last_note_at: stale_ts)] }
+
+    it 'state is :cold, not :waiting' do
+      expect(subject[:state]).to eq :cold
+    end
+  end
+
+  context 'paused epic with an unmet prerequisite' do
+    let(:epic_opts) { { status: 'paused', unmet: [{ slug: 'other-epic', reason: :active }] } }
+    let(:stories) { [story(status: 'pending')] }
+
+    it 'state is :paused, not :waiting -- its own status_tag already explains it' do
+      expect(subject[:state]).to eq :paused
     end
   end
 end
