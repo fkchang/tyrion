@@ -161,6 +161,17 @@ get "/discoveries" do
   )
 end
 
+# Reload-on-change companion for the Discoveries index — resolution mirrors
+# load_discoveries_view exactly (including its nil-project fallback) so the
+# poller can never disagree with what the page itself resolved to.
+get "/api/discoveries_poll" do
+  content_type :json
+  d = TyrionWeb::Data.load_discoveries_view(project_slug: params[:project])
+  halt 404, { token: nil }.to_json unless d[:project]
+
+  { token: TyrionWeb::Data.discoveries_token(d) }.to_json
+end
+
 get "/discoveries/:id" do
   d = TyrionWeb::Data.load_discovery_show_view(params[:id])
   unless d[:discovery]

@@ -38,6 +38,10 @@ module Views
             end
           end
         end
+        if @project
+          render_monitor_badge
+          render_js
+        end
       end
     end
 
@@ -126,6 +130,56 @@ module Views
             end
           end
         end
+      end
+    end
+
+    # Live polling, reload-on-change — same pattern as active_story.rb's
+    # /api/poll badge, scoped to the /discoveries index only (see this
+    # story's scope note: the per-discovery show page is a separate story).
+    def render_monitor_badge
+      div(id: "discoveries-poll-badge",
+          style: "position:fixed;bottom:16px;right:16px;background:rgba(20,16,10,.88);border:1px solid rgba(180,140,80,.35);border-radius:20px;padding:6px 14px;display:flex;align-items:center;gap:6px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--amber-dim);z-index:900;backdrop-filter:blur(4px);cursor:default;user-select:none;",
+          data: { project: @project['slug'] }) do
+        span(id: "discoveries-poll-dot", style: "width:7px;height:7px;border-radius:50%;background:var(--amber);display:inline-block;") {}
+        span(id: "discoveries-poll-label") { "monitoring" }
+      end
+    end
+
+    def render_js
+      script do
+        raw safe(<<~JS)
+          (function() {
+            var badge = document.getElementById('discoveries-poll-badge');
+            if (!badge) return;
+            var slug = badge.dataset.project;
+            var dot = document.getElementById('discoveries-poll-dot');
+            var label = document.getElementById('discoveries-poll-label');
+            var knownToken = null;
+            var INTERVAL = 30000;
+
+            function poll() {
+              fetch('/api/discoveries_poll?project=' + encodeURIComponent(slug))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                  dot.style.background = 'var(--amber)';
+                  if (knownToken === null) {
+                    knownToken = data.token;
+                    label.textContent = 'monitoring';
+                  } else if (data.token !== knownToken) {
+                    label.textContent = 'updating…';
+                    setTimeout(function() { window.location.reload(); }, 400);
+                  }
+                })
+                .catch(function() {
+                  dot.style.background = '#666';
+                  label.textContent = 'offline';
+                });
+            }
+
+            poll();
+            setInterval(poll, INTERVAL);
+          })();
+        JS
       end
     end
   end

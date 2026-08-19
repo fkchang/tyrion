@@ -181,6 +181,23 @@ module TyrionWeb
       { project: project, spike: spike, findings_ready: findings_ready, marks: marks }
     end
 
+    # Discoveries index poll token — reload-on-change (active_story.rb's /api/poll
+    # pattern), not ambient's DOM-patch: this is a full list page, not a narrow
+    # glance pane someone is mid-read in, so a reload costs nothing. Fingerprints
+    # the spike (id + question, since a spike's question/hypothesis can be edited
+    # mid-flight), and every findings_ready/mark id + its glance-relevant content
+    # (headline/question/finding/confidence/recommendation) — a new mark, a spike
+    # closing (spike disappears, a findings_ready row appears), or an edited
+    # headline/finding all change the fingerprint.
+    def self.discoveries_token(view)
+      fingerprint = [
+        view[:spike] && [view[:spike]['id'], view[:spike]['question'], view[:spike]['hypothesis']],
+        view[:findings_ready].map { |d| [d['id'], d['headline'], d['question'], d['finding'], d['confidence'], d['recommendation']] },
+        view[:marks].map { |d| [d['id'], d['headline'], d['question']] }
+      ]
+      Digest::SHA256.hexdigest(fingerprint.to_s)[0, 16]
+    end
+
     # Ambient pane data — deliberately just the newest open marks plus a
     # findings_ready count. Unlike the other loaders, an unknown ?project=
     # slug falls back to the resolved active project instead of rendering an
