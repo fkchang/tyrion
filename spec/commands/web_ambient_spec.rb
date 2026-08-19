@@ -93,12 +93,17 @@ RSpec.describe Tyrion::WebServer do
   end
 
   describe '.open_app_window' do
-    it 'passes url and window size as separate argv entries — never a shell string' do
+    it 'passes url, window size, and a dedicated profile dir as separate argv entries — never a shell string' do
       allow(described_class).to receive(:app_mode_binary).and_return('/bin/chrome')
       allow(Process).to receive(:detach)
+      # --user-data-dir is required, not optional decoration: without it, --app=
+      # is forwarded via IPC to any already-running Chrome under the normal
+      # profile, which silently ignores --window-size (only the process that
+      # actually parses a flag honors it). See open_app_window's comment.
       expect(Process).to receive(:spawn)
         .with('/bin/chrome', '--app=http://localhost:4579/ambient?project=p',
-              '--window-size=340,960', hash_including(:out, :err))
+              '--window-size=340,960', "--user-data-dir=#{described_class.ambient_profile_dir}",
+              hash_including(:out, :err))
         .and_return(99)
 
       expect(described_class.open_app_window('http://localhost:4579/ambient?project=p')).to be true

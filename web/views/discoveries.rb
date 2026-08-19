@@ -54,7 +54,7 @@ module Views
           div(class: "dv-mini-seal spike") { "⚗" }
           div(class: "dv-section-title") { "active_spike — 1 in flight" }
         end
-        div(class: "dv-card spike") do
+        div(class: "dv-card spike", id: @spike['id']) do
           div(class: "dv-card-id") do
             plain "#{@spike['id']} · started #{TyrionWeb::Presenter.time_ago(@spike['created_at'])}"
             render_origin(@spike)
@@ -81,12 +81,13 @@ module Views
         @findings_ready.each do |d|
           age_days = d['created_at'] ? ((Time.now - Time.parse(d['created_at'])) / 86400).round : 0
           aging = age_days >= 3
-          div(class: "dv-card ready") do
+          div(class: "dv-card ready", id: d['id']) do
             div(class: "dv-card-id") do
               plain "#{d['id']} · found #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
               render_origin(d)
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
+            div(class: "dv-card-headline") { d['headline'] } if d['headline']
             div(class: "dv-card-q") { "\"#{d['question']}\"" }
             div(class: "dv-card-meta") do
               plain "Finding: #{d['finding']}" if d['finding']
@@ -112,12 +113,13 @@ module Views
           # rounded age findings_ready uses.
           age_days = d['created_at'] ? (Time.now - Time.parse(d['created_at'])) / 86400 : 0
           aging = age_days >= 14
-          div(class: "dv-card mark") do
+          div(class: "dv-card mark", id: d['id']) do
             div(class: "dv-card-id") do
               plain "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
               render_origin(d)
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
+            div(class: "dv-card-headline") { d['headline'] } if d['headline']
             div(class: "dv-card-q") { "\"#{d['question']}\"" }
             div(class: "dv-actions") do
               span(class: "dv-code-chip") { "tyrion discover #{d['id']}" }

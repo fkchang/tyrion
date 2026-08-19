@@ -1293,6 +1293,9 @@
   }
   .dv-card-meta { font-size: 13px; color: var(--ink-dim); line-height: 1.6; }
   .dv-card.mark .dv-card-q { font-size: 14px; color: var(--ink-dim); }
+  /* Agent-authored glance summary — bold, not italic, to read as the headline
+     it is; the raw question below stays as supporting detail. */
+  .dv-card-headline { font-family: 'Lora', serif; font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
   .dv-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
   .dv-btn-prim {
     background: linear-gradient(180deg, #f2aa22, #cc7908);

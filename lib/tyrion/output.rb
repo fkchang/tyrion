@@ -86,6 +86,15 @@ module Tyrion
       agent_origin?(origin) ? cyan(origin_label(origin)) : dim(origin_label(origin))
     end
 
+    # The one line a glance surface (status DISCOVERIES lane, discovery list,
+    # ambient pane) should show for a discovery: the agent-authored headline
+    # when one exists, falling back to the raw `question` for pre-headline
+    # rows. Callers still own their own truncation width — this only owns
+    # which field wins, so CLI and web can't drift on the fallback rule.
+    def self.discovery_glance_text(disc)
+      [disc['headline'], disc['question']].find { |t| t && !t.empty? } || '(no description)'
+    end
+
     def self.dark_factory?(epic) = epic['mode'] == 'dark_factory'
 
     # Bare badge text, no leading space — callers own their own spacing.

@@ -343,6 +343,8 @@ tyrion lesson add --at <trigger> "<the rule, stated as an instruction to a futur
 
 Pick `<trigger>` from the workflow moment where the mistake would actually happen again (`start`, `uat`, `pre-push-pass`, `import-existing`, or a new one if none fit — triggers are just string tags, no registry to update). Skip this for genuine one-offs; not every blocker is a lesson.
 
+**A second arm to this fork:** a concrete product gap (the capability genuinely isn't built) is not a process lesson — it belongs in `tyrion mark --auto`, where `tyrion spike promote` can later turn it into a story. Don't force a missing capability into a lesson just because you're in this step; a lesson is a rule for how an agent should behave, a mark is a note that something doesn't exist yet.
+
 Then either resolve it or stop. Do not thrash.
 
 ---
@@ -366,6 +368,29 @@ Any Write, Edit, or Bash tool call made while the story is in_progress — for a
 ```bash
 tyrion note <slug> progress "<what changed, why, which files>"
 ```
+
+**Also applies to noticing a gap, edge case, or deferred decision mid-story:**
+
+Search first, before filing anything:
+
+```bash
+tyrion discovery search "<3-5 key words>"
+```
+
+- **On a hit:** say "already tracked as disc-NNN" in your response, and record a re-sighting instead of a duplicate:
+  ```bash
+  tyrion note <slug> observation "re-encountered disc-NNN here: <file:line>"
+  ```
+- **On no hit:** choose exactly one of:
+  - **Fix now** — it's covered by this story's own criteria.
+  - **Fix inline** — under 5 minutes, you're already touching the file.
+  - **File a mark** — a real gap, out of scope: `tyrion mark "<full description>" --headline "<short, actionable summary>" --auto`. `--headline` is what renders on every glance surface (ambient pane, `tyrion status`'s DISCOVERIES lane, `discovery list`) — it exists so a human skimming cold, without your investigation context, can tell what it's about and whether to act, without a truncated fragment of `question` standing in for it.
+  - **Upgrade a prior mark** — you've already investigated it: `tyrion discover <mark-id> --question "<...>" --finding "<...>" --auto`
+  - **Block the story** — it stops you from proceeding: `tyrion block <slug> "<reason>" --discovery disc-NNN`
+
+**Two hard guardrails:**
+- **At most 3 marks per story.** Self-check via the running count `tyrion mark` already prints in its own confirmation line (`[mark] disc-NNN (Nth mark filed this story)`). A 4th means stop and tell the user — not "use judgment."
+- **Never file a mark to dodge in-scope work.** Filing something already covered by this story's own criteria is a dodge, not a discovery — `tyrion done`'s gate-refusal already blocks the story from closing with unmet criteria anyway, so a mark buys nothing there.
 
 ---
 

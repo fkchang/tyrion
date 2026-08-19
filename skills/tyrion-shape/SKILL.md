@@ -1,6 +1,11 @@
 ---
 name: tyrion-shape
-description: Use when converting messy human inputs (PRDs, scored scenario tables, brainstorm transcripts, voice notes) into canonical Tyrion draft files. Triggered by "/tyrion-shape", "shape this", "ingest these docs", "brainstorm an epic", "what's this project about", or when starting a project without a .feature file. Two modes: --from <docs> for ingestion, no args for interactive. Writes drafts, shows for review, imports on approval — no manual shell commands needed.
+description: 'Use when converting messy human inputs (PRDs, scored scenario tables, brainstorm
+  transcripts, voice notes) into canonical Tyrion draft files. Triggered by "/tyrion-shape",
+  "shape this", "ingest these docs", "brainstorm an epic", "what''s this project about",
+  or when starting a project without a .feature file. Two modes: --from <docs> for
+  ingestion, no args for interactive. Writes drafts, shows for review, imports on
+  approval — no manual shell commands needed.'
 ---
 
 # /tyrion-shape

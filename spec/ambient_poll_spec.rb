@@ -8,8 +8,9 @@ Dir.glob(File.expand_path('../web/views/*.rb', __dir__)).sort.each { |f| require
 # ambient-poll-endpoint: the poll payload carries enough to repaint both
 # sections, and the token is deliberately blind to time so aging can't ride on it.
 RSpec.describe 'ambient poll' do
-  def mark(id, question, age_days: 0)
-    { 'id' => id, 'question' => question, 'created_at' => (Time.now - age_days * 86_400).utc.iso8601 }
+  def mark(id, question, age_days: 0, headline: nil)
+    { 'id' => id, 'question' => question, 'headline' => headline,
+      'created_at' => (Time.now - age_days * 86_400).utc.iso8601 }
   end
 
   describe 'TyrionWeb::Data.ambient_token' do
@@ -69,9 +70,21 @@ RSpec.describe 'ambient poll' do
     it 'carries the marks list, not just the token' do
       payload = TyrionWeb::Data.ambient_poll_payload(view)
 
+      # :text, not :question -- the payload carries the glance-surface fallback
+      # (headline if set, else question), matching Output.discovery_glance_text.
       expect(payload[:marks]).to eq(
-        [{ id: 'disc-007', question: 'why is the poller flaky?', created_at: view[:marks].first['created_at'] }]
+        [{ id: 'disc-007', text: 'why is the poller flaky?', created_at: view[:marks].first['created_at'] }]
       )
+    end
+
+    it 'prefers headline over question when both are set' do
+      view    = { project: { 'slug' => 'am-proj' },
+                  marks: [mark('disc-008', 'a long raw question nobody should see truncated',
+                                headline: 'short glance summary')],
+                  findings_ready_count: 0 }
+      payload = TyrionWeb::Data.ambient_poll_payload(view)
+
+      expect(payload[:marks].first[:text]).to eq 'short glance summary'
     end
 
     it 'carries the findings_ready count and a token' do

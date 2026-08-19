@@ -7,7 +7,11 @@ module Views
   # criteria / git detail would be something to read rather than glance at.
   class Ambient < Phlex::HTML
     AGING_DAYS  = 14   # same threshold as the Discoveries marks aging badge
-    TRUNCATE_AT = 140
+    # ~37 chars/line at 14px IBM Plex Mono in the 340px window (312px usable
+    # after padding) -- 72 keeps a mark's question to 2 lines, a glance
+    # instead of a paragraph. .am-mark-q also line-clamps to 2 as a backstop
+    # for any word that doesn't wrap as tightly as the char-count assumes.
+    TRUNCATE_AT = 72
     POLL_INTERVAL_MS = 60_000   # slower than the story pane's 30s — glance surface, not a monitor
 
     def initialize(project:, marks: [], findings_ready_count: 0, token: nil)
@@ -45,6 +49,14 @@ module Views
       @project && (@project['slug'] || @project['name'] || '')
     end
 
+    # Deep link into the full Discoveries page — target=_blank so clicking
+    # from the narrow ambient pane doesn't navigate it away from the glance
+    # surface it's meant to stay pinned to. No escaping needed: project slugs
+    # are always slugify()'d (alphanumeric + hyphens) elsewhere in the app.
+    def discovery_url(disc_id)
+      "/discoveries?project=#{project_slug}##{disc_id}"
+    end
+
     # Zero open marks blanks this section only — the findings_ready line below
     # still renders, so the pane never goes fully dark on a half-empty state.
     # The container and the per-mark created_at are what the poller repaints
@@ -52,9 +64,17 @@ module Views
     def render_marks
       div(id: "am-marks") do
         @marks.each do |m|
-          div(class: aged?(m) ? "am-mark aged" : "am-mark", data: { created_at: m['created_at'] }) do
-            div(class: "am-mark-q") { truncate(m['question'].to_s) }
-            div(class: "am-mark-meta") { "#{m['id']} · #{TyrionWeb::Presenter.time_ago(m['created_at'])}" }
+          is_aged = aged?(m)
+          div(class: is_aged ? "am-mark aged" : "am-mark", data: { created_at: m['created_at'] }) do
+            div(class: "am-mark-q") { truncate(Tyrion::Output.discovery_glance_text(m)) }
+            div(class: "am-mark-meta") do
+              a(href: discovery_url(m['id']), target: "_blank", rel: "noopener") { m['id'] }
+              plain " · #{TyrionWeb::Presenter.time_ago(m['created_at'])}"
+              # Always in the DOM; CSS shows it only under .am-mark.aged, so
+              # refreshAging()'s class toggle (every tick, token or not) is
+              # the only thing that needs to control it — no separate JS path.
+              span(class: "am-stale-label") { " · stale" }
+            end
           end
         end
       end
@@ -117,10 +137,20 @@ module Views
                 wrap.dataset.createdAt = m.created_at || '';
                 var q = document.createElement('div');
                 q.className = 'am-mark-q';
-                q.textContent = truncate(String(m.question || ''));
+                q.textContent = truncate(String(m.text || ''));
                 var meta = document.createElement('div');
                 meta.className = 'am-mark-meta';
-                meta.textContent = m.id + ' \\u00b7 ' + timeAgo(m.created_at);
+                var link = document.createElement('a');
+                link.href = '/discoveries?project=' + encodeURIComponent(slug) + '#' + m.id;
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.textContent = m.id;
+                meta.appendChild(link);
+                meta.appendChild(document.createTextNode(' \\u00b7 ' + timeAgo(m.created_at)));
+                var stale = document.createElement('span');
+                stale.className = 'am-stale-label';
+                stale.textContent = ' \\u00b7 stale';
+                meta.appendChild(stale);
                 wrap.appendChild(q);
                 wrap.appendChild(meta);
                 marksHost.appendChild(wrap);

@@ -813,7 +813,7 @@ module Tyrion
                          source_story_id: nil,
                          question: nil, hypothesis: nil, exit_criteria: nil,
                          finding: nil, confidence: nil, recommendation: nil, git_context: nil,
-                         origin: 'human')
+                         origin: 'human', headline: nil)
       t = now
       with_db do |db|
         db.transaction(:immediate) do
@@ -825,8 +825,8 @@ module Tyrion
           )
           id = format('disc-%03d', seq)
           db.execute(
-            'INSERT INTO discoveries (id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, t, t]
+            'INSERT INTO discoveries (id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, t, t]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
         end
@@ -835,6 +835,18 @@ module Tyrion
 
     def find_discovery(id)
       with_db { |db| db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id]) }
+    end
+
+    # Standalone setter — "on creation/update" per the ambient-pane design
+    # discussion: a headline can be sharpened later without also needing a
+    # status transition (defer/discover already accept --headline for the
+    # transition-time case).
+    def set_headline(id, headline)
+      t = now
+      with_db do |db|
+        db.execute('UPDATE discoveries SET headline = ?, updated_at = ? WHERE id = ?', [headline, t, id])
+        db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+      end
     end
 
     def list_discoveries(project_id:, status: nil)
@@ -854,7 +866,7 @@ module Tyrion
     end
 
     # Fields a `discovery search` term is matched against.
-    SEARCH_FIELDS = %w[question finding recommendation].freeze
+    SEARCH_FIELDS = %w[question finding recommendation headline].freeze
 
     # LIKE search across +SEARCH_FIELDS+, scoped to one project. Every
     # whitespace-separated word in +term+ must match at least one field (AND
@@ -953,7 +965,7 @@ module Tyrion
     # has its finding, and an active_spike belongs to `spike done`. nil question
     # preserves the mark's original wording; nil origin preserves its origin,
     # same COALESCE contract as #close_spike.
-    def upgrade_mark(id, finding:, question: nil, origin: nil)
+    def upgrade_mark(id, finding:, question: nil, origin: nil, headline: nil)
       with_db do |db|
         db.transaction(:immediate) do
           disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
@@ -962,8 +974,9 @@ module Tyrion
 
           db.execute(
             "UPDATE discoveries SET status='findings_ready', finding=?, " \
-            'question=COALESCE(?, question), origin=COALESCE(?, origin), updated_at=? WHERE id=?',
-            [finding, question, origin, now, id]
+            'question=COALESCE(?, question), origin=COALESCE(?, origin), ' \
+            'headline=COALESCE(?, headline), updated_at=? WHERE id=?',
+            [finding, question, origin, headline, now, id]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
         end
@@ -1527,6 +1540,20 @@ module Tyrion
         next if cols.include?('source_story_id')
 
         db.execute('ALTER TABLE discoveries ADD COLUMN source_story_id TEXT REFERENCES stories(id) ON DELETE SET NULL')
+      }],
+      ['add_headline_to_discoveries', lambda { |db|
+        # A short, human-facing "why this matters / what to do" line, distinct
+        # from `question` (the raw thing noticed). Glance surfaces (ambient
+        # pane, status DISCOVERIES lane, discoveries list rows) render this in
+        # preference to a truncated `question` — truncating arbitrary
+        # investigation prose can never be as legible as text an agent wrote
+        # for exactly that purpose. Nullable, no backfill: pre-existing rows'
+        # question text wasn't authored as a headline, and guessing one would
+        # be a fabricated claim, same reasoning as source_story_id above.
+        cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
+        next if cols.include?('headline')
+
+        db.execute('ALTER TABLE discoveries ADD COLUMN headline TEXT')
       }]
     ].freeze
 

@@ -175,16 +175,33 @@ module Tyrion
     # shell string — so a URL can't be interpolated into a command line.
     # Returns false (never raises) when no browser is found or launch fails, so
     # the caller can fall back to a plain open.
+    #
+    # --user-data-dir is required, not cosmetic: without it, --app= is sent as
+    # an IPC request to whatever Chrome instance is already running under the
+    # user's normal profile (near-certain on any real machine) rather than
+    # starting a fresh process — and Chrome only honors --window-size (and
+    # most other startup flags) on the process that actually parses them. The
+    # symptom is exactly what a size-locked flag looks like working in code
+    # review and silently doing nothing at runtime: a full-size window instead
+    # of the requested 340x960. A dedicated profile dir guarantees this is
+    # always a genuinely separate process, so the flag always lands.
     def self.open_app_window(target)
       bin = app_mode_binary
       return false unless bin
 
       Process.detach(Process.spawn(bin, "--app=#{target}",
                                    "--window-size=#{AMBIENT_WINDOW_SIZE}",
+                                   "--user-data-dir=#{ambient_profile_dir}",
                                    out: File::NULL, err: File::NULL))
       true
     rescue StandardError
       false
+    end
+
+    def self.ambient_profile_dir
+      dir = File.join(state_dir, 'ambient-chrome-profile')
+      FileUtils.mkdir_p(dir)
+      dir
     end
   end
 end

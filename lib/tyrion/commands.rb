@@ -680,10 +680,10 @@ module Tyrion
       unless active_spikes.empty? && findings_ready.empty? && marks.empty?
         puts "  DISCOVERIES"
         active_spikes.each do |d|
-          puts "  ● #{d['id']}  #{Output.origin_tag(d['origin'])}  #{d['question']}"
+          puts "  ● #{d['id']}  #{Output.origin_tag(d['origin'])}  #{Output.discovery_glance_text(d)}"
         end
         findings_ready.each do |d|
-          puts "  → #{d['id']}  #{Output.origin_tag(d['origin'])}  #{d['question']}  (tyrion spike promote #{d['id']})"
+          puts "  → #{d['id']}  #{Output.origin_tag(d['origin'])}  #{Output.discovery_glance_text(d)}  (tyrion spike promote #{d['id']})"
         end
         # Marks render as rows now, newest first — a count told you something was filed
         # but never what, so the origin split rides each row instead of a summary line.
@@ -691,7 +691,7 @@ module Tyrion
         # would order arbitrarily, so fall back to the id, which counts up per project.
         newest_marks = marks.sort_by { |d| [d['created_at'].to_s, d['id'].to_s] }.reverse
         newest_marks.first(STATUS_MARKS_LIMIT).each do |d|
-          text = presence(d['question']) || '(no description)'
+          text = Output.discovery_glance_text(d)
           text = "#{text[0, STATUS_MARK_TEXT_WIDTH - 1]}…" if text.length > STATUS_MARK_TEXT_WIDTH
           puts "  ○ #{d['id']}  #{Output.origin_tag(d['origin'])}  #{text}"
         end
@@ -1447,6 +1447,7 @@ module Tyrion
       return puts "No active project." unless Repo.active_project
 
       origin        = consume_auto_flag(args)
+      headline      = extract_flag_value(args, '--headline')
       project, epic = resolve_project_epic(store, require_epic: false)
       # Read-only lane lookup, never resolve_my_story: filing a mark must not
       # claim, adopt, or pin a story as a side effect of noticing something.
@@ -1461,6 +1462,7 @@ module Tyrion
         status:          'mark',
         question:        args.first,
         origin:          origin,
+        headline:        headline,
         git_context:     Repo.git_context_json
       )
       puts "[mark] #{disc['id']}#{mark_budget_suffix(store, story)}"
@@ -1499,10 +1501,11 @@ module Tyrion
       origin   = consume_auto_flag(args, default: nil)
       question = extract_flag_value(args, '--question')
       finding  = extract_flag_value(args, '--finding')
+      headline = extract_flag_value(args, '--headline')
 
       if (disc_id = args.first)
         return cmd_discover_upgrade(disc_id, store, question: question, finding: finding,
-                                                    origin: origin, output: output)
+                                                    origin: origin, headline: headline, output: output)
       end
 
       origin ||= 'human'
@@ -1517,6 +1520,7 @@ module Tyrion
         question:    question,
         finding:     finding,
         origin:      origin,
+        headline:    headline,
         git_context: Repo.git_context_json
       )
       output.puts "[findings_ready] #{disc['id']}"
@@ -1527,8 +1531,8 @@ module Tyrion
 
     # Non-interactive: no prompts, no fallback question. --finding is what makes
     # a mark a finding, so its absence is a usage error rather than a prompt.
-    def self.cmd_discover_upgrade(disc_id, store, question:, finding:, origin:, output: $stdout)
-      die "Usage: tyrion discover <disc-id> --finding \"...\" [--question \"...\"] [--auto]" unless presence(finding)
+    def self.cmd_discover_upgrade(disc_id, store, question:, finding:, origin:, output: $stdout, headline: nil)
+      die "Usage: tyrion discover <disc-id> --finding \"...\" [--question \"...\"] [--headline \"...\"] [--auto]" unless presence(finding)
 
       project = resolve_project(store)
       disc    = store.find_discovery(disc_id)
@@ -1536,7 +1540,8 @@ module Tyrion
       # scope is the boundary, and leaking its existence would be a false lead.
       die "Discovery #{disc_id} not found" unless disc && disc['project_id'] == project['id']
 
-      disc = store.upgrade_mark(disc_id, finding: finding, question: presence(question), origin: origin)
+      disc = store.upgrade_mark(disc_id, finding: finding, question: presence(question), origin: origin,
+                                          headline: presence(headline))
       output.puts "[findings_ready] #{disc['id']}"
     rescue RuntimeError => e
       die e.message
@@ -1557,13 +1562,30 @@ module Tyrion
     def self.cmd_discovery(args, store)
       sub = args.shift
       case sub
-      when 'list'   then cmd_discovery_list(args, store)
-      when 'show'   then cmd_discovery_show(args, store)
-      when 'defer'  then cmd_discovery_defer(args, store)
-      when 'search' then cmd_discovery_search(args, store)
+      when 'list'     then cmd_discovery_list(args, store)
+      when 'show'     then cmd_discovery_show(args, store)
+      when 'defer'    then cmd_discovery_defer(args, store)
+      when 'search'   then cmd_discovery_search(args, store)
+      when 'headline' then cmd_discovery_headline(args, store)
       else
-        die "Usage: tyrion discovery [list|show|defer|search]"
+        die "Usage: tyrion discovery [list|show|defer|search|headline]"
       end
+    end
+
+    # Standalone update path — lets a headline be sharpened later without also
+    # needing a status transition (mark/discover already accept --headline at
+    # creation/upgrade time for that case).
+    def self.cmd_discovery_headline(args, store)
+      disc_id  = args.shift
+      headline = presence(args.join(' ').strip)
+      die "Usage: tyrion discovery headline <disc-id> \"<text>\"" unless disc_id && headline
+
+      project = resolve_project(store)
+      disc    = store.find_discovery(disc_id)
+      die "Discovery #{disc_id} not found" unless disc && disc['project_id'] == project['id']
+
+      disc = store.set_headline(disc_id, headline)
+      puts "Headline set: #{disc['id']}  #{disc['headline']}"
     end
 
     def self.cmd_discovery_list(args, store)
@@ -1573,7 +1595,7 @@ module Tyrion
 
       return puts "(no discoveries)" if discs.empty?
 
-      discs.each { |d| puts "#{d['id']}  [#{d['status']}]  #{Output.origin_tag(d['origin'])}  #{d['question']}" }
+      discs.each { |d| puts "#{d['id']}  [#{d['status']}]  #{Output.origin_tag(d['origin'])}  #{Output.discovery_glance_text(d)}" }
     end
 
     SEARCH_SNIPPET_WIDTH = 60
@@ -1591,7 +1613,7 @@ module Tyrion
       discs   = store.search_discoveries(project_id: project['id'], term: term, status: status_filter)
 
       discs.each do |d|
-        text = presence(d['question']) || presence(d['finding']) || ''
+        text = presence(d['headline']) || presence(d['question']) || presence(d['finding']) || ''
         text = "#{text[0, SEARCH_SNIPPET_WIDTH - 1]}…" if text.length > SEARCH_SNIPPET_WIDTH
         puts "#{d['id']}  [#{d['status']}]  #{text}  (#{Output.time_ago(d['created_at'])})"
       end
@@ -1616,6 +1638,7 @@ module Tyrion
       die "Discovery #{disc_id} not found" unless disc
 
       puts "#{disc['id']}  [#{disc['status']}]  #{Output.origin_tag(disc['origin'])}"
+      puts "Headline:       #{disc['headline']}" if disc['headline']
       puts "Question:       #{disc['question'] || '—'}"
       puts "Finding:        #{disc['finding'] || '—'}"
       puts "Confidence:     #{disc['confidence'] || '—'}"
@@ -3623,9 +3646,11 @@ module Tyrion
           tyrion followup resolve <slug> <n>       Mark followup #n as resolved
 
         Discovery (SDRD spike loop) — add --auto on any of the four to record origin=agent:
-          tyrion mark "description" [--auto]       Bookmark — instant breadcrumb with git context
+          tyrion mark "description" [--headline "…"] [--auto]
+                                                    Bookmark — instant breadcrumb with git context
           tyrion discover [--auto]                 Organic capture — question + finding → findings_ready
-          tyrion discover <disc-id> --finding "…"  Upgrade a mark → findings_ready, no prompts ([--question "…"])
+          tyrion discover <disc-id> --finding "…"  Upgrade a mark → findings_ready, no prompts
+                                                    ([--question "…"] [--headline "…"])
           tyrion spike start "question" [--auto]   Frame a known unknown → active_spike
           tyrion spike done [--auto]               Close spike with finding + confidence + recommendation
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
@@ -3633,6 +3658,7 @@ module Tyrion
           tyrion discovery show <disc-id>          Show full discovery detail
           tyrion discovery defer <disc-id> ["why"] Retire an open mark/finding with a reason
           tyrion discovery search "<term>"         Search discoveries (all statuses; silent if no match)
+          tyrion discovery headline <disc-id> "…"  Set/update the glance-surface headline (ambient, status, list)
 
         Lessons:
           tyrion lesson add --at <trigger> "text"   Record a lesson, scoped to active epic if any

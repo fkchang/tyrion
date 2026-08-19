@@ -190,12 +190,15 @@ module TyrionWeb
       }
     end
 
-    # Ambient poll token — deliberately derived ONLY from the marks' ids and
-    # question text plus the findings_ready count. Aging is a pure function of
-    # created_at and wall-clock time, so folding it in here would make the token
-    # churn on every tick; the pane recomputes aging client-side instead.
+    # Ambient poll token — deliberately derived ONLY from the marks' ids,
+    # glance text (headline/question), and the findings_ready count. Aging is
+    # a pure function of created_at and wall-clock time, so folding it in here
+    # would make the token churn on every tick; the pane recomputes aging
+    # client-side instead. Headline is included so `tyrion discovery headline`
+    # sharpening an existing mark's text (no new mark, no status change)
+    # still triggers a repaint.
     def self.ambient_token(marks:, findings_ready_count:)
-      fingerprint = marks.map { |m| [m['id'], m['question']] } << findings_ready_count.to_i
+      fingerprint = marks.map { |m| [m['id'], m['headline'], m['question']] } << findings_ready_count.to_i
       Digest::SHA256.hexdigest(fingerprint.to_s)[0, 16]
     end
 
@@ -208,7 +211,7 @@ module TyrionWeb
 
       {
         token: ambient_token(marks: marks, findings_ready_count: count),
-        marks: marks.map { |m| { id: m['id'], question: m['question'].to_s, created_at: m['created_at'] } },
+        marks: marks.map { |m| { id: m['id'], text: Tyrion::Output.discovery_glance_text(m), created_at: m['created_at'] } },
         findings_ready_count: count
       }
     end
