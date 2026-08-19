@@ -93,20 +93,31 @@ module TyrionWeb
       }
     end
 
+    EMPTY_EPIC_GRAPH = { epics: {}, by_slug: {}, children: {}, depends_on: {}, story_counts: {} }.freeze
+
     def self.load_roadmap_view(project_slug: nil)
       project = project_slug ? store.find_project_by_slug(project_slug) : resolve_active_project
-      return { project: nil, active_epics: [], archived_epics: [], active_epic: nil, active_story: nil, stories_by_epic: {}, criteria: [] } unless project
+      unless project
+        return { project: nil, active_epics: [], archived_epics: [], active_epic: nil, active_story: nil,
+                 stories_by_epic: {}, criteria: [], graph: EMPTY_EPIC_GRAPH }
+      end
 
       epics        = store.list_epics(project['id'])
       active_epic  = resolve_active_epic(project)
       active_story = active_epic ? store.in_progress_story(active_epic['id']) : nil
       criteria     = active_story ? store.criteria_for_story(active_story['id']) : []
+      graph        = store.epic_graph(project['id'])
 
       stories_by_epic = {}
       decorated_epics = epics.map do |e|
         stories = store.stories_for_epic(e['id'])
         stories_by_epic[e['id']] = stories
-        e.merge('story_stats' => story_counts(stories), 'max_last_note_at' => max_note_at(stories))
+        e.merge(
+          'story_stats'      => story_counts(stories),
+          'max_last_note_at' => max_note_at(stories),
+          'unmet'            => store.unmet_prereqs(e, graph),
+          'child_stats'      => store.epic_seal_stats(e['id'], graph)
+        )
       end
 
       active_epics   = decorated_epics.reject { |e| e['archived_at'] }
@@ -115,7 +126,7 @@ module TyrionWeb
       {
         project: project, active_epics: active_epics, archived_epics: archived_epics,
         active_epic: active_epic, active_story: active_story,
-        stories_by_epic: stories_by_epic, criteria: criteria
+        stories_by_epic: stories_by_epic, criteria: criteria, graph: graph
       }
     end
 

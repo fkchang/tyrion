@@ -2,11 +2,14 @@
 
 module Views
   class RoadmapView < Phlex::HTML
-    ATTENTION_WEIGHT = { ready: 1, blocked: 2, cold: 3, active: 4, paused: 5, started: 6, queued: 7, empty: 8, sealed: 9 }.freeze
-    GAUGE_GLYPHS     = { ready: '✦', blocked: '✕', cold: '⚠', active: '●', paused: '‖', sealed: '✓' }.freeze
+    ATTENTION_WEIGHT = { ready: 1, blocked: 2, cold: 3, active: 4, waiting: 5, paused: 6,
+                         started: 7, queued: 8, container: 9, empty: 10, sealed: 11 }.freeze
+    GAUGE_GLYPHS     = { ready: '✦', blocked: '✕', cold: '⚠', active: '●', waiting: '⌛',
+                         paused: '‖', container: '◆', sealed: '✓' }.freeze
 
     def initialize(project:, active_epics:, archived_epics:, active_epic:, active_story:, stories_by_epic:, criteria:,
-                   sidebar_stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0, project_slug: nil, flash: nil)
+                   sidebar_stories:, disc_summary:, graph: TyrionWeb::Data::EMPTY_EPIC_GRAPH, epic_switcher: [],
+                   git_branch: 'main', dirty_count: 0, project_slug: nil, flash: nil)
       @project        = project
       @active_epics   = active_epics
       @archived_epics = archived_epics
@@ -14,6 +17,7 @@ module Views
       @active_story   = active_story
       @stories_by_epic = stories_by_epic
       @criteria       = criteria
+      @graph          = graph
       @sidebar_stories = sidebar_stories
       @disc_summary   = disc_summary
       @epic_switcher  = epic_switcher
@@ -44,7 +48,7 @@ module Views
                     render_progress_header
                     sorted = sorted_active_epics
                     div(class: "rm-epic-list") do
-                      sorted.each { |epic, state| render_epic(epic, state) }
+                      sorted.each { |epic, depth, parent_archived| render_epic(epic, depth: depth, parent_archived: parent_archived) }
                     end
                     render_archived_section if @archived_epics.any?
                   else
@@ -61,18 +65,29 @@ module Views
 
     private
 
+    # Memoized -- both sorted_active_epics and render_progress_header need
+    # every epic's state, and it's the same computation each time.
     def epic_state_for(epic)
-      TyrionWeb::Presenter.epic_state(
+      (@epic_states ||= {})[epic['id']] ||= TyrionWeb::Presenter.epic_state(
         epic,
         @stories_by_epic[epic['id']] || [],
         @active_epic&.dig('id')
       )
     end
 
+    # The actual tree walk (roots-detection, depth, parent_archived) is
+    # Store.epic_tree_order — the same method the CLI's `tyrion epic list`
+    # uses, so there is exactly one tree-traversal implementation, not two.
+    # What's web-specific is root *order*: attention weight, not the created_at
+    # order epic_tree_order takes its input in. So the tree is walked once in
+    # natural order, then whole root-subtrees (a root and everything nested
+    # under it) are reordered as units by the root's attention weight —
+    # children never move independently of their parent.
     def sorted_active_epics
-      @active_epics
-        .map     { |e| [e, epic_state_for(e)] }
-        .sort_by { |_, st| ATTENTION_WEIGHT.fetch(st[:state]) }
+      ordered = Tyrion::Store.epic_tree_order(@active_epics, @graph)
+      ordered.slice_when { |_prev, curr| curr[1].zero? }
+             .sort_by { |chunk| ATTENTION_WEIGHT.fetch(epic_state_for(chunk.first[0])[:state]) }
+             .flatten(1)
     end
 
     def render_progress_header
@@ -103,34 +118,30 @@ module Views
       end
     end
 
-    def render_epic(epic, state)
-      stories  = @stories_by_epic[epic['id']] || []
-      done_s   = stories.count { |s| s['status'] == 'done' }
-      pct      = stories.size > 0 ? (done_s * 100.0 / stories.size).round : 0
-      list_id  = "epic-stories-#{epic['id'].to_s.gsub('-', '_')}"
+    def render_epic(epic, depth:, parent_archived:)
+      state     = epic_state_for(epic)
+      stories   = @stories_by_epic[epic['id']] || []
+      done_s    = stories.count { |s| s['status'] == 'done' }
       is_sealed = state[:state] == :sealed
-      is_empty  = state[:state] == :empty
+      list_id   = "epic-stories-#{epic['id'].to_s.gsub('-', '_')}"
       open      = state[:focus] && !is_sealed
 
-      div(class: "rm-epic#{state[:focus] ? ' active' : ''}", data: { epic_id: epic['id'] }) do
+      div(class: ["rm-epic", (state[:focus] ? "active" : nil), (depth.positive? ? "rm-epic-child" : nil)],
+          style: (depth.positive? ? "margin-left:#{depth * 20}px;" : nil),
+          data: { epic_id: epic['id'] }) do
         div(class: "rm-epic-header", data: { action: "toggle-epic", target: list_id },
             style: "cursor:pointer;") do
           div(class: state[:color_css]) { state[:glyph] }
           div(class: "rm-epic-name") do
             plain("★ ") if state[:focus]
             plain epic['slug']
+            span(style: "font-size:11px;color:var(--ink-faint);font-style:italic;") { " (parent archived)" } if parent_archived
           end
           div(class: "rm-epic-meta") do
             span(class: "rm-epic-state-label") { state[:label] }
             span(class: "rm-epic-stats") { "#{done_s}/#{stories.size}" } if stories.any?
           end
-          if is_empty
-            div(class: "rm-mini-track empty")
-          else
-            div(class: "rm-mini-track") do
-              div(class: "rm-mini-fill", style: "width:#{pct}%")
-            end
-          end
+          render_mini_track(epic, state, done_s, stories.size)
           div(class: "rm-chev", data: { chev: list_id }) { open ? "⌃" : "⌄" }
         end
 
@@ -142,12 +153,29 @@ module Views
       end
     end
 
+    # A container shows its sealed-descendant-epics roll-up (child_stats) in
+    # purple, since its own story fraction is usually empty and would be
+    # misleading. A genuinely empty leaf gets the dashed placeholder. Anything
+    # else shows its own done/total.
+    def render_mini_track(epic, state, done_s, story_total)
+      if state[:state] == :container
+        stats = epic['child_stats'] || { done: 0, total: 0 }
+        pct   = stats[:total].positive? ? (stats[:done] * 100.0 / stats[:total]).round : 0
+        div(class: "rm-mini-track") { div(class: "rm-mini-fill purple", style: "width:#{pct}%") }
+      elsif state[:state] == :empty
+        div(class: "rm-mini-track empty")
+      else
+        pct = story_total.positive? ? (done_s * 100.0 / story_total).round : 0
+        div(class: "rm-mini-track") { div(class: "rm-mini-fill", style: "width:#{pct}%") }
+      end
+    end
+
     def render_archived_section
       details(class: "rm-archived-section") do
         summary(class: "rm-archived-summary") { "Archived (#{@archived_epics.size})" }
         div(class: "rm-epic-list rm-archived-list") do
-          @archived_epics.each do |epic|
-            render_epic(epic, epic_state_for(epic))
+          Tyrion::Store.epic_tree_order(@archived_epics, @graph).each do |epic, depth, parent_archived|
+            render_epic(epic, depth: depth, parent_archived: parent_archived)
           end
         end
       end

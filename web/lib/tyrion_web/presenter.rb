@@ -53,6 +53,19 @@ module TyrionWeb
     end
 
     # Derive the canonical display state for an epic from its stories + status.
+    # `epic` is expected to carry the 'unmet' and 'child_stats' keys that
+    # Data.load_roadmap_view decorates from a single epic_graph snapshot
+    # (nil/[] are fine for callers that don't have a graph — those epics
+    # simply never reach :container or :waiting).
+    #
+    # Precedence is explicit, not incidental: :sealed outranks :container so
+    # a sealed empty container (every child sealed, none of its own stories)
+    # reads sealed rather than being mistaken for an empty leaf. :active and
+    # :cold outrank :waiting so an epic with live in-progress work still
+    # reads active even if one of its prerequisites later regressed — the
+    # prerequisite going unmet again doesn't retroactively stop work already
+    # underway.
+    #
     # Returns { state:, color_css:, glyph:, label:, action:, focus:, archived: }.
     def self.epic_state(epic, stories, active_epic_id)
       in_progress  = stories.select { |s| s['status'] == 'in_progress' }
@@ -60,18 +73,24 @@ module TyrionWeb
       blocked_count = stories.count { |s| s['status'] == 'blocked' }
       story_count  = stories.size
       max_note_at  = in_progress.map { |s| s['last_note_at'] }.compact.max
+      child_stats  = epic['child_stats']
+      unmet        = epic['unmet'] || []
 
       state =
-        if story_count.zero?
-          :empty
-        elsif epic['status'] == 'done'
+        if epic['status'] == 'done'
           :sealed
+        elsif child_stats && story_count.zero?
+          :container
+        elsif story_count.zero?
+          :empty
         elsif done_count == story_count
           :ready
         elsif in_progress.any? && !stale?(max_note_at)
           :active
         elsif in_progress.any?
           :cold
+        elsif epic['status'] == 'active' && unmet.any?
+          :waiting
         elsif epic['status'] == 'paused'
           :paused
         elsif blocked_count.positive?
@@ -84,15 +103,17 @@ module TyrionWeb
 
       color_css, glyph, label, action =
         case state
-        when :empty   then ['rm-seal future',  nil, 'empty',          :import]
-        when :sealed  then ['rm-seal',          '✓', 'sealed',         nil]
-        when :ready   then ['rm-seal ready',    '✦', 'READY TO SEAL',  :seal]
-        when :active  then ['rm-seal active',   '●', 'active',         nil]
-        when :cold    then ['rm-seal cold',     '⚠', "cold · #{time_ago(max_note_at)}", :resume]
-        when :paused  then ['rm-seal paused',   '‖', 'paused',         :resume]
-        when :blocked then ['rm-seal blocked',  '✕', "#{blocked_count} blocked", :blocker]
-        when :started then ['rm-seal active',   nil, 'active',         nil]
-        when :queued  then ['rm-seal future',   nil, 'queued',         nil]
+        when :empty     then ['rm-seal future',  nil, 'empty',          :import]
+        when :container then ['rm-seal pivot',   '◆', "container · #{child_stats[:done]}/#{child_stats[:total]} sealed", nil]
+        when :sealed    then ['rm-seal',          '✓', 'sealed',         nil]
+        when :ready     then ['rm-seal ready',    '✦', 'READY TO SEAL',  :seal]
+        when :active    then ['rm-seal active',   '●', 'active',         nil]
+        when :cold      then ['rm-seal cold',     '⚠', "cold · #{time_ago(max_note_at)}", :resume]
+        when :waiting   then ['rm-seal waiting',  '⌛', "waiting — requires: #{Tyrion::Output.unmet_prereqs_text(unmet)}", nil]
+        when :paused    then ['rm-seal paused',   '‖', 'paused',         :resume]
+        when :blocked   then ['rm-seal blocked',  '✕', "#{blocked_count} blocked", :blocker]
+        when :started   then ['rm-seal active',   nil, 'active',         nil]
+        when :queued    then ['rm-seal future',   nil, 'queued',         nil]
         end
 
       {

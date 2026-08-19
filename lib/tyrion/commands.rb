@@ -234,7 +234,7 @@ module Tyrion
       if active_epics.any?
         puts Output.bold("Epics (#{active_epics.length}):")
         graph = store.epic_graph(project['id'])
-        epic_tree_order(active_epics, graph).each do |e, depth, parent_archived|
+        Store.epic_tree_order(active_epics, graph).each do |e, depth, parent_archived|
           indent      = '  ' * (depth + 1)
           done, total, container = epic_progress(store, e, graph)
           counts      = container ? "#{done}/#{total} sealed" : "#{done}/#{total} done"
@@ -384,12 +384,12 @@ module Tyrion
         puts "#{indent}#{e['slug']}  #{e['name']}  #{counts}#{status_tag}#{mode_tag}#{waiting_tag}#{parent_note}#{extra_tag}#{pointer}"
       end
 
-      epic_tree_order(active, graph).each { |e, depth, parent_archived| line.call(e, depth: depth, parent_archived: parent_archived) }
+      Store.epic_tree_order(active, graph).each { |e, depth, parent_archived| line.call(e, depth: depth, parent_archived: parent_archived) }
 
       unless archived.empty?
         puts
         puts Output.dim("Archived:")
-        epic_tree_order(archived, graph).each do |e, depth, parent_archived|
+        Store.epic_tree_order(archived, graph).each do |e, depth, parent_archived|
           line.call(e, " #{Output.dim('[archived]')}", depth: depth, parent_archived: parent_archived)
         end
       end
@@ -402,44 +402,15 @@ module Tyrion
     # under-report what a campaign actually contains. `container` tells the
     # caller which wording ("sealed" vs bare fraction) applies.
     def self.epic_progress(store, epic, graph)
-      descendant_ids = store.epic_descendants(epic['id'], graph)
-      if descendant_ids.empty?
+      stats = store.epic_seal_stats(epic['id'], graph)
+      if stats
+        [stats[:done], stats[:total], true]
+      else
         stories = store.stories_for_epic(epic['id'])
         [stories.count { |s| s['status'] == 'done' }, stories.length, false]
-      else
-        all_ids = [epic['id']] + descendant_ids
-        sealed  = all_ids.count { |id| graph[:epics][id]['status'] == 'done' }
-        [sealed, all_ids.length, true]
       end
     end
     private_class_method :epic_progress
-
-    # Depth-first tree order restricted to one cmd_epic_list section (active
-    # or archived) — the shared traversal both the active tree and the
-    # Archived: tree walk. depth is relative to THIS section's own roots, not
-    # the epic's true depth in the full graph: a node whose real parent lives
-    # in the other section (the archived-parent/active-children case) becomes
-    # a root here at depth 0 rather than being silently dropped — there is no
-    # visible parent line above it to nest under. parent_archived flags that
-    # case specifically (real parent archived, this node isn't) so the caller
-    # can render "(parent archived)" instead of orphaning the child.
-    def self.epic_tree_order(section_epics, graph)
-      section_ids = section_epics.map { |e| e['id'] }
-      by_id       = section_epics.each_with_object({}) { |e, h| h[e['id']] = e }
-      roots       = section_epics.select { |e| !e['parent_epic_id'] || !section_ids.include?(e['parent_epic_id']) }
-
-      result = []
-      visit = lambda do |epic, depth|
-        parent          = epic['parent_epic_id'] && graph[:epics][epic['parent_epic_id']]
-        parent_archived = !!(parent && !section_ids.include?(parent['id']) && parent['archived_at'])
-        result << [epic, depth, parent_archived]
-        (graph[:children][epic['id']] || []).filter_map { |cid| by_id[cid] }
-                                             .each { |child| visit.call(child, depth + 1) }
-      end
-      roots.each { |r| visit.call(r, 0) }
-      result
-    end
-    private_class_method :epic_tree_order
 
     # Ancestor breadcrumb ("campaign › sub-campaign › ") for a nested epic,
     # root-first — empty string for a top-level epic. Shared by cmd_status and

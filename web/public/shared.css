@@ -1636,6 +1636,7 @@
     user-select: none;
   }
   .rm-epic-header:hover { background: rgba(255,255,255,.12); border-radius: 8px; }
+  .rm-epic-child { border-left: 2px solid rgba(122,90,48,.25); padding-left: 10px; }
 
   .rm-seal {
     width: 40px;
@@ -1655,6 +1656,7 @@
   .rm-seal.cold    { color: #ffe0cc; background: radial-gradient(circle at 30% 25%, #f07040, #7c3010 62%); }
   .rm-seal.blocked { color: #ffd0d0; background: radial-gradient(circle at 30% 25%, #e04040, #7c1010 62%); }
   .rm-seal.paused  { color: #d4ddf8; background: radial-gradient(circle at 30% 25%, #6080b8, #2a3d7a 62%); }
+  .rm-seal.waiting { color: #ffe9b8; background: radial-gradient(circle at 30% 25%, #c99a3a, #6b4a0e 62%); }
 
   .rm-epic-name { font-size: 18px; color: #261809; font-family: 'Cinzel', serif; }
   .rm-epic-meta { display: flex; align-items: center; gap: 10px; }

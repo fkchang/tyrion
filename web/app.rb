@@ -107,6 +107,7 @@ get "/roadmap" do
     project: d[:project], active_epics: d[:active_epics], archived_epics: d[:archived_epics],
     active_epic: d[:active_epic],
     active_story: d[:active_story], stories_by_epic: d[:stories_by_epic], criteria: d[:criteria],
+    graph: d[:graph],
     sidebar_stories: base[:stories], disc_summary: base[:disc_summary],
     epic_switcher: base[:epic_switcher],
     project_slug: params[:project],

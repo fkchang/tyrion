@@ -290,6 +290,53 @@ module Tyrion
       result
     end
 
+    # nil for a leaf epic (no descendants); {done:, total:} sealed-epic
+    # counts (itself + every descendant) for a container — the CLI's
+    # cmd_epic_list/cmd_epic_show ("sealed" fraction over epics, not the
+    # container's usually-empty own story fraction) and the web's Roadmap
+    # container-state roll-up both read this so the two can't drift.
+    def epic_seal_stats(epic_id, graph)
+      descendant_ids = epic_descendants(epic_id, graph)
+      return nil if descendant_ids.empty?
+
+      all_ids = [epic_id] + descendant_ids
+      { done: all_ids.count { |id| graph[:epics][id]['status'] == 'done' }, total: all_ids.length }
+    end
+
+    # Depth-first tree order restricted to one section of epics (e.g. the
+    # active list or the archived list) — the shared traversal for any
+    # containment-tree render, CLI or web. A class method, unlike its
+    # epic_ancestors/epic_descendants/unmet_prereqs siblings: the web's
+    # Roadmap view calls it directly to render, with no Store instance of
+    # its own to reach through — it's a pure function of its two arguments,
+    # so it doesn't need one. Root order is exactly +section_epics+'s own
+    # order among the elements that qualify as roots (this method never
+    # sorts — a caller that wants e.g. attention-weight ordering sorts
+    # +section_epics+ before calling). depth is relative to THIS section's
+    # own roots, not the epic's true depth in the full graph: a node whose
+    # real parent lives outside the section (e.g. an archived-parent/
+    # active-children split) becomes a root here at depth 0 rather than
+    # being silently dropped — there is no visible parent line above it to
+    # nest under. parent_archived flags that case specifically (real parent
+    # archived, this node isn't) so the caller can render "(parent
+    # archived)" instead of orphaning the child.
+    def self.epic_tree_order(section_epics, graph)
+      section_ids = section_epics.map { |e| e['id'] }
+      by_id       = section_epics.each_with_object({}) { |e, h| h[e['id']] = e }
+      roots       = section_epics.select { |e| !section_ids.include?(e['parent_epic_id']) }
+
+      result = []
+      visit = lambda do |epic, depth|
+        parent          = epic['parent_epic_id'] && graph[:epics][epic['parent_epic_id']]
+        parent_archived = !!(parent && !section_ids.include?(parent['id']) && parent['archived_at'])
+        result << [epic, depth, parent_archived]
+        (graph[:children][epic['id']] || []).filter_map { |cid| by_id[cid] }
+                                             .each { |child| visit.call(child, depth + 1) }
+      end
+      roots.each { |r| visit.call(r, 0) }
+      result
+    end
+
     # Adds epic_id -> dep_slug (epic_id depends on dep_slug) after validating
     # the combined containment-plus-dependency graph inside one
     # transaction(:immediate) on one connection, so a two-connection
