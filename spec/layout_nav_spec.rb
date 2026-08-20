@@ -68,3 +68,34 @@ RSpec.describe Views::Layout do
     expect(html).to include('href="/roadmap"')
   end
 end
+
+# sidebar-epic-gating-fix: a project with no active epic (e.g. a pure-spike
+# project) must still get the project name and discovery strip -- only the
+# epic-scoped stories section is omitted, and only silently, not with an
+# error state.
+RSpec.describe Views::Layout do
+  subject(:html) do
+    Views::Layout.new(
+      project: { 'slug' => 'crimson-maestro', 'name' => 'Crimson Maestro' },
+      epic: nil, stories: [],
+      disc_summary: { spike: nil, ready_count: 2, mark_count: 9 },
+      project_slug: 'crimson-maestro'
+    ).call { }
+  end
+
+  it 'shows the project name' do
+    expect(html).to include('crimson-maestro')
+  end
+
+  it 'still shows the discovery strip' do
+    expect(html).to include('disc-strip').and include('2 ready').and include('9 marks')
+  end
+
+  it 'does not render the false "No active project" message' do
+    expect(html).not_to include('No active project')
+  end
+
+  it 'omits the epic-scoped stories section rather than showing an error' do
+    expect(html).not_to include('Stories ·')
+  end
+end

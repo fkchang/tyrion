@@ -3,10 +3,11 @@
 module Views
   class GlobalView < Phlex::HTML
     STATUS_CONFIG = {
-      active: { label: "ACTIVE",  css: "gv-status-active"  },
-      stale:  { label: "STALE",   css: "gv-status-stale"   },
-      idle:   { label: "IDLE",    css: "gv-status-idle"    },
-      done:   { label: "DONE",    css: "gv-status-done"    },
+      active:    { label: "ACTIVE",    css: "gv-status-active"    },
+      stale:     { label: "STALE",     css: "gv-status-stale"     },
+      idle:      { label: "IDLE",      css: "gv-status-idle"      },
+      done:      { label: "DONE",      css: "gv-status-done"      },
+      discovery: { label: "DISCOVERY", css: "gv-status-discovery" },
     }.freeze
 
     def initialize(project_cards:, project:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0)
@@ -79,6 +80,10 @@ module Views
           end
         elsif status == :done
           div(class: "gv-card-story", style: "color:#1e9e54;") { "✓ All stories complete" }
+        elsif status == :discovery
+          div(class: "gv-card-story", style: "color:var(--gold-bright);") do
+            plain TyrionWeb::Presenter.discovery_summary_text(card[:disc_summary])
+          end
         else
           div(class: "gv-card-story", style: "color:var(--ink-faint);font-style:italic;") { "No story in progress" }
         end

@@ -4,7 +4,8 @@ require 'spec_helper'
 
 # Specs for discoveries.source_story_id — the "where was this noticed" column
 # that promotion never overwrites, plus the running per-story mark count on the
-# `tyrion mark` confirmation line.
+# `tyrion mark` confirmation line — and discoveries.parent_spike_id, the sibling
+# "what spike was in flight when this was noticed" column.
 RSpec.describe 'mark provenance' do
   let(:token) { 'claude:1:stamp' }
   let(:ctx)   { tyrion_worktree(epic_slug: 'discovery-autonomy') }
@@ -24,7 +25,11 @@ RSpec.describe 'mark provenance' do
     store.find_story(epic['id'], slug)
   end
 
-  # ── criteria 1-4: the column ────────────────────────────────────────────
+  def start_spike(question: 'investigating something')
+    store.create_discovery(project_id: ctx.project['id'], status: 'active_spike', question: question)
+  end
+
+  # ── criteria 1-4: the source_story_id column ────────────────────────────
 
   describe 'the source_story_id column' do
     it 'exists on discoveries' do
@@ -33,7 +38,7 @@ RSpec.describe 'mark provenance' do
     end
 
     it 'adds nothing on a second setup_db — the migration is idempotent' do
-      expect { store.send(:setup_db) }.not_to raise_error
+      store.send(:setup_db)
       cols = store.send(:with_db) { |db| db.execute('PRAGMA table_info(discoveries)') }
              .map { |c| c['name'] }.tally
       expect(cols['source_story_id']).to eq 1
@@ -166,6 +171,81 @@ RSpec.describe 'mark provenance' do
 
     it 'uses st/nd/rd for 21/22/23' do
       expect([21, 22, 23].map { |n| Tyrion::Commands.ordinal(n) }).to eq %w[21st 22nd 23rd]
+    end
+  end
+
+  # ── the parent_spike_id column ───────────────────────────────────────────
+  # Unlike source_story_id above, this column is project-scoped, not lane-scoped:
+  # a spike is project-global by construction (idx_one_active_spike_per_project),
+  # so there is no lane-scoped spike to prefer.
+
+  describe 'the parent_spike_id column' do
+    it 'exists on discoveries' do
+      cols = store.send(:with_db) { |db| db.execute('PRAGMA table_info(discoveries)') }.map { |c| c['name'] }
+      expect(cols).to include('parent_spike_id')
+    end
+
+    it 'adds nothing on a second setup_db — the migration is idempotent' do
+      store.send(:setup_db)
+      cols = store.send(:with_db) { |db| db.execute('PRAGMA table_info(discoveries)') }
+             .map { |c| c['name'] }.tally
+      expect(cols['parent_spike_id']).to eq 1
+    end
+
+    it 'is left NULL by the migration on a row that predates the column' do
+      # Replays the DDL + every migration up to (excluding) this one against a
+      # fresh db file, inserts a row on that legacy schema, then reopens through
+      # Store.new so setup_db runs add_parent_spike_id_to_discoveries for real —
+      # proving the migration itself leaves existing rows NULL, not just that an
+      # omitted column defaults to NULL. Mirrors store_spec.rb's build_legacy_db.
+      path = File.join(ctx.tmpdir, 'legacy.db')
+      legacy_db = SQLite3::Database.new(path)
+      legacy_db.results_as_hash = true
+      Tyrion::Store::DDL.split(';').each do |stmt|
+        s = stmt.strip
+        legacy_db.execute(s) unless s.empty?
+      end
+      Tyrion::Store::MIGRATIONS.each do |name, fn|
+        break if name == 'add_parent_spike_id_to_discoveries'
+        fn.call(legacy_db)
+      end
+      legacy_db.execute(
+        'INSERT INTO projects (id, slug, name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [ctx.project['id'], 'legacy-proj', 'Legacy Project', 'active', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z']
+      )
+      legacy_db.execute(
+        "INSERT INTO discoveries (id, project_id, status, question, created_at, updated_at) " \
+        "VALUES ('disc-901', ?, 'mark', 'legacy row', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')",
+        [ctx.project['id']]
+      )
+      legacy_db.close
+
+      migrated_store = Tyrion::Store.new(db_path: path) # runs setup_db -> runs the new migration this time
+      expect(migrated_store.find_discovery('disc-901')['parent_spike_id']).to be_nil
+    end
+  end
+
+  describe 'tyrion mark — parent_spike_id linkage' do
+    it 'sets parent_spike_id to the active_spike discovery id when one is in flight, no new flag required' do
+      spike = start_spike
+      disc, out = mark(['plain description, no flags'])
+
+      expect(out).to match(/\[mark\] disc-\d+/)
+      expect(disc['parent_spike_id']).to eq spike['id']
+    end
+
+    it 'leaves parent_spike_id nil when no active_spike is in flight, same as today' do
+      disc, = mark
+
+      expect(disc['parent_spike_id']).to be_nil
+    end
+
+    it 'survives the parent spike closing (active_spike -> findings_ready)' do
+      spike = start_spike
+      disc, = mark
+      store.close_spike(spike['id'], finding: 'found it', confidence: 'high', recommendation: 'ship it')
+
+      expect(store.find_discovery(disc['id'])['parent_spike_id']).to eq spike['id']
     end
   end
 end

@@ -151,11 +151,19 @@ module TyrionWeb
 
         in_progress = active_epic ? store.in_progress_story(active_epic['id']) : nil
         total = done_count + pending_count + blocked_count + active_count
+        disc_summary = load_discovery_summary(proj['id'])
 
-        card_status = if active_count > 0
+        # Precedence is load-bearing: story activity of any kind outranks discovery
+        # activity, so :discovery only fires for a project with zero stories at all
+        # (the spike-only case that used to misreport as :idle). A project with
+        # pending stories AND open marks still reads :idle — the story lane stays
+        # the honest headline, and the discovery strip already carries the rest.
+        card_status = if active_count.positive?
           in_progress && TyrionWeb::Presenter.stale?(in_progress['last_note_at']) ? :stale : :active
-        elsif total > 0 && pending_count == 0 && blocked_count == 0 && active_count == 0
+        elsif total.positive? && done_count == total
           :done
+        elsif total.zero? && TyrionWeb::Presenter.discovery_activity?(disc_summary)
+          :discovery
         else
           :idle
         end
@@ -163,7 +171,7 @@ module TyrionWeb
         {
           project: proj, active_epic: active_epic, in_progress: in_progress,
           done: done_count, pending: pending_count, blocked: blocked_count, active: active_count,
-          total: total, last_note_at: last_note_at, status: card_status
+          total: total, last_note_at: last_note_at, status: card_status, disc_summary: disc_summary
         }
       end
 
@@ -307,8 +315,8 @@ module TyrionWeb
     end
 
     def self.load_sidebar_data(project, epic)
-      return { stories: [], disc_summary: empty_disc_summary, epic_switcher: [] } unless project && epic
-      stories = store.stories_for_epic(epic['id'])
+      return { stories: [], disc_summary: empty_disc_summary, epic_switcher: [] } unless project
+      stories = epic ? store.stories_for_epic(epic['id']) : []
       disc_summary = load_discovery_summary(project['id'])
       { stories: stories, disc_summary: disc_summary, epic_switcher: epic_switcher_epics(project) }
     end

@@ -1089,7 +1089,7 @@ module Tyrion
     # ── Discoveries ────────────────────────────────────────────────────────
 
     def create_discovery(project_id:, status:, epic_id: nil, story_id: nil,
-                         source_story_id: nil,
+                         source_story_id: nil, parent_spike_id: nil,
                          question: nil, hypothesis: nil, exit_criteria: nil,
                          finding: nil, confidence: nil, recommendation: nil, git_context: nil,
                          origin: 'human', headline: nil)
@@ -1104,8 +1104,8 @@ module Tyrion
           )
           id = format('disc-%03d', seq)
           db.execute(
-            'INSERT INTO discoveries (id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [id, project_id, epic_id, story_id, source_story_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, t, t]
+            'INSERT INTO discoveries (id, project_id, epic_id, story_id, source_story_id, parent_spike_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, project_id, epic_id, story_id, source_story_id, parent_spike_id, status, question, hypothesis, exit_criteria, finding, confidence, recommendation, git_context, origin, headline, t, t]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
         end
@@ -1306,6 +1306,40 @@ module Tyrion
             [reason, now, id]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+        end
+      end
+    end
+
+    # Deletion is the one truly irreversible discovery verb — everything else
+    # (defer, upgrade_mark, close_spike) is a status flip that keeps the row
+    # findable. So it refuses whenever something else still points at this
+    # row rather than only checking status: a promoted discovery IS a story,
+    # and status=='promoted_to_story' is the *stricter* check — every promotion
+    # sets story_id in the same transaction as the status flip, but story_id
+    # alone has ON DELETE SET NULL and could theoretically go nil while status
+    # doesn't, so keying off status is what actually guarantees the row below
+    # exists. A blocked story's blocked_on_discovery would otherwise dangle
+    # with no FK to catch it (unlike born_from_discovery, which has ON DELETE
+    # SET NULL).
+    def delete_discovery(id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+          raise "Discovery not found: #{id}" unless disc
+
+          if disc['status'] == 'promoted_to_story'
+            story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [disc['story_id']])
+            raise "Discovery #{id} was promoted to story #{story['slug']} — cannot delete a discovery that became a story"
+          end
+
+          blockers = db.execute('SELECT slug FROM stories WHERE blocked_on_discovery = ?', [id])
+          unless blockers.empty?
+            names = blockers.map { |s| "tyrion unblock #{s['slug']}" }.join(', ')
+            raise "Discovery #{id} is blocking #{blockers.map { |s| s['slug'] }.join(', ')} — unblock first: #{names}"
+          end
+
+          db.execute('DELETE FROM discoveries WHERE id = ?', [id])
+          disc
         end
       end
     end
@@ -2014,6 +2048,17 @@ module Tyrion
 
         allowed = VERDICTS.map { |v| "'#{v}'" }.join(',')
         db.execute("ALTER TABLE discoveries ADD COLUMN verdict TEXT CHECK(verdict IS NULL OR verdict IN (#{allowed}))")
+      }],
+      ['add_parent_spike_id_to_discoveries', lambda { |db|
+        # Which active_spike (if any) was in flight when this mark was filed —
+        # auto-populated at `tyrion mark` creation time, no new flag. Self-referencing
+        # FK to discoveries(id), same nullable/no-backfill reasoning as source_story_id:
+        # pre-existing rows predate this column and their filing-time spike is
+        # unknowable, so they stay NULL rather than guessed.
+        cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
+        next if cols.include?('parent_spike_id')
+
+        db.execute('ALTER TABLE discoveries ADD COLUMN parent_spike_id TEXT REFERENCES discoveries(id) ON DELETE SET NULL')
       }]
     ].freeze
 
