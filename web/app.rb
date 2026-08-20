@@ -157,8 +157,26 @@ get "/discoveries" do
     stories: base[:stories], disc_summary: base[:disc_summary],
     epic_switcher: base[:epic_switcher],
     project_slug: params[:project],
+    # Seeded so an unchanged first poll repaints nothing (same reason /ambient
+    # seeds its token) — the JS never needs a null-sentinel bootstrap branch.
+    token: TyrionWeb::Data.discoveries_token(spike: d[:spike], findings_ready: d[:findings_ready], marks: d[:marks]),
     **base_git
   )
+end
+
+# Reload-on-change companion for the Discoveries index — resolution mirrors
+# load_discoveries_view exactly so the poller can never disagree with what the
+# page itself resolved to. Unlike /api/ambient_poll, an unknown ?project= slug
+# does NOT fall back to the active project here — the index is a scoped page,
+# not a glance pane, so it 404s rather than silently showing another project's
+# discoveries; the page's seeded token means a stray null from this branch is
+# inert rather than wedging the poller (see Views::DiscoveriesView's poll JS).
+get "/api/discoveries_poll" do
+  content_type :json
+  d = TyrionWeb::Data.load_discoveries_view(project_slug: params[:project])
+  halt 404, { token: nil }.to_json unless d[:project]
+
+  { token: TyrionWeb::Data.discoveries_token(spike: d[:spike], findings_ready: d[:findings_ready], marks: d[:marks]) }.to_json
 end
 
 get "/discoveries/:id" do
