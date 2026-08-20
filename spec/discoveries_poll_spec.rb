@@ -97,7 +97,7 @@ RSpec.describe 'discoveries poll' do
     def render(project: { 'slug' => 'proj-1' }, spike: nil, findings_ready: [], marks: [], token: 'tok123')
       Views::DiscoveriesView.new(
         project: project, spike: spike, findings_ready: findings_ready, marks: marks,
-        epic: nil, stories: [], disc_summary: { spike: 0, findings_ready: 0, aging_marks: 0 }, token: token
+        epic: nil, stories: [], disc_summary: { spike: nil, ready_count: 0, mark_count: 0 }, token: token
       ).call
     end
 
