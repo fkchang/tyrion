@@ -32,4 +32,31 @@ RSpec.describe 'TyrionWeb::Presenter.markdown_lite' do
     expect(TyrionWeb::Presenter.markdown_lite(nil)).to eq('')
     expect(TyrionWeb::Presenter.markdown_lite('   ')).to eq('')
   end
+
+  it 'renders a block of bullet lines as a ul/li list' do
+    html = TyrionWeb::Presenter.markdown_lite("- first item\n- second item\n- third item")
+    expect(html).to eq('<ul><li>first item</li><li>second item</li><li>third item</li></ul>')
+  end
+
+  it 'accepts * as a bullet marker too' do
+    html = TyrionWeb::Presenter.markdown_lite("* one\n* two")
+    expect(html).to eq('<ul><li>one</li><li>two</li></ul>')
+  end
+
+  it 'renders bold and inline code inside list items' do
+    html = TyrionWeb::Presenter.markdown_lite("- **bold** item\n- has `code` in it")
+    expect(html).to include('<li><strong>bold</strong> item</li>')
+    expect(html).to include('<li>has <code>code</code> in it</li>')
+  end
+
+  it 'does not treat a block with mixed prose and bullets as a list' do
+    html = TyrionWeb::Presenter.markdown_lite("intro line\n- not a list because of the line above")
+    expect(html).not_to include('<ul>')
+    expect(html).to include('<br>')
+  end
+
+  it 'renders a separate list block alongside a paragraph block' do
+    html = TyrionWeb::Presenter.markdown_lite("intro paragraph\n\n- item one\n- item two")
+    expect(html).to eq('<p>intro paragraph</p><ul><li>item one</li><li>item two</li></ul>')
+  end
 end

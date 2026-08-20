@@ -64,6 +64,28 @@ module Views
       span(class: tag[:css]) { tag[:text] }
     end
 
+    # Markdown-rendered question, same helper for spike/ready/mark cards --
+    # matches discovery_show.rb's dv-card-q dv-md treatment (which also
+    # dropped the old literal quote marks: they'd otherwise wrap a block-level
+    # <p> from markdown_lite, splitting the quotes onto their own lines).
+    def render_question(question)
+      div(class: "dv-card-q dv-md") { raw safe(TyrionWeb::Presenter.markdown_lite(question)) }
+    end
+
+    # Label prefix + markdown-rendered value, stacked (label text then the
+    # value's own <p>/<ul> block) -- same shape as discovery_show.rb's
+    # render_field, reused here for the index card's prose fields (finding,
+    # recommendation, hypothesis, exit_criteria) so bold/code/lists interpret
+    # the same way on both pages.
+    def render_labeled_md(label, text)
+      return unless text && !text.to_s.strip.empty?
+
+      div do
+        plain "#{label}: "
+        raw safe(TyrionWeb::Presenter.markdown_lite(text))
+      end
+    end
+
     def render_spike_section
       div(class: "dv-section") do
         div(class: "dv-section-header") do
@@ -75,11 +97,10 @@ module Views
             a(href: "/discoveries/#{@spike['id']}", class: "dv-card-id-link") { "#{@spike['id']} · started #{TyrionWeb::Presenter.time_ago(@spike['created_at'])}" }
             render_origin(@spike)
           end
-          div(class: "dv-card-q") { "\"#{@spike['question']}\"" }
-          div(class: "dv-card-meta") do
-            plain "Hypothesis: #{@spike['hypothesis']}" if @spike['hypothesis']
-            br if @spike['hypothesis'] && @spike['exit_criteria']
-            plain "Exit criteria: #{@spike['exit_criteria']}" if @spike['exit_criteria']
+          render_question(@spike['question'])
+          div(class: "dv-card-meta dv-md") do
+            render_labeled_md('Hypothesis', @spike['hypothesis'])
+            render_labeled_md('Exit criteria', @spike['exit_criteria'])
           end
           div(class: "dv-actions") do
             span(class: "dv-code-chip") { "tyrion spike done" }
@@ -104,11 +125,11 @@ module Views
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
             div(class: "dv-card-headline") { d['headline'] } if d['headline']
-            div(class: "dv-card-q") { "\"#{d['question']}\"" }
-            div(class: "dv-card-meta") do
-              plain "Finding: #{d['finding']}" if d['finding']
-              br if d['finding'] && d['confidence']
-              plain "Confidence: #{d['confidence']} · Recommendation: #{d['recommendation']}" if d['confidence']
+            render_question(d['question'])
+            div(class: "dv-card-meta dv-md") do
+              render_labeled_md('Finding', d['finding'])
+              plain "Confidence: #{d['confidence']}" if d['confidence']
+              render_labeled_md('Recommendation', d['recommendation'])
             end
             div(class: "dv-actions") do
               span(class: "dv-code-chip") { "tyrion spike promote #{d['id']}" }
@@ -133,7 +154,7 @@ module Views
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
             div(class: "dv-card-headline") { d['headline'] } if d['headline']
-            div(class: "dv-card-q") { "\"#{d['question']}\"" }
+            render_question(d['question'])
             div(class: "dv-actions") do
               span(class: "dv-code-chip") { "tyrion discover #{d['id']}" }
             end

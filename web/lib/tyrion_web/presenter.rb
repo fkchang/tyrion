@@ -9,9 +9,7 @@ module TyrionWeb
     # Minimal markdown -- not a general renderer. Spike/discovery prose is
     # short free text (question, hypothesis, finding, recommendation), so this
     # covers what that prose actually uses: paragraphs, inline code, bold,
-    # italic. No gem dependency (discoveries-markdown-rendering, a sibling
-    # story, owns building the real shared helper once dispatched -- this is
-    # the "reasonable minimal approach" called for until then). Input is
+    # italic, and bullet lists. No gem dependency. Input is
     # HTML-escaped FIRST, so every markup char this method emits is one it
     # added itself -- there is no path from raw user text to an unescaped tag.
     # Returns a plain String; the caller decides how to mark it safe for its
@@ -37,8 +35,24 @@ module TyrionWeb
                         .gsub(/(?<!\*)\*([^*\n]+)\*(?!\*)/, '<em>\1</em>')
       escaped = escaped.gsub(/\0(\d+)\0/) { spans[Regexp.last_match(1).to_i] }
 
-      escaped.split(/\n{2,}/).map { |para| "<p>#{para.gsub("\n", '<br>')}</p>" }.join
+      escaped.split(/\n{2,}/).map { |block| render_block(block) }.join
     end
+
+    # A block renders as a list only when EVERY line in it is a bullet -- a
+    # block mixing prose and bullets is rarer in this discovery/spike prose
+    # (short free text) than a stray leading "-" in a sentence, so treating a
+    # partial match as a list would misrender more often than it helps.
+    # Ordered lists aren't covered -- discovery prose doesn't use them, and
+    # scope stays to what's actually asked for (bold, code, lists = bullets).
+    def self.render_block(block)
+      lines = block.split("\n")
+      if lines.all? { |l| l =~ /^[-*]\s+/ }
+        "<ul>#{lines.map { |l| "<li>#{l.sub(/^[-*]\s+/, '')}</li>" }.join}</ul>"
+      else
+        "<p>#{block.gsub("\n", '<br>')}</p>"
+      end
+    end
+    private_class_method :render_block
 
     def self.story_status(status)
       case status
