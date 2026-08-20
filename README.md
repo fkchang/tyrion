@@ -218,7 +218,9 @@ tyrion discover [--auto]         Organic capture — question + finding
 tyrion discover <disc-id> \
   --finding "…" [--question "…"] Upgrade a mark → findings_ready, no prompts
 tyrion spike start "q" [--auto]  Frame a known unknown
-tyrion spike done [--auto]       Close with findings
+tyrion spike done [--auto] \
+  [--verdict <v>]                Close with findings (verdict: confirmed|falsified|
+                                  falsified_alternative|partial, optional, default unscored)
 tyrion spike promote <disc-id>   Promote finding → story
 ```
 

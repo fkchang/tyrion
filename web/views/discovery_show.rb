@@ -54,6 +54,7 @@ module Views
         div(class: "dv-card-id") do
           plain "#{d['id']} · #{d['status']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
           render_origin
+          render_verdict
         end
         div(class: "dv-card-headline") { d['headline'] } if d['headline']
         div(class: "dv-card-q") { "\"#{d['question']}\"" }
@@ -66,6 +67,15 @@ module Views
 
     def render_origin
       tag = TyrionWeb::Presenter.origin_tag(@discovery['origin'])
+      span(class: tag[:css]) { tag[:text] }
+    end
+
+    # nil (unscored) renders nothing -- same "nothing honest to show" rule the
+    # Discoveries list view follows via TyrionWeb::Presenter.verdict_tag.
+    def render_verdict
+      tag = TyrionWeb::Presenter.verdict_tag(@discovery['verdict'])
+      return unless tag
+
       span(class: tag[:css]) { tag[:text] }
     end
 

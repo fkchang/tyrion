@@ -225,5 +225,46 @@ RSpec.describe 'discovery origin (agent vs human)' do
       out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
       expect(out).to include('[agent]')
     end
+
+    it 'renders a humanized verdict distinctly from status' do
+      store.create_discovery(project_id: ctx.project['id'], status: 'active_spike', question: 'q2')
+      spike = store.active_spike_for(ctx.project['id'])
+      disc  = store.close_spike(spike['id'], finding: 'f', confidence: 'high', recommendation: 'r',
+                                              verdict: 'falsified_alternative')
+
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([disc['id']], store) }
+      expect(out).to match(/\[findings_ready\]/)
+      expect(out).to match(/Verdict:\s+falsified alternative/)
+    end
+
+    it 'shows unscored for a findings_ready discovery closed without --verdict' do
+      d = store.create_discovery(project_id: ctx.project['id'], status: 'findings_ready', question: 'q3')
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
+      expect(out).to match(/Verdict:\s+\(unscored\)/)
+    end
+
+    it 'omits the Verdict line entirely for a mark (can never carry one)' do
+      d = store.create_discovery(project_id: ctx.project['id'], status: 'mark', question: 'q4')
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
+      expect(out).not_to match(/Verdict:/)
+    end
+
+    it 'omits the Verdict line for a deferred mark -- deferred alone does not imply scoreable' do
+      d = store.create_discovery(project_id: ctx.project['id'], status: 'mark', question: 'q5')
+      store.defer_discovery(d['id'], reason: 'not worth pursuing')
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([d['id']], store) }
+      expect(out).not_to match(/Verdict:/)
+    end
+
+    it 'still shows a recorded verdict after the scored finding is later deferred' do
+      store.create_discovery(project_id: ctx.project['id'], status: 'active_spike', question: 'q6')
+      spike = store.active_spike_for(ctx.project['id'])
+      disc  = store.close_spike(spike['id'], finding: 'f', confidence: 'high', recommendation: 'r', verdict: 'partial')
+      store.defer_discovery(disc['id'], reason: 'shelved')
+
+      out, = capture_io { Tyrion::Commands.cmd_discovery_show([disc['id']], store) }
+      expect(out).to match(/\[deferred\]/)
+      expect(out).to match(/Verdict:\s+partial/)
+    end
   end
 end

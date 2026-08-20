@@ -1842,6 +1842,17 @@ module Tyrion
     # is deliberately lossy; a permanent delete is the one place that's wrong).
     def self.print_discovery_detail(disc)
       puts "#{disc['id']}  [#{disc['status']}]  #{Output.origin_tag(disc['origin'])}"
+      # An actual verdict value always renders, whatever the current status (a scored
+      # finding that was later deferred still carries the score it was given). A *missing*
+      # verdict only renders as "(unscored)" on Store::SCOREABLE_STATUSES -- statuses
+      # guaranteed to have passed through close_spike. A denylist on status alone gets this
+      # wrong: a mark can be deferred without ever reaching close_spike, and 'deferred'
+      # is not a status this allowlist can tell apart from a scored one by name alone --
+      # so a bare mark, live or deferred, correctly stays silent rather than printing a
+      # meaningless "(unscored)".
+      if disc['verdict'] || Store::SCOREABLE_STATUSES.include?(disc['status'])
+        puts "Verdict:        #{Output.verdict_label(disc['verdict']) || '(unscored)'}"
+      end
       puts "Headline:       #{disc['headline']}" if disc['headline']
       puts "Question:       #{disc['question'] || '—'}"
       puts "Finding:        #{disc['finding'] || '—'}"
@@ -1900,7 +1911,9 @@ module Tyrion
       when 'promote' then cmd_spike_promote(args, store)
       else
         $stderr.puts "Unknown spike subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion spike start \"your question\" [--auto]\n       tyrion spike done [--auto]\n       tyrion spike promote <disc-id>"
+        $stderr.puts "Usage: tyrion spike start \"your question\" [--auto]\n" \
+                     "       tyrion spike done [--auto] [--verdict <#{Store::VERDICTS.join('|')}>]\n" \
+                     "       tyrion spike promote <disc-id>"
         exit 1
       end
     end
@@ -1933,7 +1946,10 @@ module Tyrion
     end
 
     def self.cmd_spike_done(args, store, input: $stdin, output: $stdout)
-      origin = consume_auto_flag(args, default: nil)
+      origin  = consume_auto_flag(args, default: nil)
+      verdict = extract_flag_value(args, '--verdict')
+      die "Unknown verdict '#{verdict}'. Valid: #{Store::VERDICTS.join(', ')}" if verdict && !Store::VERDICTS.include?(verdict)
+
       project, = resolve_project_epic(store, require_epic: false)
 
       spike = store.active_spike_for(project['id'])
@@ -1944,7 +1960,8 @@ module Tyrion
       recommendation = prompt(input, output, "Recommendation: ")
 
       disc = store.close_spike(spike['id'], finding: presence(finding), confidence: confidence,
-                                            recommendation: presence(recommendation), origin: origin)
+                                            recommendation: presence(recommendation), origin: origin,
+                                            verdict: verdict)
       output.puts "[findings_ready] #{disc['id']}"
     end
 
@@ -3932,7 +3949,9 @@ module Tyrion
           tyrion discover <disc-id> --finding "…"  Upgrade a mark → findings_ready, no prompts
                                                     ([--question "…"] [--headline "…"])
           tyrion spike start "question" [--auto]   Frame a known unknown → active_spike
-          tyrion spike done [--auto]               Close spike with finding + confidence + recommendation
+          tyrion spike done [--auto] [--verdict <v>]
+                                                    Close spike with finding + confidence + recommendation
+                                                    (verdict: #{Store::VERDICTS.join('|')})
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
           tyrion discovery list [--status <alias>] List discoveries (aliases: active|marks|ready|promoted|deferred|all)
           tyrion discovery show <disc-id>          Show full discovery detail

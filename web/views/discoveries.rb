@@ -49,7 +49,18 @@ module Views
     private
 
     def render_origin(disc)
-      tag = TyrionWeb::Presenter.origin_tag(disc['origin'])
+      render_tag(TyrionWeb::Presenter.origin_tag(disc['origin']))
+    end
+
+    def render_verdict(disc)
+      render_tag(TyrionWeb::Presenter.verdict_tag(disc['verdict']))
+    end
+
+    # origin_tag always returns a tag; verdict_tag returns nil when unscored (nothing
+    # honest to show) -- one nil guard here covers both callers.
+    def render_tag(tag)
+      return unless tag
+
       span(class: tag[:css]) { tag[:text] }
     end
 
@@ -89,6 +100,7 @@ module Views
             div(class: "dv-card-id") do
               plain "#{d['id']} · found #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
               render_origin(d)
+              render_verdict(d)
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
             div(class: "dv-card-headline") { d['headline'] } if d['headline']

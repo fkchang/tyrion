@@ -86,6 +86,16 @@ module Tyrion
       agent_origin?(origin) ? cyan(origin_label(origin)) : dim(origin_label(origin))
     end
 
+    # Humanized verdict text, shared by the CLI (tyrion discovery show) and the web
+    # Discoveries views (TyrionWeb::Presenter.verdict_tag) so the two can't independently
+    # decide how to spell 'falsified_alternative' -- same reason origin_label exists.
+    # nil (unscored) is the caller's concern, not this method's: a mark, which can never
+    # carry a verdict, and a spike closed without --verdict both pass nil here for
+    # different reasons, and each caller decides what "no value" should render as.
+    def self.verdict_label(verdict)
+      verdict&.tr('_', ' ')
+    end
+
     # The one line a glance surface (status DISCOVERIES lane, discovery list,
     # ambient pane) should show for a discovery: the agent-authored headline
     # when one exists, falling back to the raw `question` for pre-headline

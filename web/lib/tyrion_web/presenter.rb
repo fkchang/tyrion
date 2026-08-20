@@ -145,6 +145,16 @@ module TyrionWeb
       { text: Tyrion::Output.origin_label(origin), css: css }
     end
 
+    # Renders orthogonally to status (dv-mini-seal/dv-card already carry that) so a
+    # findings_ready card can show "did the hypothesis hold up" without being mistaken
+    # for the lifecycle badge. nil (unscored) means no badge at all -- there is nothing
+    # honest to show, same reasoning as the CLI's '(unscored)' text.
+    def self.verdict_tag(verdict)
+      return nil unless verdict
+
+      { text: Tyrion::Output.verdict_label(verdict), css: "dv-verdict dv-verdict-#{verdict.tr('_', '-')}" }
+    end
+
     # Both expect the {spike:, ready_count:, mark_count:} shape
     # Data.load_discovery_summary returns (global-view-discovery-momentum).
 
