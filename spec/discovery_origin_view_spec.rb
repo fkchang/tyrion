@@ -43,4 +43,18 @@ RSpec.describe Views::DiscoveriesView do
     html = render(marks: [disc('disc-005', 'mark', 'agent mark', 'agent')])
     expect(html).not_to include("\e[")
   end
+
+  # discovery-verdict-field: the verdict axis must render distinctly from the status
+  # badge, on the one card type (findings_ready) that can ever carry one.
+  it 'badges a scored finding with its verdict, distinct from the status card class' do
+    d = disc('disc-006', 'findings_ready', 'q', 'agent').merge('verdict' => 'falsified_alternative')
+    html = render(findings_ready: [d])
+    expect(html).to include('dv-verdict-falsified-alternative')
+    expect(html).to include('falsified alternative')
+  end
+
+  it 'renders no verdict badge when unscored' do
+    html = render(findings_ready: [disc('disc-007', 'findings_ready', 'q', 'agent')])
+    expect(html).not_to include('dv-verdict')
+  end
 end

@@ -1760,10 +1760,11 @@ module Tyrion
       when 'list'     then cmd_discovery_list(args, store)
       when 'show'     then cmd_discovery_show(args, store)
       when 'defer'    then cmd_discovery_defer(args, store)
+      when 'delete'   then cmd_discovery_delete(args, store)
       when 'search'   then cmd_discovery_search(args, store)
       when 'headline' then cmd_discovery_headline(args, store)
       else
-        die "Usage: tyrion discovery [list|show|defer|search|headline]"
+        die "Usage: tyrion discovery [list|show|defer|delete|search|headline]"
       end
     end
 
@@ -1832,7 +1833,26 @@ module Tyrion
       disc = store.find_discovery(disc_id)
       die "Discovery #{disc_id} not found" unless disc
 
+      print_discovery_detail(disc)
+    end
+
+    # Shared renderer for `discovery show` and `discovery delete`'s echo — one
+    # place that prints the full row, so a deleted discovery's echo can't drift
+    # into a shortened glance-surface rendering (Output.discovery_glance_text
+    # is deliberately lossy; a permanent delete is the one place that's wrong).
+    def self.print_discovery_detail(disc)
       puts "#{disc['id']}  [#{disc['status']}]  #{Output.origin_tag(disc['origin'])}"
+      # An actual verdict value always renders, whatever the current status (a scored
+      # finding that was later deferred still carries the score it was given). A *missing*
+      # verdict only renders as "(unscored)" on Store::SCOREABLE_STATUSES -- statuses
+      # guaranteed to have passed through close_spike. A denylist on status alone gets this
+      # wrong: a mark can be deferred without ever reaching close_spike, and 'deferred'
+      # is not a status this allowlist can tell apart from a scored one by name alone --
+      # so a bare mark, live or deferred, correctly stays silent rather than printing a
+      # meaningless "(unscored)".
+      if disc['verdict'] || Store::SCOREABLE_STATUSES.include?(disc['status'])
+        puts "Verdict:        #{Output.verdict_label(disc['verdict']) || '(unscored)'}"
+      end
       puts "Headline:       #{disc['headline']}" if disc['headline']
       puts "Question:       #{disc['question'] || '—'}"
       puts "Finding:        #{disc['finding'] || '—'}"
@@ -1859,6 +1879,24 @@ module Tyrion
       die e.message
     end
 
+    def self.cmd_discovery_delete(args, store)
+      disc_id = args.shift
+      die "Usage: tyrion discovery delete <disc-id>" unless disc_id
+
+      project = resolve_project(store)
+      disc    = store.find_discovery(disc_id)
+      # A discovery belonging to another project is "not found" from here —
+      # project scope is the boundary, same as cmd_discover_upgrade — and
+      # since delete is irreversible, leaking a cross-project id is worse here.
+      die "Discovery #{disc_id} not found" unless disc && disc['project_id'] == project['id']
+
+      deleted = store.delete_discovery(disc_id)
+      puts "[deleted] #{disc_id}"
+      print_discovery_detail(deleted)
+    rescue RuntimeError => e
+      die e.message
+    end
+
     def self.defer_summary(disc)
       [disc['id'], presence(disc['defer_reason'])].compact.join(' — ')
     end
@@ -1873,7 +1911,9 @@ module Tyrion
       when 'promote' then cmd_spike_promote(args, store)
       else
         $stderr.puts "Unknown spike subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion spike start \"your question\" [--auto]\n       tyrion spike done [--auto]\n       tyrion spike promote <disc-id>"
+        $stderr.puts "Usage: tyrion spike start \"your question\" [--auto]\n" \
+                     "       tyrion spike done [--auto] [--verdict <#{Store::VERDICTS.join('|')}>]\n" \
+                     "       tyrion spike promote <disc-id>"
         exit 1
       end
     end
@@ -1906,7 +1946,10 @@ module Tyrion
     end
 
     def self.cmd_spike_done(args, store, input: $stdin, output: $stdout)
-      origin = consume_auto_flag(args, default: nil)
+      origin  = consume_auto_flag(args, default: nil)
+      verdict = extract_flag_value(args, '--verdict')
+      die "Unknown verdict '#{verdict}'. Valid: #{Store::VERDICTS.join(', ')}" if verdict && !Store::VERDICTS.include?(verdict)
+
       project, = resolve_project_epic(store, require_epic: false)
 
       spike = store.active_spike_for(project['id'])
@@ -1917,7 +1960,8 @@ module Tyrion
       recommendation = prompt(input, output, "Recommendation: ")
 
       disc = store.close_spike(spike['id'], finding: presence(finding), confidence: confidence,
-                                            recommendation: presence(recommendation), origin: origin)
+                                            recommendation: presence(recommendation), origin: origin,
+                                            verdict: verdict)
       output.puts "[findings_ready] #{disc['id']}"
     end
 
@@ -3905,11 +3949,14 @@ module Tyrion
           tyrion discover <disc-id> --finding "…"  Upgrade a mark → findings_ready, no prompts
                                                     ([--question "…"] [--headline "…"])
           tyrion spike start "question" [--auto]   Frame a known unknown → active_spike
-          tyrion spike done [--auto]               Close spike with finding + confidence + recommendation
+          tyrion spike done [--auto] [--verdict <v>]
+                                                    Close spike with finding + confidence + recommendation
+                                                    (verdict: #{Store::VERDICTS.join('|')})
           tyrion spike promote <disc-id>           Promote findings_ready → linked story
           tyrion discovery list [--status <alias>] List discoveries (aliases: active|marks|ready|promoted|deferred|all)
           tyrion discovery show <disc-id>          Show full discovery detail
           tyrion discovery defer <disc-id> ["why"] Retire an open mark/finding with a reason
+          tyrion discovery delete <disc-id>        Permanently remove a discovery (refused if promoted or blocking a story)
           tyrion discovery search "<term>"         Search discoveries (all statuses; silent if no match)
           tyrion discovery headline <disc-id> "…"  Set/update the glance-surface headline (ambient, status, list)
 

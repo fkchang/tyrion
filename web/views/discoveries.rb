@@ -2,11 +2,12 @@
 
 module Views
   class DiscoveriesView < Phlex::HTML
-    def initialize(project:, spike:, findings_ready:, marks:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0, project_slug: nil)
+    def initialize(project:, spike:, findings_ready:, marks:, epic:, stories:, disc_summary:, epic_switcher: [], git_branch: 'main', dirty_count: 0, project_slug: nil, token: nil)
       @project = project; @spike = spike; @findings_ready = findings_ready; @marks = marks
       @epic = epic; @stories = stories; @disc_summary = disc_summary
       @epic_switcher = epic_switcher
       @git_branch = git_branch; @dirty_count = dirty_count; @project_slug = project_slug
+      @token = token
     end
 
     def view_template
@@ -38,13 +39,28 @@ module Views
             end
           end
         end
+        if @project
+          render_monitor_badge
+          render_js
+        end
       end
     end
 
     private
 
     def render_origin(disc)
-      tag = TyrionWeb::Presenter.origin_tag(disc['origin'])
+      render_tag(TyrionWeb::Presenter.origin_tag(disc['origin']))
+    end
+
+    def render_verdict(disc)
+      render_tag(TyrionWeb::Presenter.verdict_tag(disc['verdict']))
+    end
+
+    # origin_tag always returns a tag; verdict_tag returns nil when unscored (nothing
+    # honest to show) -- one nil guard here covers both callers.
+    def render_tag(tag)
+      return unless tag
+
       span(class: tag[:css]) { tag[:text] }
     end
 
@@ -79,12 +95,12 @@ module Views
           div(class: "dv-section-title") { "findings_ready — #{@findings_ready.size} #{@findings_ready.size == 1 ? 'discovery' : 'discoveries'}" }
         end
         @findings_ready.each do |d|
-          age_days = d['created_at'] ? ((Time.now - Time.parse(d['created_at'])) / 86400).round : 0
-          aging = age_days >= 3
+          aging = TyrionWeb::Data.aged?(d['created_at'], TyrionWeb::Data::READY_AGING_DAYS)
           div(class: "dv-card ready", id: d['id']) do
             div(class: "dv-card-id") do
               a(href: "/discoveries/#{d['id']}", class: "dv-card-id-link") { "#{d['id']} · found #{TyrionWeb::Presenter.time_ago(d['created_at'])}" }
               render_origin(d)
+              render_verdict(d)
               span(class: "dv-aging-badge") { " ⚠ aging" } if aging
             end
             div(class: "dv-card-headline") { d['headline'] } if d['headline']
@@ -109,10 +125,7 @@ module Views
           div(class: "dv-section-title") { "marks — #{@marks.size} unformalized" }
         end
         @marks.each do |d|
-          # Unrounded so the badge flips at a full 14 days, not at 13.5 like the
-          # rounded age findings_ready uses.
-          age_days = d['created_at'] ? (Time.now - Time.parse(d['created_at'])) / 86400 : 0
-          aging = age_days >= 14
+          aging = TyrionWeb::Data.aged?(d['created_at'], TyrionWeb::Data::MARK_AGING_DAYS)
           div(class: "dv-card mark", id: d['id']) do
             div(class: "dv-card-id") do
               a(href: "/discoveries/#{d['id']}", class: "dv-card-id-link") { "#{d['id']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}" }
@@ -126,6 +139,65 @@ module Views
             end
           end
         end
+      end
+    end
+
+    POLL_INTERVAL_MS = 30_000
+
+    # Live polling, reload-on-change — same pattern as active_story.rb's
+    # /api/poll badge, scoped to the /discoveries index only (see this
+    # story's scope note: the per-discovery show page is a separate story).
+    # Reuses active_story.rb's #poll-badge/#poll-dot ids (each page has its
+    # own DOM, so no collision) so shared.css's fade-in/pulse animations
+    # apply here for free instead of needing their own copy.
+    def render_monitor_badge
+      div(id: "poll-badge",
+          style: "position:fixed;bottom:16px;right:16px;background:rgba(20,16,10,.88);border:1px solid rgba(180,140,80,.35);border-radius:20px;padding:6px 14px;display:flex;align-items:center;gap:6px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--amber-dim);z-index:900;backdrop-filter:blur(4px);cursor:default;user-select:none;",
+          data: { project: @project['slug'], token: @token }) do
+        span(id: "poll-dot", style: "width:7px;height:7px;border-radius:50%;background:var(--amber);display:inline-block;") {}
+        span(id: "poll-label") { "monitoring" }
+      end
+    end
+
+    def render_js
+      script do
+        raw safe(<<~JS)
+          (function() {
+            var badge = document.getElementById('poll-badge');
+            if (!badge) return;
+            var slug = badge.dataset.project;
+            var dot = document.getElementById('poll-dot');
+            var label = document.getElementById('poll-label');
+            // Seeded from the page's own render (same reason /ambient seeds its
+            // token) -- no null-sentinel bootstrap branch, and a stray falsy
+            // token from a 404 poll response is simply ignored below rather
+            // than latching and wedging the poller open.
+            var knownToken = badge.dataset.token || null;
+            var INTERVAL = #{POLL_INTERVAL_MS};
+
+            function poll() {
+              fetch('/api/discoveries_poll?project=' + encodeURIComponent(slug))
+                .then(function(r) { if (!r.ok) throw new Error('poll'); return r.json(); })
+                .then(function(data) {
+                  dot.style.background = 'var(--amber)';
+                  if (data.token && data.token !== knownToken) {
+                    knownToken = data.token;
+                    label.textContent = 'updating…';
+                    setTimeout(function() { window.location.reload(); }, 400);
+                  } else {
+                    label.textContent = 'monitoring';
+                  }
+                })
+                .catch(function() {
+                  dot.style.background = '#666';
+                  label.textContent = 'offline';
+                });
+            }
+
+            poll();
+            setInterval(poll, INTERVAL);
+          })();
+        JS
       end
     end
   end

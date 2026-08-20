@@ -1217,11 +1217,37 @@ module Tyrion
       end
     end
 
+    # The verdict vocabulary, colocated with the column it scores (see the
+    # add_verdict_to_discoveries migration's CHECK below, which enumerates the same four
+    # values) and the only method that ever writes one (#close_spike) -- so command-layer
+    # validation has exactly one source to read instead of a second copy that can drift out
+    # of step with what the schema actually accepts.
+    #
+    # confirmed: hypothesis held. falsified: it didn't, no alternative found. falsified_alternative:
+    # it didn't, but the spike surfaced what's true instead. partial: some held, some didn't.
+    VERDICTS = %w[confirmed falsified falsified_alternative partial].freeze
+
+    # Statuses guaranteed to have passed through #close_spike, where an omitted --verdict
+    # is a real, known "unscored" (not just "never had the chance"). A bare status denylist
+    # (e.g. "not mark, not active_spike") gets this wrong: a mark can be deferred without
+    # ever reaching close_spike, landing on 'deferred' -- a status this allowlist excludes,
+    # same as 'mark' itself. A row with an actual verdict value renders it regardless of
+    # status (see cmd_discovery_show) -- this list only governs when a *missing* verdict is
+    # worth announcing as "(unscored)" versus staying silent.
+    SCOREABLE_STATUSES = %w[findings_ready promoted_to_story].freeze
+
     # origin is who *filed* the discovery, set at spike start. A close only overwrites it
     # when the closer explicitly claims authorship (origin: 'agent' from --auto); passing
     # nil preserves whatever is stored, so closing an agent-framed spike without the flag
     # can never silently relabel it human.
-    def close_spike(id, finding:, confidence:, recommendation:, origin: nil)
+    #
+    # verdict is orthogonal to status: status tracks lifecycle (active_spike -> findings_ready
+    # -> promoted/deferred/invalidated), verdict scores whether the hypothesis held up
+    # (confirmed/falsified/falsified_alternative/partial). A close is the only place verdict is
+    # ever written, so a plain assignment (not COALESCE, unlike origin above) is correct --
+    # there is no prior verdict to preserve. Omitting --verdict must leave it nil (unscored),
+    # never default to 'confirmed'.
+    def close_spike(id, finding:, confidence:, recommendation:, origin: nil, verdict: nil)
       with_db do |db|
         db.transaction(:immediate) do
           disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
@@ -1230,8 +1256,8 @@ module Tyrion
 
           t = now
           db.execute(
-            "UPDATE discoveries SET status='findings_ready', finding=?, confidence=?, recommendation=?, origin=COALESCE(?, origin), updated_at=? WHERE id=?",
-            [finding, confidence, recommendation, origin, t, id]
+            "UPDATE discoveries SET status='findings_ready', finding=?, confidence=?, recommendation=?, origin=COALESCE(?, origin), verdict=?, updated_at=? WHERE id=?",
+            [finding, confidence, recommendation, origin, verdict, t, id]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
         end
@@ -1280,6 +1306,40 @@ module Tyrion
             [reason, now, id]
           )
           db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+        end
+      end
+    end
+
+    # Deletion is the one truly irreversible discovery verb — everything else
+    # (defer, upgrade_mark, close_spike) is a status flip that keeps the row
+    # findable. So it refuses whenever something else still points at this
+    # row rather than only checking status: a promoted discovery IS a story,
+    # and status=='promoted_to_story' is the *stricter* check — every promotion
+    # sets story_id in the same transaction as the status flip, but story_id
+    # alone has ON DELETE SET NULL and could theoretically go nil while status
+    # doesn't, so keying off status is what actually guarantees the row below
+    # exists. A blocked story's blocked_on_discovery would otherwise dangle
+    # with no FK to catch it (unlike born_from_discovery, which has ON DELETE
+    # SET NULL).
+    def delete_discovery(id)
+      with_db do |db|
+        db.transaction(:immediate) do
+          disc = db.get_first_row('SELECT * FROM discoveries WHERE id = ?', [id])
+          raise "Discovery not found: #{id}" unless disc
+
+          if disc['status'] == 'promoted_to_story'
+            story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [disc['story_id']])
+            raise "Discovery #{id} was promoted to story #{story['slug']} — cannot delete a discovery that became a story"
+          end
+
+          blockers = db.execute('SELECT slug FROM stories WHERE blocked_on_discovery = ?', [id])
+          unless blockers.empty?
+            names = blockers.map { |s| "tyrion unblock #{s['slug']}" }.join(', ')
+            raise "Discovery #{id} is blocking #{blockers.map { |s| s['slug'] }.join(', ')} — unblock first: #{names}"
+          end
+
+          db.execute('DELETE FROM discoveries WHERE id = ?', [id])
+          disc
         end
       end
     end
@@ -1976,6 +2036,18 @@ module Tyrion
       ['add_initiative_id_to_projects', lambda { |db|
         cols = db.execute('PRAGMA table_info(projects)').map { |r| r['name'] }
         db.execute('ALTER TABLE projects ADD COLUMN initiative_id TEXT') unless cols.include?('initiative_id')
+      }],
+      ['add_verdict_to_discoveries', lambda { |db|
+        # Orthogonal to status: status is lifecycle, verdict is "did the hypothesis hold up".
+        # Nullable, no backfill -- pre-existing findings_ready/promoted rows were never scored
+        # against this axis, and defaulting them to 'confirmed' would be a fabricated claim,
+        # same reasoning as headline/source_story_id above. The CHECK allows NULL explicitly
+        # (SQLite CHECK passes on NULL) so "unscored" is a real, representable state.
+        cols = db.execute('PRAGMA table_info(discoveries)').map { |r| r['name'] }
+        next if cols.include?('verdict')
+
+        allowed = VERDICTS.map { |v| "'#{v}'" }.join(',')
+        db.execute("ALTER TABLE discoveries ADD COLUMN verdict TEXT CHECK(verdict IS NULL OR verdict IN (#{allowed}))")
       }],
       ['add_parent_spike_id_to_discoveries', lambda { |db|
         # Which active_spike (if any) was in flight when this mark was filed —

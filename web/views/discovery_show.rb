@@ -55,6 +55,7 @@ module Views
         div(class: "dv-card-id") do
           plain "#{d['id']} · #{d['status']} · #{TyrionWeb::Presenter.time_ago(d['created_at'])}"
           render_origin
+          render_verdict
         end
         div(class: "dv-card-headline") { d['headline'] } if d['headline']
         div(class: "dv-card-q dv-md") { raw(safe(TyrionWeb::Presenter.markdown_lite(d['question']))) }
@@ -71,23 +72,30 @@ module Views
       span(class: tag[:css]) { tag[:text] }
     end
 
+    # nil (unscored) renders nothing -- same "nothing honest to show" rule the
+    # Discoveries list view follows via TyrionWeb::Presenter.verdict_tag.
+    def render_verdict
+      tag = TyrionWeb::Presenter.verdict_tag(@discovery['verdict'])
+      return unless tag
+
+      span(class: tag[:css]) { tag[:text] }
+    end
+
     # Every field beyond question/headline, each on its own presence -- a
-    # discovery can carry a recommendation without a confidence rating (or a
-    # verdict without a finding), and this page's whole job is showing the
-    # full record, so no field is gated behind another. This is the same
-    # field set Commands.cmd_discovery_show prints for the CLI (plus
-    # `verdict`, this epic's addition, and nested marks). `verdict` has no
-    # column yet -- landing via a sibling story in parallel -- so it reads as
-    # nil and is skipped until that story merges, same as any other unset
-    # field. Markdown is interpreted for the free-text fields; confidence is
-    # a short label, not prose, so it renders plain.
+    # discovery can carry a recommendation without a confidence rating, and
+    # this page's whole job is showing the full record, so no field is gated
+    # behind another. This is the same field set Commands.cmd_discovery_show
+    # prints for the CLI, minus `verdict` -- that already has its own header
+    # badge via render_verdict/verdict_tag, so repeating it here as a plain
+    # field would just show the same value twice. Markdown is interpreted for
+    # the free-text fields; confidence is a short label, not prose, so it
+    # renders plain.
     def render_fields
       render_field('Confidence', @discovery['confidence'], markdown: false)
       render_field('Hypothesis', @discovery['hypothesis'])
       render_field('Exit criteria', @discovery['exit_criteria'])
       render_field('Finding', @discovery['finding'])
       render_field('Recommendation', @discovery['recommendation'])
-      render_field('Verdict', @discovery['verdict'])
       render_field('Defer reason', @discovery['defer_reason'])
     end
 

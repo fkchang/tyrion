@@ -139,39 +139,44 @@ module Views
 
     def render_sidebar
       div(class: "sidebar") do
-        if @project && @epic
+        if @project
           div(style: "padding:10px 14px 0;font-size:12px;color:var(--text-dim);font-family:var(--font-mono);") do
-            plain "#{@project['slug']} › #{@epic['slug']}"
+            plain @epic ? "#{@project['slug']} › #{@epic['slug']}" : @project['slug']
           end
-          div(class: "sidebar-section") { "Stories · #{@epic['slug']}" }
 
-          @stories.each do |s|
-            s_status = s['status']
-            row_class = case s_status
-                        when 'done'        then 'story-row done'
-                        when 'in_progress' then 'story-row active'
-                        else 'story-row'
-                        end
-            icon_color = case s_status
-                         when 'done'        then 'var(--emerald)'
-                         when 'in_progress' then 'var(--amber)'
-                         else 'var(--ink-faint)'
-                         end
-            icon_glyph = s_status == 'pending' ? '○' : '●'
-            # Always link to the exact story: with parallel lanes several stories
-            # can be in_progress at once, so routing in-progress rows through the
-            # ambient active-story resolver ('/') showed the wrong card.
-            href = "/stories/#{s['id']}"
+          if @epic
+            div(class: "sidebar-section") { "Stories · #{@epic['slug']}" }
 
-            a(class: row_class, href: href, style: "text-decoration:none;") do
-              span(class: s_status == 'in_progress' ? 's-icon s-icon-pulse' : 's-icon',
-                   style: "color:#{icon_color}") { icon_glyph }
-              span(class: "s-name") { s['slug'] }
+            @stories.each do |s|
+              s_status = s['status']
+              row_class = case s_status
+                          when 'done'        then 'story-row done'
+                          when 'in_progress' then 'story-row active'
+                          else 'story-row'
+                          end
+              icon_color = case s_status
+                           when 'done'        then 'var(--emerald)'
+                           when 'in_progress' then 'var(--amber)'
+                           else 'var(--ink-faint)'
+                           end
+              icon_glyph = s_status == 'pending' ? '○' : '●'
+              # Always link to the exact story: with parallel lanes several stories
+              # can be in_progress at once, so routing in-progress rows through the
+              # ambient active-story resolver ('/') showed the wrong card.
+              href = "/stories/#{s['id']}"
+
+              a(class: row_class, href: href, style: "text-decoration:none;") do
+                span(class: s_status == 'in_progress' ? 's-icon s-icon-pulse' : 's-icon',
+                     style: "color:#{icon_color}") { icon_glyph }
+                span(class: "s-name") { s['slug'] }
+              end
             end
           end
 
           disc = @disc_summary
-          if disc[:spike] || disc[:ready_count] > 0 || disc[:mark_count] > 0
+          ready_count = disc[:ready_count].to_i
+          mark_count = disc[:mark_count].to_i
+          if disc[:spike] || ready_count > 0 || mark_count > 0
             div(class: "disc-strip") do
               div(class: "sidebar-section") { "Discoveries" }
               if disc[:spike]
@@ -180,15 +185,15 @@ module Views
                   span(class: "d-label") { disc[:spike]['question']&.slice(0, 40) || "active spike" }
                 end
               end
-              if disc[:ready_count] > 0
+              if ready_count > 0
                 a(class: "disc-row", href: "/discoveries", style: "text-decoration:none;") do
-                  span(class: "d-pill ready") { "#{disc[:ready_count]} ready" }
+                  span(class: "d-pill ready") { "#{ready_count} ready" }
                   span(class: "d-label") { "promote to story →" }
                 end
               end
-              if disc[:mark_count] > 0
+              if mark_count > 0
                 a(class: "disc-row", href: "/discoveries", style: "text-decoration:none;") do
-                  span(class: "d-pill mark") { "#{disc[:mark_count]} marks" }
+                  span(class: "d-pill mark") { "#{mark_count} marks" }
                   span(class: "d-label") { "unformalized" }
                 end
               end
