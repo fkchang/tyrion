@@ -59,4 +59,22 @@ RSpec.describe 'TyrionWeb::Presenter.markdown_lite' do
     html = TyrionWeb::Presenter.markdown_lite("intro paragraph\n\n- item one\n- item two")
     expect(html).to eq('<p>intro paragraph</p><ul><li>item one</li><li>item two</li></ul>')
   end
+
+  it 'does not let a * bullet marker pair with a later * on the same line as emphasis' do
+    # Regression: running the emphasis pass before stripping bullet markers let a "* "
+    # marker act as the OPENING asterisk for emphasis when a later "*" appeared on the
+    # same line, silently corrupting the whole list.
+    html = TyrionWeb::Presenter.markdown_lite("* one\n* two *maybe*")
+    expect(html).to eq('<ul><li>one</li><li>two <em>maybe</em></li></ul>')
+  end
+
+  it 'renders real emphasis correctly inside a * bullet item' do
+    html = TyrionWeb::Presenter.markdown_lite("* has *emphasis* text\n* plain")
+    expect(html).to eq('<ul><li>has <em>emphasis</em> text</li><li>plain</li></ul>')
+  end
+
+  it 'does not emit an empty <ul> for a leading blank block' do
+    html = TyrionWeb::Presenter.markdown_lite("\n\n- a")
+    expect(html).to eq('<ul><li>a</li></ul>')
+  end
 end
