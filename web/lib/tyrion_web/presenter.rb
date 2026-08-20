@@ -9,34 +9,24 @@ module TyrionWeb
     # Minimal markdown -- not a general renderer. Spike/discovery prose is
     # short free text (question, hypothesis, finding, recommendation), so this
     # covers what that prose actually uses: paragraphs, inline code, bold,
-    # italic, and bullet lists. No gem dependency. Input is
-    # HTML-escaped FIRST, so every markup char this method emits is one it
-    # added itself -- there is no path from raw user text to an unescaped tag.
-    # Returns a plain String; the caller decides how to mark it safe for its
-    # own template engine (e.g. Phlex's `raw(safe(...))`) -- this module deals
-    # in data, not view-framework types.
+    # italic, and bullet lists. No gem dependency. Every markup char this
+    # emits is one it added itself -- there is no path from raw user text to
+    # an unescaped tag. Returns a plain String; the caller decides how to mark
+    # it safe for its own template engine (e.g. Phlex's `raw(safe(...))`) --
+    # this module deals in data, not view-framework types.
     #
-    # Code spans are pulled out before the bold/italic passes and restored
-    # after, so `` `*.rb` `` or `` `a* b*` `` can't have its asterisks read as
-    # emphasis markers by a later pass -- discovery prose is routinely about
-    # code (globs, flags), so that collision is the common case, not an edge
-    # case. The placeholder uses \0, which CGI.escapeHTML output can never
-    # contain, so it can't collide with the source text the way a
-    # printable-character marker could.
+    # Blocks (blank-line-separated) are split BEFORE any inline (bold/code)
+    # processing, and a list block has its "- "/"* " marker stripped before
+    # that processing runs per line -- doing it in the other order (inline
+    # pass over the raw block, list-detection after) lets a bullet's own "* "
+    # marker pair up with a later "*" on the same line and get swallowed as an
+    # emphasis delimiter, silently eating the whole list.
     def self.markdown_lite(text)
-      return '' if text.nil? || text.strip.empty?
-
-      spans = []
-      escaped = CGI.escapeHTML(text).gsub(/`([^`\n]+)`/) do
-        spans << "<code>#{Regexp.last_match(1)}</code>"
-        "\0#{spans.size - 1}\0"
-      end
-      escaped = escaped.gsub(/\*\*([^*\n]+)\*\*/, '<strong>\1</strong>')
-                        .gsub(/(?<!\*)\*([^*\n]+)\*(?!\*)/, '<em>\1</em>')
-      escaped = escaped.gsub(/\0(\d+)\0/) { spans[Regexp.last_match(1).to_i] }
-
-      escaped.split(/\n{2,}/).map { |block| render_block(block) }.join
+      text.to_s.split(/\n{2,}/).reject { |block| block.strip.empty? }
+          .map { |block| render_block(block) }.join
     end
+
+    BULLET_RE = /\A[-*]\s+/
 
     # A block renders as a list only when EVERY line in it is a bullet -- a
     # block mixing prose and bullets is rarer in this discovery/spike prose
@@ -46,13 +36,34 @@ module TyrionWeb
     # scope stays to what's actually asked for (bold, code, lists = bullets).
     def self.render_block(block)
       lines = block.split("\n")
-      if lines.all? { |l| l =~ /^[-*]\s+/ }
-        "<ul>#{lines.map { |l| "<li>#{l.sub(/^[-*]\s+/, '')}</li>" }.join}</ul>"
+      if lines.all? { |line| line.match?(BULLET_RE) }
+        "<ul>#{lines.map { |line| "<li>#{render_inline(line.sub(BULLET_RE, ''))}</li>" }.join}</ul>"
       else
-        "<p>#{block.gsub("\n", '<br>')}</p>"
+        "<p>#{lines.map { |line| render_inline(line) }.join('<br>')}</p>"
       end
     end
     private_class_method :render_block
+
+    # Escape + bold/italic/code for a single line (never crosses a newline --
+    # a physical line is the unit both list items and paragraph lines share).
+    # Code spans are pulled out before the bold/italic passes and restored
+    # after, so `` `*.rb` `` or `` `a* b*` `` can't have its asterisks read as
+    # emphasis markers -- discovery prose is routinely about code (globs,
+    # flags), so that collision is the common case, not an edge case. The
+    # placeholder uses \0, which CGI.escapeHTML output can never contain, so
+    # it can't collide with the source text the way a printable-character
+    # marker could.
+    def self.render_inline(line)
+      spans = []
+      escaped = CGI.escapeHTML(line).gsub(/`([^`\n]+)`/) do
+        spans << "<code>#{Regexp.last_match(1)}</code>"
+        "\0#{spans.size - 1}\0"
+      end
+      escaped = escaped.gsub(/\*\*([^*\n]+)\*\*/, '<strong>\1</strong>')
+                        .gsub(/(?<!\*)\*([^*\n]+)\*(?!\*)/, '<em>\1</em>')
+      escaped.gsub(/\0(\d+)\0/) { spans[Regexp.last_match(1).to_i] }
+    end
+    private_class_method :render_inline
 
     def self.story_status(status)
       case status

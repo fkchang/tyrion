@@ -72,18 +72,33 @@ module Views
       div(class: "dv-card-q dv-md") { raw safe(TyrionWeb::Presenter.markdown_lite(question)) }
     end
 
-    # Label prefix + markdown-rendered value, stacked (label text then the
-    # value's own <p>/<ul> block) -- same shape as discovery_show.rb's
-    # render_field, reused here for the index card's prose fields (finding,
-    # recommendation, hypothesis, exit_criteria) so bold/code/lists interpret
-    # the same way on both pages.
-    def render_labeled_md(label, text)
-      return unless text && !text.to_s.strip.empty?
+    FIELD_LABEL_STYLE = "font-weight:600;color:var(--ink-faint);font-size:11px;text-transform:uppercase;letter-spacing:.04em"
 
-      div do
-        plain "#{label}: "
-        raw safe(TyrionWeb::Presenter.markdown_lite(text))
+    # Label above a value, same shape as discovery_show.rb's render_field --
+    # a plain inline label butting directly against markdown_lite's
+    # block-level <p>/<ul> output reads as an orphaned, unstyled prefix, so
+    # the label gets its own line same as the show page.
+    def render_labeled(label)
+      div(style: "margin-top:6px") do
+        div(style: FIELD_LABEL_STYLE) { label }
+        yield
       end
+    end
+
+    # Markdown-rendered prose fields (finding, recommendation, hypothesis,
+    # exit_criteria) so bold/code/lists interpret the same way on both pages.
+    def render_labeled_md(label, text)
+      return if text.to_s.strip.empty?
+
+      render_labeled(label) { raw safe(TyrionWeb::Presenter.markdown_lite(text)) }
+    end
+
+    # Confidence is a short label, not prose -- same "no markdown pass" rule
+    # discovery_show.rb's render_field(markdown: false) uses for it.
+    def render_labeled_plain(label, text)
+      return if text.to_s.strip.empty?
+
+      render_labeled(label) { plain text }
     end
 
     def render_spike_section
@@ -127,8 +142,8 @@ module Views
             div(class: "dv-card-headline") { d['headline'] } if d['headline']
             render_question(d['question'])
             div(class: "dv-card-meta dv-md") do
+              render_labeled_plain('Confidence', d['confidence'])
               render_labeled_md('Finding', d['finding'])
-              plain "Confidence: #{d['confidence']}" if d['confidence']
               render_labeled_md('Recommendation', d['recommendation'])
             end
             div(class: "dv-actions") do

@@ -1302,8 +1302,8 @@
   .dv-card-meta { font-size: 13px; color: var(--ink-dim); line-height: 1.6; }
   .dv-card.mark .dv-card-q { font-size: 14px; color: var(--ink-dim); }
   /* Presenter.markdown_lite output (question + the labeled full-record
-     fields on the discovery show page) -- the UA default <p> margin is too
-     loose for these short-prose cards. */
+     fields on both the Discoveries index cards and the discovery show page)
+     -- the UA default <p> margin is too loose for these short-prose cards. */
   .dv-md p { margin: 0 0 8px; }
   .dv-md p:last-child { margin-bottom: 0; }
   .dv-md ul { margin: 0 0 8px; padding-left: 20px; }

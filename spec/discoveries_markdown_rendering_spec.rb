@@ -49,4 +49,11 @@ RSpec.describe Views::DiscoveriesView do
     expect(html).to include('<strong>N+1</strong>')
     expect(html).to include('<ul><li>repro locally</li><li>confirm in logs</li></ul>')
   end
+
+  it 'escapes HTML in discovery prose rather than rendering it' do
+    d = disc('disc-013', 'question' => '<script>alert(1)</script>')
+    html = render(marks: [d])
+    expect(html).to include('&lt;script&gt;')
+    expect(html).not_to include('<script>alert(1)')
+  end
 end
