@@ -8,11 +8,12 @@ module Views
   # link to consistently.
   class DiscoveryShow < Phlex::HTML
     def initialize(project:, epic:, discovery:, epics:, stories:, disc_summary:, epic_switcher: [],
-                    git_branch: 'main', dirty_count: 0, flash: nil, sidebar_epic: nil)
+                    git_branch: 'main', dirty_count: 0, flash: nil, sidebar_epic: nil, child_marks: [])
       @project = project; @epic = epic; @discovery = discovery; @epics = epics
       @stories = stories; @disc_summary = disc_summary; @epic_switcher = epic_switcher
       @git_branch = git_branch; @dirty_count = dirty_count; @flash = flash
       @sidebar_epic = sidebar_epic || epic
+      @child_marks = child_marks
     end
 
     def view_template
@@ -57,9 +58,10 @@ module Views
           render_verdict
         end
         div(class: "dv-card-headline") { d['headline'] } if d['headline']
-        div(class: "dv-card-q") { "\"#{d['question']}\"" }
-        render_findings if d['finding'] || d['recommendation']
+        div(class: "dv-card-q dv-md") { raw(safe(TyrionWeb::Presenter.markdown_lite(d['question']))) }
+        render_fields
         render_epic_line
+        render_child_marks if @child_marks.any?
         div(style: "height:20px")
         render_actions
       end
@@ -79,21 +81,59 @@ module Views
       span(class: tag[:css]) { tag[:text] }
     end
 
-    # Each field rendered on its own presence -- recommendation in particular
-    # must not be gated behind confidence being set. A discovery can carry a
-    # recommendation without a confidence rating, and this page's whole job is
-    # showing the full record; hiding the most actionable field behind an
-    # unrelated null check defeated that.
-    def render_findings
-      lines = []
-      lines << "Finding: #{@discovery['finding']}" if @discovery['finding']
-      lines << "Confidence: #{@discovery['confidence']}" if @discovery['confidence']
-      lines << "Recommendation: #{@discovery['recommendation']}" if @discovery['recommendation']
+    # Every field beyond question/headline, each on its own presence -- a
+    # discovery can carry a recommendation without a confidence rating, and
+    # this page's whole job is showing the full record, so no field is gated
+    # behind another. This is the same field set Commands.cmd_discovery_show
+    # prints for the CLI, minus `verdict` -- that already has its own header
+    # badge via render_verdict/verdict_tag, so repeating it here as a plain
+    # field would just show the same value twice. Markdown is interpreted for
+    # the free-text fields; confidence is a short label, not prose, so it
+    # renders plain.
+    def render_fields
+      render_field('Confidence', @discovery['confidence'], markdown: false)
+      render_field('Hypothesis', @discovery['hypothesis'])
+      render_field('Exit criteria', @discovery['exit_criteria'])
+      render_field('Finding', @discovery['finding'])
+      render_field('Recommendation', @discovery['recommendation'])
+      render_field('Defer reason', @discovery['defer_reason'])
+    end
 
-      div(class: "dv-card-meta") do
-        lines.each_with_index do |line, i|
-          br if i.positive?
-          plain line
+    def render_field(label, text, markdown: true)
+      return unless text && !text.to_s.strip.empty?
+
+      div(class: "dv-card-meta", style: "margin-top:10px") do
+        div(style: field_label_style) { label }
+        if markdown
+          div(class: "dv-md") { raw(safe(TyrionWeb::Presenter.markdown_lite(text))) }
+        else
+          plain text
+        end
+      end
+    end
+
+    def field_label_style
+      "font-weight:600;color:var(--ink-faint);font-size:12px;text-transform:uppercase;" \
+        "letter-spacing:.04em;margin-bottom:2px"
+    end
+
+    # Marks filed while this discovery was the project's active_spike
+    # (parent_spike_id) -- nested here instead of the flat /discoveries index,
+    # which excludes them for the same reason (see load_discoveries_view).
+    def render_child_marks
+      div(style: "margin-top:16px;padding-top:14px;border-top:1px solid var(--border-2)") do
+        div(style: field_label_style + ";margin-bottom:8px") { "Marks filed under this spike (#{@child_marks.size})" }
+        @child_marks.each { |m| render_child_mark(m) }
+      end
+    end
+
+    def render_child_mark(m)
+      div(style: "padding:8px 0;border-bottom:1px solid var(--border-2)") do
+        div(style: "font-size:12px;color:var(--ink-faint);margin-bottom:2px") do
+          plain "#{m['id']} · #{TyrionWeb::Presenter.time_ago(m['created_at'])}"
+        end
+        a(href: "/discoveries/#{m['id']}", style: "color:var(--ink);text-decoration:none;font-size:13px") do
+          plain Tyrion::Output.discovery_glance_text(m)
         end
       end
     end

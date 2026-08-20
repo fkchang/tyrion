@@ -1,8 +1,44 @@
 # frozen_string_literal: true
 
+require 'cgi'
+
 module TyrionWeb
   module Presenter
     STALE_HOURS = 4
+
+    # Minimal markdown -- not a general renderer. Spike/discovery prose is
+    # short free text (question, hypothesis, finding, recommendation), so this
+    # covers what that prose actually uses: paragraphs, inline code, bold,
+    # italic. No gem dependency (discoveries-markdown-rendering, a sibling
+    # story, owns building the real shared helper once dispatched -- this is
+    # the "reasonable minimal approach" called for until then). Input is
+    # HTML-escaped FIRST, so every markup char this method emits is one it
+    # added itself -- there is no path from raw user text to an unescaped tag.
+    # Returns a plain String; the caller decides how to mark it safe for its
+    # own template engine (e.g. Phlex's `raw(safe(...))`) -- this module deals
+    # in data, not view-framework types.
+    #
+    # Code spans are pulled out before the bold/italic passes and restored
+    # after, so `` `*.rb` `` or `` `a* b*` `` can't have its asterisks read as
+    # emphasis markers by a later pass -- discovery prose is routinely about
+    # code (globs, flags), so that collision is the common case, not an edge
+    # case. The placeholder uses \0, which CGI.escapeHTML output can never
+    # contain, so it can't collide with the source text the way a
+    # printable-character marker could.
+    def self.markdown_lite(text)
+      return '' if text.nil? || text.strip.empty?
+
+      spans = []
+      escaped = CGI.escapeHTML(text).gsub(/`([^`\n]+)`/) do
+        spans << "<code>#{Regexp.last_match(1)}</code>"
+        "\0#{spans.size - 1}\0"
+      end
+      escaped = escaped.gsub(/\*\*([^*\n]+)\*\*/, '<strong>\1</strong>')
+                        .gsub(/(?<!\*)\*([^*\n]+)\*(?!\*)/, '<em>\1</em>')
+      escaped = escaped.gsub(/\0(\d+)\0/) { spans[Regexp.last_match(1).to_i] }
+
+      escaped.split(/\n{2,}/).map { |para| "<p>#{para.gsub("\n", '<br>')}</p>" }.join
+    end
 
     def self.story_status(status)
       case status
