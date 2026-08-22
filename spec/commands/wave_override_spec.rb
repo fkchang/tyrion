@@ -153,5 +153,14 @@ RSpec.describe 'wave_override — tyrion wave set' do
       refreshed = store.find_story(epic['id'], 'web-note-expand')
       expect(refreshed['wave_rationale']).to eq 'deploy gate first'
     end
+
+    it 'prints usage instead of storing "--help" as the rationale (disc-092 class)' do
+      make_story(slug: 'web-note-expand')
+      out, = capture_io { Tyrion::Commands.cmd_wave_set(['web-note-expand', '2', '--help'], store) }
+      expect(out).to eq("#{Tyrion::Commands::WAVE_SET_USAGE}\n")
+      refreshed = store.find_story(epic['id'], 'web-note-expand')
+      expect(refreshed['wave_rationale']).to be_nil
+      expect(refreshed['wave_source']).to eq 'inferred'
+    end
   end
 end

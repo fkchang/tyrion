@@ -95,4 +95,38 @@ RSpec.describe 'tyrion spike start' do
       expect(disc['exit_criteria']).to be_nil
     end
   end
+
+  # --help must not be treated as the question (disc-092)
+  describe '--help' do
+    it 'prints usage, prompts for nothing, and creates no discovery' do
+      output = StringIO.new
+
+      Tyrion::Commands.cmd_spike_start(['--help'], store, input: StringIO.new, output: output)
+
+      expect(output.string).to match(/Usage: tyrion spike start/)
+      expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
+    end
+
+    it 'also recognizes -h' do
+      output = StringIO.new
+
+      Tyrion::Commands.cmd_spike_start(['-h'], store, input: StringIO.new, output: output)
+
+      expect(output.string).to match(/Usage: tyrion spike start/)
+      expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
+    end
+  end
+
+  # Any other flag-shaped token must not be folded into the question either
+  # (same bug class as disc-092, same guard cmd_mark already has for disc-026).
+  describe 'unrecognized flags' do
+    it 'dies rather than treating the flag as the question' do
+      _out, err = capture_io do
+        expect { Tyrion::Commands.cmd_spike_start(['--headline', 'x'], store) }.to raise_error(SystemExit)
+      end
+
+      expect(err).to match(/Unknown flag --headline/)
+      expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
+    end
+  end
 end

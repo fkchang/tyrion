@@ -73,6 +73,18 @@ RSpec.describe 'tyrion block / unblock' do
       end
     end
 
+    context '--help' do
+      it 'prints usage instead of blocking the story on "--help" as the reason (disc-092 class)' do
+        make_story
+
+        out, = capture_io { Tyrion::Commands.cmd_block(['my-story', '--help'], store) }
+
+        expect(out).to eq("#{Tyrion::Commands::BLOCK_USAGE}\n")
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'pending'
+        expect(store.find_story(epic['id'], 'my-story')['blocked_on']).to be_nil
+      end
+    end
+
     context 'records the block as a story note' do
       before { make_story }
 

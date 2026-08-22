@@ -122,4 +122,15 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_promote' do
       expect(store.stories_for_epic(ctx.epic['id'])).to be_empty
     end
   end
+
+  context '--help' do
+    it 'prints usage and creates no story' do
+      output = StringIO.new
+
+      Tyrion::Commands.cmd_spike_promote(['--help'], store, input: StringIO.new, output: output)
+
+      expect(output.string).to match(/Usage: tyrion spike promote/)
+      expect(store.stories_for_epic(ctx.epic['id'])).to be_empty
+    end
+  end
 end

@@ -41,6 +41,18 @@ RSpec.describe 'tyrion mark' do
     end
   end
 
+  describe '--help' do
+    it 'prints usage and creates no discovery, even with no active project' do
+      ctx # materialise worktree stubs first
+      stub_repo(active_project: nil)
+
+      out, = capture_io { Tyrion::Commands.cmd_mark(['--help'], store) }
+
+      expect(out).to match(/Usage: tyrion mark/)
+      expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
+    end
+  end
+
   context 'when no active project is set' do
     before do
       ctx  # materialise worktree stubs first

@@ -160,5 +160,15 @@ RSpec.describe 'Tyrion::Commands.cmd_discovery_defer' do
       capture_io { Tyrion::Commands.cmd_discovery(['defer', disc['id'], 'via dispatch'], store) }
       expect(store.find_discovery(disc['id'])['status']).to eq 'deferred'
     end
+
+    it 'prints usage instead of storing "--help" as the defer reason (disc-092 class)' do
+      disc = discovery('mark')
+      out, = capture_io { Tyrion::Commands.cmd_discovery_defer([disc['id'], '--help'], store) }
+
+      expect(out).to eq("#{Tyrion::Commands::DISCOVERY_DEFER_USAGE}\n")
+      after = store.find_discovery(disc['id'])
+      expect(after['status']).to eq 'mark'
+      expect(after['defer_reason']).to be_nil
+    end
   end
 end

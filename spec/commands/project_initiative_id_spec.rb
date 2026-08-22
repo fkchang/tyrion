@@ -41,6 +41,13 @@ RSpec.describe 'project initiative_id' do
       expect { Tyrion::Commands.cmd_project(['set-initiative', 'init-083'], store) }
         .to raise_error(SystemExit).and output(/No active project/).to_stderr
     end
+
+    it 'prints usage instead of storing "--help" as the initiative id (disc-092 class)' do
+      out, = capture_io { Tyrion::Commands.cmd_project(['set-initiative', '--help'], store) }
+
+      expect(out).to eq("#{Tyrion::Commands::PROJECT_USAGE}\n")
+      expect(store.find_project_by_slug(project['slug'])['initiative_id']).to be_nil
+    end
   end
 
   # ── CLI show (criterion 4) ────────────────────────────────────────────────

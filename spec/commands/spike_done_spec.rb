@@ -123,4 +123,18 @@ RSpec.describe 'Tyrion::Commands.cmd_spike_done' do
       expect(disc['recommendation']).to eq 'rec text'
     end
   end
+
+  # --help must not run the close-spike prompts against the real active spike
+  context '--help' do
+    it 'prints usage without prompting and leaves the active spike untouched' do
+      output = StringIO.new
+
+      Tyrion::Commands.cmd_spike_done(['--help'], store, input: StringIO.new, output: output)
+
+      expect(output.string).to match(/Usage: tyrion spike done/)
+      spike = store.active_spike_for(ctx.project['id'])
+      expect(spike).not_to be_nil
+      expect(spike['status']).to eq 'active_spike'
+    end
+  end
 end

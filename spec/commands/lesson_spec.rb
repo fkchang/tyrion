@@ -42,6 +42,13 @@ RSpec.describe 'tyrion lesson / lessons' do
       lessons = store.list_lessons(project_id: ctx.project['id'])
       expect(lessons.first['text']).to eq 'do not offer rspec'
     end
+
+    it 'prints usage instead of storing "--help" as the lesson text (disc-092 class)' do
+      out, = capture_io { Tyrion::Commands.cmd_lesson(['add', '--at', 'uat', '--help'], store) }
+
+      expect(out).to eq("#{Tyrion::Commands::LESSON_ADD_USAGE}\n")
+      expect(store.list_lessons(project_id: ctx.project['id'])).to be_empty
+    end
   end
 
   describe 'tyrion lessons (no flags)' do
@@ -103,9 +110,12 @@ RSpec.describe 'tyrion lesson / lessons' do
 
   describe 'tyrion lesson (no subcommand)' do
     it 'dies with usage instead of an unknown-subcommand error' do
-      expect {
-        Tyrion::Commands.cmd_lesson([], store)
-      }.to raise_error(SystemExit).and output(/Usage: tyrion lesson add/).to_stderr
+      _out, err = capture_io do
+        expect { Tyrion::Commands.cmd_lesson([], store) }.to raise_error(SystemExit)
+      end
+
+      expect(err).to eq("Error: #{Tyrion::Commands::LESSON_USAGE}\n")
+      expect(err).not_to include('Unknown lesson subcommand')
     end
   end
 

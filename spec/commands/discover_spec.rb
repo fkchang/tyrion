@@ -14,6 +14,25 @@ RSpec.describe 'tyrion discover' do
   end
   let(:store) { ctx.store }
 
+  describe '--help' do
+    it 'prints usage, prompts for nothing, and creates no discovery' do
+      output = StringIO.new
+
+      Tyrion::Commands.cmd_discover(['--help'], store, input: StringIO.new, output: output)
+
+      expect(output.string).to eq("#{Tyrion::Commands::DISCOVER_USAGE}\n")
+      expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
+    end
+
+    it 'also recognizes -h, including when a disc-id would otherwise be read as positional' do
+      output = StringIO.new
+
+      Tyrion::Commands.cmd_discover(['-h'], store, input: StringIO.new, output: output)
+
+      expect(output.string).to eq("#{Tyrion::Commands::DISCOVER_USAGE}\n")
+    end
+  end
+
   describe 'happy path' do
     it 'persists the discovery with correct fields and prints findings_ready' do
       input  = StringIO.new("testing authentication flow\nJWT expiry not refreshed on activity\nlater\n")

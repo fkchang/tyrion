@@ -137,6 +137,82 @@ module Tyrion
       end
     end
 
+    # ── subcommand-group help / dispatch ─────────────────────────────────────
+    # route_subcommand is shared by every group command that shifts a
+    # subcommand token and picks a handler (project, epic, discovery, spike,
+    # criteria, followup, lesson, setup, hook, whitelist, plus the
+    # epic-depends/depends/wave add|rm|set groups) — centralized here after
+    # disc-092 (`tyrion spike start --help` silently became a spike literally
+    # named "--help") turned out not to be a spike-only bug: none of these
+    # groups recognized --help as the subcommand token either, they'd just die
+    # with "Unknown X subcommand: --help". One helper instead of one
+    # hand-rolled case/else/die per group means a group added later gets
+    # --help for free instead of by remembering to copy the pattern.
+    #
+    # It only recognizes --help as the subcommand token itself (`tyrion spike
+    # --help`), deliberately not scanning the rest of a group's args (`tyrion
+    # spike start --help` is NOT caught here) — an earlier version of this
+    # helper did scan the whole remaining args array, which fixed disc-092's
+    # sibling bugs (`tyrion setup claude --help` ran the full installer;
+    # `tyrion whitelist add --help` wrote to settings.json) but broke
+    # something else: it intercepted before a leaf's own, more specific guard
+    # ever ran, so `tyrion spike start --help` printed the whole 3-line
+    # SPIKE_USAGE instead of just SPIKE_START_USAGE. The leaves that persist
+    # content or have a side effect (spike start/done/promote, mark, discover,
+    # web, lesson add, setup claude, whitelist's add/remove) each own their
+    # *own* help_requested? guard instead — same pattern, applied at the point
+    # that actually knows what's mutating and what usage line is relevant.
+
+    # `--help`/`-h` recognition for commands that otherwise treat their first
+    # positional arg as free-text content (question/description/etc). Deliberately
+    # excludes bare 'help' here (unlike route_subcommand below, and unlike the
+    # top-level dispatcher) — these commands' positional text is free-form prose
+    # where "help" is plausible real content; only the flag-shaped forms are
+    # unambiguous.
+    HELP_FLAGS = %w[--help -h].freeze
+
+    def self.help_requested?(args)
+      args.any? { |a| HELP_FLAGS.include?(a) }
+    end
+
+    # Anything still flag-shaped after a command has extracted the flags it
+    # recognizes is an unrecognized flag — die rather than silently fold it
+    # into stored content. This is the guard cmd_mark has had since disc-026;
+    # generalized so any other command that persists free text can reuse it
+    # instead of re-deriving it (disc-092 is the same bug with a different
+    # flag spelling, on a different command).
+    def self.reject_unknown_flags!(args, usage)
+      unknown = args.find { |a| a.start_with?('--') }
+      die "Unknown flag #{unknown}\n#{usage}" if unknown
+    end
+
+    # `args` is the group's NOT-yet-shifted args array — route_subcommand does
+    # the shift itself so every call site doesn't repeat `sub = args.shift`.
+    # `table` maps each subcommand name to a zero-arg callable; `group_usage`
+    # is the group's full usage text, shown for --help, 'help', and an
+    # unrecognized subcommand alike, routed through whichever IO the caller
+    # threads via `output:` (defaults to real stdout — followup/lesson thread
+    # their own for testability, same as their handlers already do). `default:`
+    # is what a bare invocation (no subcommand at all) resolves to for the one
+    # group that has a real default (`whitelist`'s nil→'show'); nil means "no
+    # subcommand" and dies same as an unrecognized one always has — a
+    # deliberate difference from bare `tyrion` itself (usage, exit 0): several
+    # of these groups already had a spec pinning "no subcommand" as an error,
+    # not a --help-equivalent, and this preserves that rather than papering
+    # over it.
+    def self.route_subcommand(args, group, group_usage, table, default: nil, output: $stdout)
+      sub = args.shift || default
+      return output.puts(group_usage) if HELP_FLAGS.include?(sub) || sub == 'help'
+
+      handler = table[sub]
+      # A missing subcommand (nil) gets plain usage, not "Unknown ... subcommand: "
+      # with a dangling empty value — that phrasing is only honest when a real,
+      # wrong token was given.
+      die(sub ? "Unknown #{group} subcommand: #{sub}\n#{group_usage}" : group_usage) unless handler
+
+      handler.call
+    end
+
     # ── init ───────────────────────────────────────────────────────────────
 
     def self.cmd_init(args, store)
@@ -168,21 +244,28 @@ module Tyrion
 
     # ── project ────────────────────────────────────────────────────────────
 
+    PROJECT_USAGE = 'Usage: tyrion project [list|new|show|activate|sync|edit-about|set-initiative]'
+
     def self.cmd_project(args, store)
-      sub = args.shift
-      case sub
-      when 'list'        then cmd_project_list(args, store)
-      when 'new'         then cmd_project_new(args, store)
-      when 'show'        then cmd_project_show(args, store)
-      when 'activate'    then cmd_project_activate(args, store)
-      when 'sync'        then cmd_project_sync(args, store)
-      when 'edit-about'  then cmd_project_edit_about(args, store)
-      when 'set-initiative' then cmd_project_set_initiative(args, store)
-      else
-        $stderr.puts "Unknown project subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion project [list|new|show|activate|sync|edit-about|set-initiative]"
-        exit 1
-      end
+      # Checked up front, across the whole group, same reasoning as
+      # cmd_whitelist: several of these leaves (new, set-initiative,
+      # edit-about, sync) have no per-entity lookup to catch a bad token
+      # before writing — 'tyrion project set-initiative --help' would
+      # otherwise store the literal string "--help" as the initiative id
+      # (disc-092's exact failure mode), and PROJECT_USAGE already covers all
+      # seven subcommands in one line, so there's no narrower usage this
+      # would be shadowing (unlike spike).
+      return puts PROJECT_USAGE if help_requested?(args)
+
+      route_subcommand(args, 'project', PROJECT_USAGE, {
+        'list'           => -> { cmd_project_list(args, store) },
+        'new'            => -> { cmd_project_new(args, store) },
+        'show'           => -> { cmd_project_show(args, store) },
+        'activate'       => -> { cmd_project_activate(args, store) },
+        'sync'           => -> { cmd_project_sync(args, store) },
+        'edit-about'     => -> { cmd_project_edit_about(args, store) },
+        'set-initiative' => -> { cmd_project_set_initiative(args, store) }
+      })
     end
 
     def self.cmd_project_list(args, store)
@@ -333,25 +416,22 @@ module Tyrion
 
     # ── epic ───────────────────────────────────────────────────────────────
 
+    EPIC_USAGE = 'Usage: tyrion epic [list|show|activate|pause|complete|archive|unarchive|mode|parent|depends|waves]'
+
     def self.cmd_epic(args, store)
-      sub = args.shift
-      case sub
-      when 'list'     then cmd_epic_list(args, store)
-      when 'show'     then cmd_epic_show(args, store)
-      when 'activate' then cmd_epic_activate(args, store)
-      when 'pause'    then cmd_epic_pause(args, store)
-      when 'complete' then cmd_epic_complete(args, store)
-      when 'archive'   then cmd_epic_archive(args, store)
-      when 'unarchive' then cmd_epic_unarchive(args, store)
-      when 'mode'      then cmd_epic_mode(args, store)
-      when 'parent'    then cmd_epic_parent(args, store)
-      when 'depends'   then cmd_epic_depends(args, store)
-      when 'waves'     then cmd_epic_waves(args, store)
-      else
-        $stderr.puts "Unknown epic subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion epic [list|show|activate|pause|complete|archive|unarchive|mode|parent|depends|waves]"
-        exit 1
-      end
+      route_subcommand(args, 'epic', EPIC_USAGE, {
+        'list'      => -> { cmd_epic_list(args, store) },
+        'show'      => -> { cmd_epic_show(args, store) },
+        'activate'  => -> { cmd_epic_activate(args, store) },
+        'pause'     => -> { cmd_epic_pause(args, store) },
+        'complete'  => -> { cmd_epic_complete(args, store) },
+        'archive'   => -> { cmd_epic_archive(args, store) },
+        'unarchive' => -> { cmd_epic_unarchive(args, store) },
+        'mode'      => -> { cmd_epic_mode(args, store) },
+        'parent'    => -> { cmd_epic_parent(args, store) },
+        'depends'   => -> { cmd_epic_depends(args, store) },
+        'waves'     => -> { cmd_epic_waves(args, store) }
+      })
     end
 
     def self.cmd_epic_list(args, store)
@@ -589,14 +669,13 @@ module Tyrion
       die e.message
     end
 
+    EPIC_DEPENDS_USAGE = 'Usage: tyrion epic depends add <slug> <dep-slug> | tyrion epic depends rm <slug> <dep-slug>'
+
     def self.cmd_epic_depends(args, store)
-      subcmd = args.shift
-      case subcmd
-      when 'add' then cmd_epic_depends_add(args, store)
-      when 'rm'  then cmd_epic_depends_rm(args, store)
-      else
-        die "Usage: tyrion epic depends add <slug> <dep-slug> | tyrion epic depends rm <slug> <dep-slug>"
-      end
+      route_subcommand(args, 'epic depends', EPIC_DEPENDS_USAGE, {
+        'add' => -> { cmd_epic_depends_add(args, store) },
+        'rm'  => -> { cmd_epic_depends_rm(args, store) }
+      })
     end
 
     def self.cmd_epic_depends_add(args, store)
@@ -1220,7 +1299,15 @@ module Tyrion
     # running it twice never interrupts a session in progress; `restart`
     # is the explicit, deliberate action for picking up code changes.
 
+    WEB_USAGE = 'Usage: tyrion web [open|ambient|restart|stop|status] [--port N] [--no-open]'
+
     def self.cmd_web(args, store)
+      # Checked before the sub/flag split below, which would otherwise treat
+      # --help as noise (it starts with '--', so sub falls back to 'open') and
+      # silently launch the web server — the one place a missed --help would
+      # cause an unwanted side effect rather than just an unhelpful error.
+      return puts WEB_USAGE if help_requested?(args)
+
       sub     = args.first && !args.first.start_with?('--') ? args.shift : 'open'
       port    = (extract_flag_value(args, '--port') || WebServer::DEFAULT_PORT).to_i
       open    = !args.delete('--no-open')
@@ -1233,7 +1320,7 @@ module Tyrion
       when 'stop'          then web_stop(port)
       when 'status'        then web_print_status(port)
       else
-        die "Usage: tyrion web [open|ambient|restart|stop|status] [--port N] [--no-open]"
+        die WEB_USAGE
       end
     end
 
@@ -1398,15 +1485,24 @@ module Tyrion
 
     # ── block ──────────────────────────────────────────────────────────────
 
+    BLOCK_USAGE = 'Usage: tyrion block <slug> "what unblocks it" [--discovery disc-NNN]'
+
     def self.cmd_block(args, store)
+      return puts BLOCK_USAGE if help_requested?(args)
+
       slug = args.shift
-      die "Usage: tyrion block <slug> \"what unblocks it\" [--discovery disc-NNN]" unless slug
+      die BLOCK_USAGE unless slug
 
-      disc_idx = args.index('--discovery')
-      disc_id  = disc_idx ? args[disc_idx + 1] : nil
-      reason   = presence((disc_idx ? args[0...disc_idx] : args).join(' '))
+      disc_idx     = args.index('--discovery')
+      disc_id      = disc_idx ? args[disc_idx + 1] : nil
+      reason_words = disc_idx ? args[0...disc_idx] : args
+      # Anything flag-shaped in the reason words is an unrecognized flag — die
+      # rather than silently fold it into the stored blocked_on text (same
+      # disc-026/disc-092 bug class as cmd_mark/cmd_spike_start).
+      reject_unknown_flags!(reason_words, BLOCK_USAGE)
+      reason = presence(reason_words.join(' '))
 
-      die "Usage: tyrion block <slug> \"what unblocks it\" [--discovery disc-NNN]" unless reason
+      die BLOCK_USAGE unless reason
 
       _project, epic = resolve_project_epic(store)
       story = store.find_story(epic['id'], slug)
@@ -1627,14 +1723,15 @@ module Tyrion
     MARK_USAGE = %(Usage: tyrion mark "description" [--headline "…"] [--auto])
 
     def self.cmd_mark(args, store)
+      return puts MARK_USAGE if help_requested?(args)
       return puts "No active project." unless Repo.active_project
 
       origin   = consume_auto_flag(args)
       headline = extract_flag_value(args, '--headline')
-      # Anything left that's still flag-shaped (--foo), wherever it landed, is an
-      # unrecognized flag — die instead of silently folding it into the question (disc-026).
-      unknown = args.find { |a| a.start_with?('--') }
-      die "Unknown flag #{unknown}\n#{MARK_USAGE}" if unknown
+      # Anything left that's still flag-shaped, wherever it landed, is an
+      # unrecognized flag — die instead of silently folding it into the
+      # question (disc-026, the original source of reject_unknown_flags!).
+      reject_unknown_flags!(args, MARK_USAGE)
 
       project, epic = resolve_project_epic(store, require_epic: false)
       # Read-only lane lookup, never resolve_my_story: filing a mark must not
@@ -1689,7 +1786,13 @@ module Tyrion
     # prompt); bare, it runs the original three-prompt organic capture.
     # The positional id is the only discriminator — flags without an id fall
     # through to the interactive path exactly as they did before.
+    DISCOVER_INTERACTIVE_USAGE = 'Usage: tyrion discover [--auto]'
+    DISCOVER_UPGRADE_USAGE     = 'Usage: tyrion discover <disc-id> --finding "..." [--question "..."] [--headline "..."] [--auto]'
+    DISCOVER_USAGE             = [DISCOVER_INTERACTIVE_USAGE, DISCOVER_UPGRADE_USAGE].join("\n")
+
     def self.cmd_discover(args, store, input: $stdin, output: $stdout)
+      return output.puts(DISCOVER_USAGE) if help_requested?(args)
+
       # Consumed first so the flag can never be read as the positional mark-id.
       # nil (flag absent) means "create as human" below and "leave origin alone"
       # on the upgrade path — the two defaults consume_auto_flag documents.
@@ -1727,7 +1830,7 @@ module Tyrion
     # Non-interactive: no prompts, no fallback question. --finding is what makes
     # a mark a finding, so its absence is a usage error rather than a prompt.
     def self.cmd_discover_upgrade(disc_id, store, question:, finding:, origin:, output: $stdout, headline: nil)
-      die "Usage: tyrion discover <disc-id> --finding \"...\" [--question \"...\"] [--headline \"...\"] [--auto]" unless presence(finding)
+      die DISCOVER_UPGRADE_USAGE unless presence(finding)
 
       project = resolve_project(store)
       disc    = store.find_discovery(disc_id)
@@ -1754,27 +1857,33 @@ module Tyrion
 
     # ── discovery ─────────────────────────────────────────────────────────
 
+    DISCOVERY_USAGE = 'Usage: tyrion discovery [list|show|defer|delete|search|headline]'
+
     def self.cmd_discovery(args, store)
-      sub = args.shift
-      case sub
-      when 'list'     then cmd_discovery_list(args, store)
-      when 'show'     then cmd_discovery_show(args, store)
-      when 'defer'    then cmd_discovery_defer(args, store)
-      when 'delete'   then cmd_discovery_delete(args, store)
-      when 'search'   then cmd_discovery_search(args, store)
-      when 'headline' then cmd_discovery_headline(args, store)
-      else
-        die "Usage: tyrion discovery [list|show|defer|delete|search|headline]"
-      end
+      route_subcommand(args, 'discovery', DISCOVERY_USAGE, {
+        'list'     => -> { cmd_discovery_list(args, store) },
+        'show'     => -> { cmd_discovery_show(args, store) },
+        'defer'    => -> { cmd_discovery_defer(args, store) },
+        'delete'   => -> { cmd_discovery_delete(args, store) },
+        'search'   => -> { cmd_discovery_search(args, store) },
+        'headline' => -> { cmd_discovery_headline(args, store) }
+      })
     end
 
     # Standalone update path — lets a headline be sharpened later without also
     # needing a status transition (mark/discover already accept --headline at
     # creation/upgrade time for that case).
+    DISCOVERY_HEADLINE_USAGE = 'Usage: tyrion discovery headline <disc-id> "<text>"'
+
     def self.cmd_discovery_headline(args, store)
-      disc_id  = args.shift
+      return puts DISCOVERY_HEADLINE_USAGE if help_requested?(args)
+
+      disc_id = args.shift
+      # Same disc-026/disc-092 bug class as cmd_mark/cmd_spike_start — a stray
+      # flag would otherwise silently become the stored headline text.
+      reject_unknown_flags!(args, DISCOVERY_HEADLINE_USAGE)
       headline = presence(args.join(' ').strip)
-      die "Usage: tyrion discovery headline <disc-id> \"<text>\"" unless disc_id && headline
+      die DISCOVERY_HEADLINE_USAGE unless disc_id && headline
 
       project = resolve_project(store)
       disc    = store.find_discovery(disc_id)
@@ -1863,9 +1972,16 @@ module Tyrion
       puts "Defer reason:   #{disc['defer_reason']}" if disc['defer_reason']
     end
 
+    DISCOVERY_DEFER_USAGE = 'Usage: tyrion discovery defer <disc-id> ["why"]'
+
     def self.cmd_discovery_defer(args, store)
+      return puts DISCOVERY_DEFER_USAGE if help_requested?(args)
+
       disc_id = args.shift
-      die "Usage: tyrion discovery defer <disc-id> [\"why\"]" unless disc_id
+      die DISCOVERY_DEFER_USAGE unless disc_id
+      # Same disc-026/disc-092 bug class as cmd_mark/cmd_spike_start — a stray
+      # flag would otherwise silently become the stored defer reason.
+      reject_unknown_flags!(args, DISCOVERY_DEFER_USAGE)
       reason = presence(args.join(' ').strip)
 
       disc = store.find_discovery(disc_id)
@@ -1903,25 +2019,35 @@ module Tyrion
 
     # ── spike ─────────────────────────────────────────────────────────────
 
+    # Per-subcommand usage lines, composed into the group-level SPIKE_USAGE — split
+    # out (rather than one shared blob) so each subcommand's --help and its own
+    # "missing required arg" die show the one usage line relevant to it, not all
+    # three (the earlier single-constant version drifted: `die` calls already
+    # hand-typed their own copy of these strings before --help existed).
+    SPIKE_START_USAGE   = %(Usage: tyrion spike start "your question" [--auto])
+    SPIKE_DONE_USAGE    = "Usage: tyrion spike done [--auto] [--verdict <#{Store::VERDICTS.join('|')}>]"
+    SPIKE_PROMOTE_USAGE = 'Usage: tyrion spike promote <disc-id>'
+    SPIKE_USAGE         = [SPIKE_START_USAGE, SPIKE_DONE_USAGE, SPIKE_PROMOTE_USAGE].join("\n")
+
     def self.cmd_spike(args, store)
-      sub = args.shift
-      case sub
-      when 'start'   then cmd_spike_start(args, store)
-      when 'done'    then cmd_spike_done(args, store)
-      when 'promote' then cmd_spike_promote(args, store)
-      else
-        $stderr.puts "Unknown spike subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion spike start \"your question\" [--auto]\n" \
-                     "       tyrion spike done [--auto] [--verdict <#{Store::VERDICTS.join('|')}>]\n" \
-                     "       tyrion spike promote <disc-id>"
-        exit 1
-      end
+      route_subcommand(args, 'spike', SPIKE_USAGE, {
+        'start'   => -> { cmd_spike_start(args, store) },
+        'done'    => -> { cmd_spike_done(args, store) },
+        'promote' => -> { cmd_spike_promote(args, store) }
+      })
     end
 
     def self.cmd_spike_start(args, store, input: $stdin, output: $stdout)
-      origin   = consume_auto_flag(args)
+      return output.puts(SPIKE_START_USAGE) if help_requested?(args)
+
+      origin = consume_auto_flag(args)
+      # Anything still flag-shaped is an unrecognized flag — die rather than fold
+      # it into the question, same guard cmd_mark uses (disc-026); this is the
+      # same bug class as disc-092, just with a different flag spelling.
+      reject_unknown_flags!(args, SPIKE_START_USAGE)
+
       question = args.first&.strip
-      die "Usage: tyrion spike start \"your question\" [--auto]" if question.nil? || question.empty?
+      die SPIKE_START_USAGE if question.nil? || question.empty?
 
       project, = resolve_project_epic(store, require_epic: false)
 
@@ -1946,6 +2072,8 @@ module Tyrion
     end
 
     def self.cmd_spike_done(args, store, input: $stdin, output: $stdout)
+      return output.puts(SPIKE_DONE_USAGE) if help_requested?(args)
+
       origin  = consume_auto_flag(args, default: nil)
       verdict = extract_flag_value(args, '--verdict')
       die "Unknown verdict '#{verdict}'. Valid: #{Store::VERDICTS.join(', ')}" if verdict && !Store::VERDICTS.include?(verdict)
@@ -1966,8 +2094,10 @@ module Tyrion
     end
 
     def self.cmd_spike_promote(args, store, input: $stdin, output: $stdout)
+      return output.puts(SPIKE_PROMOTE_USAGE) if help_requested?(args)
+
       disc_id = args.shift
-      die "Usage: tyrion spike promote <disc-id>" unless disc_id
+      die SPIKE_PROMOTE_USAGE unless disc_id
 
       disc = store.find_discovery(disc_id)
       die "Discovery #{disc_id} not found" unless disc
@@ -2156,12 +2286,18 @@ module Tyrion
     # ── note ───────────────────────────────────────────────────────────────
 
     VALID_NOTE_KINDS = %w[plan progress decision blocker test handoff recovery session followup observation].freeze
+    NOTE_USAGE = "Usage: tyrion note <slug> <kind> \"body\"\n  kinds: #{VALID_NOTE_KINDS.join('|')}"
 
     def self.cmd_note(args, store)
+      return puts NOTE_USAGE if help_requested?(args)
+
       slug = args.shift
       kind = args.shift
+      # Same disc-026/disc-092 bug class as cmd_mark/cmd_spike_start — a stray
+      # flag among the body words would otherwise silently become note text.
+      reject_unknown_flags!(args, NOTE_USAGE)
       body = args.join(' ')
-      die "Usage: tyrion note <slug> <kind> \"body\"\n  kinds: #{VALID_NOTE_KINDS.join('|')}" unless slug && kind && !body.empty?
+      die NOTE_USAGE unless slug && kind && !body.empty?
       die "Invalid kind: #{kind}. Must be one of: #{VALID_NOTE_KINDS.join(', ')}" unless VALID_NOTE_KINDS.include?(kind)
 
       _project, epic = resolve_project_epic(store)
@@ -2380,20 +2516,19 @@ module Tyrion
 
     # ── criteria ───────────────────────────────────────────────────────────
 
+    CRITERIA_USAGE = 'Usage: tyrion criteria add <slug> [--given TEXT] [--when TEXT] [--then TEXT]'
+
     def self.cmd_criteria(args, store)
-      sub = args.shift
-      case sub
-      when 'add' then cmd_criteria_add(args, store)
-      else
-        $stderr.puts "Unknown criteria subcommand: #{sub}"
-        $stderr.puts "Usage: tyrion criteria add <slug> [--given TEXT] [--when TEXT] [--then TEXT]"
-        exit 1
-      end
+      route_subcommand(args, 'criteria', CRITERIA_USAGE, {
+        'add' => -> { cmd_criteria_add(args, store) }
+      })
     end
 
     def self.cmd_criteria_add(args, store)
+      return puts CRITERIA_USAGE if help_requested?(args)
+
       slug = args.shift
-      die "Usage: tyrion criteria add <slug> [--given TEXT] [--when TEXT] [--then TEXT]" unless slug
+      die CRITERIA_USAGE unless slug
 
       _project, epic = resolve_project_epic(store)
       story = store.find_story(epic['id'], slug)
@@ -2760,16 +2895,14 @@ module Tyrion
 
     # ── followup ───────────────────────────────────────────────────────────
 
+    FOLLOWUP_USAGE = "Usage: tyrion followup list <slug>\n" \
+                     '       tyrion followup resolve <slug> <n>'
+
     def self.cmd_followup(args, store, output: $stdout)
-      sub = args.shift
-      case sub
-      when 'list'    then cmd_followup_list(args, store, output: output)
-      when 'resolve' then cmd_followup_resolve(args, store, output: output)
-      else
-        die "Unknown followup subcommand: #{sub}\n" \
-            "Usage: tyrion followup list <slug>\n" \
-            "       tyrion followup resolve <slug> <n>"
-      end
+      route_subcommand(args, 'followup', FOLLOWUP_USAGE, {
+        'list'    => -> { cmd_followup_list(args, store, output: output) },
+        'resolve' => -> { cmd_followup_resolve(args, store, output: output) }
+      }, output: output)
     end
 
     def self.cmd_followup_list(args, store, output: $stdout)
@@ -2816,7 +2949,8 @@ module Tyrion
 
     # ── lesson ─────────────────────────────────────────────────────────────
 
-    LESSON_USAGE = "Usage: tyrion lesson add --at <trigger> \"text\"\n" \
+    LESSON_ADD_USAGE = %(Usage: tyrion lesson add --at <trigger> "text")
+    LESSON_USAGE = "#{LESSON_ADD_USAGE}\n" \
                    "       tyrion lesson list [--at <trigger>] [--verbose]\n" \
                    "       tyrion lesson retire <lesson-NNN>\n" \
                    "       tyrion lesson promote <lesson-NNN> [--to epic|project|global]\n" \
@@ -2824,25 +2958,24 @@ module Tyrion
                    "       tyrion lesson mine [--dir <path>]"
 
     def self.cmd_lesson(args, store, input: $stdin, output: $stdout)
-      sub = args.shift
-      case sub
-      when 'add'     then cmd_lesson_add(args, store, output: output)
-      when 'list'    then cmd_lesson_list(args, store, output: output)
-      when 'retire'  then cmd_lesson_retire(args, store, output: output)
-      when 'promote' then cmd_lesson_promote(args, store, output: output)
-      when 'demote'  then cmd_lesson_demote(args, store, output: output)
-      when 'mine'    then cmd_lesson_mine(args, store, input: input, output: output)
-      when nil       then die LESSON_USAGE
-      else                die "Unknown lesson subcommand: #{sub}\n#{LESSON_USAGE}"
-      end
+      route_subcommand(args, 'lesson', LESSON_USAGE, {
+        'add'     => -> { cmd_lesson_add(args, store, output: output) },
+        'list'    => -> { cmd_lesson_list(args, store, output: output) },
+        'retire'  => -> { cmd_lesson_retire(args, store, output: output) },
+        'promote' => -> { cmd_lesson_promote(args, store, output: output) },
+        'demote'  => -> { cmd_lesson_demote(args, store, output: output) },
+        'mine'    => -> { cmd_lesson_mine(args, store, input: input, output: output) }
+      }, output: output)
     end
 
     def self.cmd_lesson_add(args, store, output: $stdout)
+      return output.puts(LESSON_ADD_USAGE) if help_requested?(args)
+
       trigger = extract_flag_value(args, '--at')
       die "Missing required --at <trigger>" unless trigger
 
       text = args.join(' ')
-      die "Usage: tyrion lesson add --at <trigger> \"text\"" unless presence(text)
+      die LESSON_ADD_USAGE unless presence(text)
 
       project, epic = resolve_project_epic(store, require_epic: false)
       lesson = store.create_lesson(
@@ -3018,14 +3151,13 @@ module Tyrion
 
     # ── depends ────────────────────────────────────────────────────────────
 
+    DEPENDS_USAGE = 'Usage: tyrion depends add|rm <slug> <dep-slug>'
+
     def self.cmd_depends(args, store)
-      subcmd = args.shift
-      case subcmd
-      when 'add' then cmd_depends_add(args, store)
-      when 'rm'  then cmd_depends_rm(args, store)
-      else
-        die "Usage: tyrion depends add|rm <slug> <dep-slug>"
-      end
+      route_subcommand(args, 'depends', DEPENDS_USAGE, {
+        'add' => -> { cmd_depends_add(args, store) },
+        'rm'  => -> { cmd_depends_rm(args, store) }
+      })
     end
 
     def self.cmd_depends_add(args, store)
@@ -3067,15 +3199,14 @@ module Tyrion
 
     # ── wave ───────────────────────────────────────────────────────────────
 
+    WAVE_USAGE = 'Usage: tyrion wave show | tyrion wave set <slug> <N> | tyrion wave next [--with-pocket]'
+
     def self.cmd_wave(args, store)
-      subcmd = args.shift
-      case subcmd
-      when 'show' then cmd_wave_show(args, store)
-      when 'set'  then cmd_wave_set(args, store)
-      when 'next' then cmd_wave_next(args, store)
-      else
-        die "Usage: tyrion wave show | tyrion wave set <slug> <N> | tyrion wave next [--with-pocket]"
-      end
+      route_subcommand(args, 'wave', WAVE_USAGE, {
+        'show' => -> { cmd_wave_show(args, store) },
+        'set'  => -> { cmd_wave_set(args, store) },
+        'next' => -> { cmd_wave_next(args, store) }
+      })
     end
 
     def self.cmd_wave_next(args, store)
@@ -3136,11 +3267,15 @@ module Tyrion
       end
     end
 
+    WAVE_SET_USAGE = 'Usage: tyrion wave set <slug> <wave-number> [rationale]'
+
     def self.cmd_wave_set(args, store)
+      return puts WAVE_SET_USAGE if help_requested?(args)
+
       slug     = args.shift
       wave_str = args.shift
       rationale = args.shift
-      die "Usage: tyrion wave set <slug> <wave-number> [rationale]" unless slug && wave_str
+      die WAVE_SET_USAGE unless slug && wave_str
       wave_num = wave_str.to_i
       die "wave-number must be a positive integer" unless wave_num.positive?
       _project, epic = resolve_project_epic(store)
@@ -3154,7 +3289,11 @@ module Tyrion
 
     # ── setup-codex ────────────────────────────────────────────────────────
 
-    def self.cmd_setup_codex(_args, _store)
+    SETUP_CODEX_USAGE = 'Usage: tyrion setup-codex'
+
+    def self.cmd_setup_codex(args, _store)
+      return puts SETUP_CODEX_USAGE if help_requested?(args)
+
       skills_dir = File.expand_path('../../skills', __dir__)
       die "skills directory not found: #{skills_dir}" unless Dir.exist?(skills_dir)
 
@@ -3178,14 +3317,21 @@ module Tyrion
     # Installs (or reports on) Tyrion's Claude Code integration: the generic
     # shim script + the merged hooks/whitelist settings.
 
+    SETUP_USAGE = 'Usage: tyrion setup claude'
+
     def self.cmd_setup(args, store)
-      case args.shift
-      when 'claude' then cmd_setup_claude(args, store)
-      else die "Unknown setup target. Use: claude"
-      end
+      route_subcommand(args, 'setup', SETUP_USAGE, {
+        'claude' => -> { cmd_setup_claude(args, store) }
+      })
     end
 
     def self.cmd_setup_claude(args, _store)
+      # Checked before anything else: this installs/rewrites a shim script,
+      # .claude/settings.json, and CLAUDE.md — a --help probe must not reach
+      # any of that (route_subcommand only recognizes --help as the 'claude'
+      # subcommand token itself, not here where it'd land as a leftover arg).
+      return puts SETUP_USAGE if help_requested?(args)
+
       check = args.delete('--check')
       root  = Repo.worktree_root
       settings_path  = File.join(root, SETTINGS_RELATIVE_PATH)
@@ -3324,11 +3470,12 @@ module Tyrion
     # workarounds — those existed only to keep the old bash heredoc quote-
     # balanced, which doesn't apply to a real .rb file).
 
+    HOOK_USAGE = 'Usage: tyrion hook claim-gate [--check]'
+
     def self.cmd_hook(args, store)
-      case args.shift
-      when 'claim-gate' then cmd_hook_claim_gate(args, store)
-      else die "Unknown hook subcommand. Use: claim-gate"
-      end
+      route_subcommand(args, 'hook', HOOK_USAGE, {
+        'claim-gate' => -> { cmd_hook_claim_gate(args, store) }
+      })
     end
 
     def self.cmd_hook_claim_gate(args, store)
@@ -3627,13 +3774,23 @@ module Tyrion
 
     # ── whitelist ──────────────────────────────────────────────────────────
 
+    WHITELIST_USAGE = 'Usage: tyrion whitelist [show|add|remove] [--scope local|project|global]'
+
     def self.cmd_whitelist(args, _store)
-      case args.shift || 'show'
-      when 'show'   then whitelist_show
-      when 'add'    then whitelist_add(whitelist_scope(args))
-      when 'remove' then whitelist_remove(whitelist_scope(args))
-      else die "Unknown whitelist subcommand. Use: add, remove, show"
-      end
+      # Checked up front, across the whole group: 'add'/'remove' write to a
+      # settings.json file, and route_subcommand only recognizes --help as the
+      # subcommand token itself — 'tyrion whitelist add --help' would otherwise
+      # reach whitelist_add and mutate the file. Safe to check the whole group
+      # at once here (unlike spike) since WHITELIST_USAGE already covers all
+      # three subcommands in one line — there's no narrower per-subcommand
+      # usage this would be shadowing.
+      return puts WHITELIST_USAGE if help_requested?(args)
+
+      route_subcommand(args, 'whitelist', WHITELIST_USAGE, {
+        'show'   => -> { whitelist_show },
+        'add'    => -> { whitelist_add(whitelist_scope(args)) },
+        'remove' => -> { whitelist_remove(whitelist_scope(args)) }
+      }, default: 'show')
     end
 
     def self.whitelist_scope(args)

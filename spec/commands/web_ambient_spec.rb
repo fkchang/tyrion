@@ -56,6 +56,17 @@ RSpec.describe 'tyrion web ambient' do
     expect { Tyrion::Commands.cmd_web(%w[ambient --port 5000], store) }
       .to output(%r{http://localhost:5000/ambient\?project=my-proj}).to_stdout
   end
+
+  describe '--help' do
+    it 'prints usage and never touches WebServer (no accidental launch)' do
+      expect(Tyrion::WebServer).not_to receive(:start)
+      expect(Tyrion::WebServer).not_to receive(:running_pid)
+      expect(Tyrion::WebServer).not_to receive(:open_app_window)
+      expect(Tyrion::WebServer).not_to receive(:open_url)
+
+      expect { Tyrion::Commands.cmd_web(['--help'], store) }.to output(/Usage: tyrion web/).to_stdout
+    end
+  end
 end
 
 RSpec.describe Tyrion::WebServer do
