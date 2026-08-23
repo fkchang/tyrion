@@ -96,6 +96,7 @@ module Tyrion
       when 'claim'        then cmd_claim(args, store)
       when 'block'        then cmd_block(args, store)
       when 'unblock'      then cmd_unblock(args, store)
+      when 'reopen'       then cmd_reopen(args, store)
       when 'claim-next'   then cmd_claim_next(args, store)
       when 'unclaim'      then cmd_unclaim(args, store)
       when 'whoami'       then cmd_whoami(args, store)
@@ -1550,6 +1551,39 @@ module Tyrion
 
       puts "#{Output.green('Unblocked:')} #{slug} — #{story['title']}"
       puts "Status: #{Output.dim(updated['status'])}"
+    rescue RuntimeError => e
+      die e.message
+    end
+
+    # ── reopen ─────────────────────────────────────────────────────────────
+
+    REOPEN_USAGE = 'Usage: tyrion reopen <slug> "reason"'
+
+    def self.cmd_reopen(args, store)
+      return puts REOPEN_USAGE if help_requested?(args)
+
+      slug = args.shift
+      die REOPEN_USAGE unless slug
+
+      # Same disc-026/disc-092 guard as cmd_block — anything flag-shaped here
+      # is an unrecognized flag, not stored content.
+      reject_unknown_flags!(args, REOPEN_USAGE)
+      reason = presence(args.join(' '))
+      die REOPEN_USAGE unless reason
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug}" unless story
+
+      prior_status = story['status']
+      updated = store.reopen_story(story['id'], claimed_by: current_lane_token)
+      Repo.write_active_story(story['slug'], token: current_lane_token) if current_lane_token
+
+      metadata = { 'action' => 'reopen', 'reason' => reason, 'prior_status' => prior_status }
+      store.add_note(story['id'], 'recovery', "reopened: #{reason} (was #{prior_status})", metadata: JSON.dump(metadata))
+
+      puts "#{Output.yellow('Reopened:')} #{slug} — #{story['title']}"
+      puts "Status: #{Output.yellow(updated['status'])}"
     rescue RuntimeError => e
       die e.message
     end
@@ -4076,6 +4110,7 @@ module Tyrion
           tyrion start <slug> [--steal]            Claim a story (--steal to force takeover of another lane)
           tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story with a reason
           tyrion unblock <slug> [--resume]         Unblock a story → restores prior status (--resume forces in_progress)
+          tyrion reopen <slug> "reason"            Reopen a done story → in_progress, for post-done rework
           tyrion claim-next                        Claim next pending story (transactional)
           tyrion claim <slug> --as <label>         Pre-claim a story for a lane (adopts on TYRION_LANE=<label> start)
           tyrion unclaim <slug> [--steal]          Release a claim → pending (frees a dead lane; --steal for a live one)

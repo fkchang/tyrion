@@ -189,8 +189,9 @@ tyrion pocket                    Compact briefing for agent handoff
 tyrion prime                     Read-only tiered briefing for SessionStart/PreCompact hooks
 
 tyrion start <slug>              Claim a story
-tyrion block <slug> "reason"     Mark a story blocked (shows in war room BLOCKED lane)
-tyrion unblock <slug>            Clear the block — back to pending
+tyrion block <slug> "reason"     Mark a story blocked (shows in war room BLOCKED lane) — works on a done story too
+tyrion unblock <slug>            Clear the block — restores prior status (never re-seals a done story unverified)
+tyrion reopen <slug> "reason"    Reopen a done story → in_progress, for post-done rework
 tyrion note <slug> <kind> "..."  Send a raven (kinds: plan|progress|decision|blocker|handoff|followup)
 tyrion notes <slug> [--kind <k>] Full note dump — untruncated bodies (complement to tyrion show)
 tyrion context <slug> "..."      Update what's currently understood

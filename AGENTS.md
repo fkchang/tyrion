@@ -47,7 +47,14 @@ Supporting commands used within that loop:
   should do first).
 - **`tyrion block <slug> "reason" [--discovery disc-NNN]`** /
   **`tyrion unblock <slug>`** — mark/clear a story as blocked. `tyrion start`
-  refuses a blocked story and prints the unblock command.
+  refuses a blocked story and prints the unblock command. `block` also accepts
+  a `done` story (a coordinator's post-done review found a real bug); `unblock`
+  then always restores `in_progress`, never `done`, so a done story can't be
+  silently re-sealed unverified.
+- **`tyrion reopen <slug> "reason"`** — move a `done` story back to
+  `in_progress` for post-done rework, without touching any criterion (`tyrion
+  uncheck <slug> <position>` is the separate tool for that). Refuses unless
+  the story is currently `done`.
 - **`tyrion show <slug>`** — full story detail (read-only), useful mid-session
   when `resume` output has scrolled away.
 - **`tyrion mark "desc" --auto`** (also `tyrion discover --auto`, `tyrion spike
@@ -91,7 +98,7 @@ commands disagree, trust the one relevant to your current lane and re-run
 
 Never invoke two mutating tyrion commands concurrently against the same story
 or lane. Mutating commands include (non-exhaustive): `start`, `note`,
-`context`, `next`, `check`, `uncheck`, `done`, `block`, `unblock`,
+`context`, `next`, `check`, `uncheck`, `done`, `block`, `unblock`, `reopen`,
 `claim-next`, `mark`, `discover`, `spike start`, `spike done`,
 `spike promote`, `criteria add`, `lesson add`, `lesson retire`,
 `followup resolve`, `unstart`, `backfill`, `epic complete`,
@@ -164,8 +171,9 @@ tyrion next <slug> "text"                  Update next_action (mutating)
 tyrion check <slug> <position> "evidence"  Mark criterion met (mutating)
 tyrion uncheck <slug> <position>           Revert a checked criterion (mutating)
 tyrion done <slug> "summary" [--force] [--require-gates=<n1,n2>]  Complete story; --require-gates refuses unless each named gate has a note (mutating)
-tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story (mutating)
-tyrion unblock <slug>                      Unblock a story (mutating)
+tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story, incl. a done one (mutating)
+tyrion unblock <slug>                      Unblock a story — restores prior status, never a bare 'done' (mutating)
+tyrion reopen <slug> "reason"              Reopen a done story -> in_progress, for post-done rework (mutating)
 tyrion project activate <slug>             Sequencing boundary (mutating)
 tyrion epic activate <slug>                Sequencing boundary (mutating)
 tyrion import <file.feature>               Import gherkin scenarios (mutating)

@@ -17,6 +17,12 @@ module Tyrion
 
     ALLOWED_FILTER_COLS = %w[project_id epic_id status slug].freeze
 
+    # Shared message for idx_one_in_progress_story_per_lane /
+    # idx_one_unclaimed_in_progress_story_per_epic collisions — every method
+    # that can land a story on in_progress rescues SQLite3::ConstraintException
+    # and re-raises this instead of the raw DB error.
+    IN_PROGRESS_COLLISION = 'Another story in this epic is already in_progress. Use `tyrion status` to see which.'
+
     DDL = <<~SQL.freeze
       CREATE TABLE IF NOT EXISTS projects (
         id                     TEXT PRIMARY KEY,
@@ -732,7 +738,7 @@ module Tyrion
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end
     rescue SQLite3::ConstraintException
-      raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
+      raise IN_PROGRESS_COLLISION
     end
 
     # Transactional claim — refuses if any story in epic is already in_progress.
@@ -755,7 +761,7 @@ module Tyrion
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end
     rescue SQLite3::ConstraintException
-      raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
+      raise IN_PROGRESS_COLLISION
     end
 
     # Returns in_progress stories with NULL claimed_by — truly unclaimed, protocol violations
@@ -784,7 +790,7 @@ module Tyrion
         end
       end
     rescue SQLite3::ConstraintException
-      raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
+      raise IN_PROGRESS_COLLISION
     end
 
     def update_story(story_id, attrs)
@@ -940,16 +946,27 @@ module Tyrion
         db.transaction(:immediate) do
           story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
           raise "Story not found: #{story_id}" unless story
-          raise "Cannot block a done story" if story['status'] == 'done'
 
           # Re-blocking an already-blocked story must not clobber the status it
           # will eventually resume to — keep the previously-stashed values.
           prior_status      = story['status'] == 'blocked' ? story['pre_block_status'] : story['status']
           prior_claimed_by  = story['status'] == 'blocked' ? story['pre_block_claimed_by'] : story['claimed_by']
 
+          # A done story that gets blocked is rework, not a completed story on
+          # hold — stash 'in_progress' rather than 'done' so unblock can never
+          # land it back on 'done' unverified (see unblock_story below). A
+          # done row's own claimed_by is already NULL (complete_story nulled
+          # it), so carry completed_by forward as the claim to restore —
+          # otherwise unblock lands on an unclaimed in_progress row, which
+          # violations_in_progress flags and tyrion start can't reclaim.
+          if prior_status == 'done'
+            prior_status     = 'in_progress'
+            prior_claimed_by = story['completed_by']
+          end
+
           t = now
           db.execute(
-            'UPDATE stories SET status=?, pre_block_status=?, pre_block_claimed_by=?, blocked_on=?, blocked_on_discovery=?, claimed_by=NULL, claimed_at=NULL, updated_at=? WHERE id=?',
+            'UPDATE stories SET status=?, pre_block_status=?, pre_block_claimed_by=?, blocked_on=?, blocked_on_discovery=?, claimed_by=NULL, claimed_at=NULL, completed_at=NULL, completed_by=NULL, updated_at=? WHERE id=?',
             ['blocked', prior_status, prior_claimed_by, blocked_on, blocked_on_discovery, t, story_id]
           )
           reopen_epic_if_done!(db, story['epic_id'])
@@ -973,6 +990,9 @@ module Tyrion
 
           t = now
           restored_status     = resume ? 'in_progress' : (story['pre_block_status'] || 'pending')
+          # A stashed 'done' can only exist on a row blocked before this fix —
+          # never resurrect it unverified; land it back in_progress instead.
+          restored_status     = 'in_progress' if restored_status == 'done'
           restored_claimed_by = story['pre_block_claimed_by']
           restored_claimed_at = restored_claimed_by ? t : nil
 
@@ -984,7 +1004,38 @@ module Tyrion
         db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
       end
     rescue SQLite3::ConstraintException
-      raise "Another story in this epic is already in_progress. Use `tyrion status` to see which."
+      raise IN_PROGRESS_COLLISION
+    end
+
+    # Does not touch any criterion — that is uncheck_criterion's job. Reopens
+    # the epic via the same helper block_story uses, so a sealed epic un-seals
+    # if this was its last done story. The lifecycle note itself is written by
+    # the caller (cmd_reopen), same division of labor as block_story/cmd_block.
+    #
+    # completed_at/completed_by are cleared (that close no longer holds — the
+    # reopen note is where its history lives), and claimed_by is set to the
+    # reopening lane (mirrors start_story) so the story isn't left as an
+    # unclaimed in_progress row: unclaimed in_progress is a real protocol
+    # state (see violations_in_progress) that no lane could then claim via
+    # tyrion start, which requires status='pending'.
+    def reopen_story(story_id, claimed_by: nil)
+      with_db do |db|
+        db.transaction(:immediate) do
+          story = db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+          raise "Story not found: #{story_id}" unless story
+          raise "Story is not done (status: #{story['status']})" unless story['status'] == 'done'
+
+          t = now
+          db.execute(
+            'UPDATE stories SET status=?, completed_at=NULL, completed_by=NULL, claimed_by=?, claimed_at=?, updated_at=? WHERE id=?',
+            ['in_progress', claimed_by, claimed_by ? t : nil, t, story_id]
+          )
+          reopen_epic_if_done!(db, story['epic_id'])
+        end
+        db.get_first_row('SELECT * FROM stories WHERE id = ?', [story_id])
+      end
+    rescue SQLite3::ConstraintException
+      raise IN_PROGRESS_COLLISION
     end
 
     def complete_story(story_id, summary, force: false)

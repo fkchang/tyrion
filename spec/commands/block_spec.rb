@@ -20,6 +20,17 @@ RSpec.describe 'tyrion block / unblock' do
     store.find_story(epic['id'], slug)
   end
 
+  # Realistic done story — routed through start_story/complete_story so
+  # completed_at/completed_by/claimed_by land exactly as they do for a real
+  # close (claimed_by NULL, completed_by = the closing lane), not the bare
+  # status flip make_story(status: 'done') does.
+  def make_done_story(slug: 'my-story', title: 'My Story', closed_by: 'lane-A')
+    story = store.create_story(epic_id: epic['id'], slug: slug, title: title)
+    store.start_story(story['id'], claimed_by: closed_by)
+    store.complete_story(story['id'], 'first close')
+    store.find_story(epic['id'], slug)
+  end
+
   # ── Schema: migration idempotency ────────────────────────────────────────
 
   describe 'migration idempotency' do
@@ -134,19 +145,64 @@ RSpec.describe 'tyrion block / unblock' do
       end
     end
 
-    context 'refuses a done story' do
+    context 'allows blocking a done story (post-done-integrity)' do
       before { make_story(status: 'done') }
 
-      it 'exits 1' do
-        _out, err = capture_io do
-          expect { Tyrion::Commands.cmd_block(['my-story', 'any reason'], store) }.to raise_error(SystemExit)
-        end
-        expect(err).to match(/done/i)
+      it 'moves status to blocked' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'adversarial review found a real bug'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'blocked'
       end
 
-      it 'leaves status as done' do
-        capture_io { expect { Tyrion::Commands.cmd_block(['my-story', 'reason'], store) }.to raise_error(SystemExit) }
-        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'done'
+      it 'records the blocked_on reason' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'adversarial review found a real bug'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['blocked_on']).to eq 'adversarial review found a real bug'
+      end
+
+      it 'unblocking restores in_progress, never done (rework, not silent re-seal)' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'found a bug'], store) }
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'in_progress'
+      end
+
+      it 'unblocking with --resume also restores in_progress, never done' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'found a bug'], store) }
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story', '--resume'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'in_progress'
+      end
+    end
+
+    context 'blocking a real done story (closed_by/completed_at set) — post-done-integrity' do
+      before { make_done_story(closed_by: 'lane-A') }
+
+      it 'clears completed_at/completed_by on block, so the row does not claim to be both done and blocked' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'found a bug'], store) }
+        story = store.find_story(epic['id'], 'my-story')
+        expect(story['completed_at']).to be_nil
+        expect(story['completed_by']).to be_nil
+      end
+
+      it 'unblocking restores claimed_by to the lane that originally closed it, not left unclaimed' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'found a bug'], store) }
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['claimed_by']).to eq 'lane-A'
+      end
+
+      it 'unblocking does not leave the story as an unclaimed in_progress protocol violation' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'found a bug'], store) }
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        expect(store.violations_in_progress(epic['id'])).to be_empty
+      end
+
+      it 'round-trips through a real done -> block -> unblock -> re-close cycle without losing completed_by' do
+        capture_io { Tyrion::Commands.cmd_block(['my-story', 'found a bug'], store) }
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        story = store.find_story(epic['id'], 'my-story')
+        expect(story['status']).to eq 'in_progress'
+
+        store.complete_story(story['id'], 'second close, rework verified')
+        final = store.find_story(epic['id'], 'my-story')
+        expect(final['status']).to eq 'done'
+        expect(final['completed_by']).to eq 'lane-A'
       end
     end
 
@@ -293,6 +349,18 @@ RSpec.describe 'tyrion block / unblock' do
         capture_io { Tyrion::Commands.cmd_block(['my-story', 'waiting'], store) }
         capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
         expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'pending'
+      end
+    end
+
+    context 'legacy row somehow carrying pre_block_status=done (defensive guard)' do
+      before do
+        story = make_story
+        store.update_story(story['id'], 'status' => 'blocked', 'pre_block_status' => 'done', 'blocked_on' => 'legacy row from before the fix')
+      end
+
+      it 'restores in_progress, not done, even without --resume' do
+        capture_io { Tyrion::Commands.cmd_unblock(['my-story'], store) }
+        expect(store.find_story(epic['id'], 'my-story')['status']).to eq 'in_progress'
       end
     end
 
