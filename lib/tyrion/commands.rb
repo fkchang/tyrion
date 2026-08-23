@@ -19,6 +19,13 @@ module Tyrion
 
     VALID_EPIC_MODES = %w[dark_factory shape].freeze
 
+    # Gates a dark_factory-mode epic's stories can never close without,
+    # regardless of whether --require-gates was passed. Shared by cmd_done
+    # (enforces it at close time) and cmd_audit (the backstop that catches
+    # stories that closed before this guard existed, or whose epic's mode
+    # changed after the story was already done).
+    DARK_FACTORY_REQUIRED_GATES = %w[pre-push uat].freeze
+
     WHITELIST_SCOPES = {
       'local'   => -> { File.join(Dir.pwd, '.claude', 'settings.local.json') },
       'project' => -> { File.join(Dir.pwd, '.claude', 'settings.json') },
@@ -121,6 +128,7 @@ module Tyrion
       when 'unstart'      then cmd_unstart(args, store)
       when 'backfill'     then cmd_backfill(args, store)
       when 'drift'        then cmd_drift(args, store)
+      when 'audit'        then cmd_audit(args, store)
       when 'followup'     then cmd_followup(args, store)
       when 'depends'      then cmd_depends(args, store)
       when 'wave'         then cmd_wave(args, store)
@@ -2703,13 +2711,23 @@ module Tyrion
       # gate has at least one recorded gate note — gate coverage is otherwise
       # honor-system. The failing-gate refusal above already handles
       # present-but-failing gates; this catches gates never recorded at all.
+      # dark_factory epics get pre-push + uat unioned in automatically here, even
+      # with no --require-gates flag on this invocation — --force (above) still
+      # only bypasses a *failing* gate result, never this missing-coverage check.
+      dark_factory = Output.dark_factory?(epic)
+      required_gates |= DARK_FACTORY_REQUIRED_GATES if dark_factory
       if required_gates.any?
         missing = required_gates - recorded_gate_names(store, story['id'])
         if missing.any?
-          $stderr.puts "Refusing to close #{slug}: --require-gates names #{missing.length} gate(s) with no recorded note:"
+          $stderr.puts "Refusing to close #{slug}: #{missing.length} required gate(s) have no recorded note:"
           missing.each { |name| $stderr.puts "  ✗ #{name}" }
           $stderr.puts ""
           $stderr.puts "Record each with: tyrion gate #{slug} <name> pass|fail"
+          if dark_factory
+            $stderr.puts "#{DARK_FACTORY_REQUIRED_GATES.join(' + ')} are required automatically by epic " \
+                         "#{epic['slug']}'s dark_factory mode — --force cannot bypass missing coverage."
+            $stderr.puts "Real exception? tyrion epic mode #{epic['slug']} shape"
+          end
           exit 1
         end
       end
@@ -2924,6 +2942,59 @@ module Tyrion
         else
           puts "#{slug}: up to date"
         end
+      end
+    end
+
+    # ── audit ──────────────────────────────────────────────────────────────
+
+    AUDIT_USAGE = 'Usage: tyrion audit [--epic <slug>]'
+
+    # Read-only backstop for post-done-integrity: cmd_done's dark_factory
+    # default (DARK_FACTORY_REQUIRED_GATES) only enforces gate coverage at
+    # close time — it can't retroactively fix a story that closed before this
+    # guard existed, or whose epic's mode was flipped to dark_factory after
+    # the story was already done. This scans done stories belonging to
+    # dark_factory-mode epics and flags any missing pre-push/uat coverage,
+    # reusing the same recorded_gate_names helper cmd_done's own check uses.
+    def self.cmd_audit(args, store)
+      return puts AUDIT_USAGE if help_requested?(args)
+
+      epic_slug = extract_flag_value(args, '--epic')
+      reject_unknown_flags!(args, AUDIT_USAGE)
+
+      project = resolve_project(store)
+
+      if epic_slug
+        epic = store.find_epic(project['id'], epic_slug)
+        die "Epic not found: #{epic_slug}" unless epic
+        unless Output.dark_factory?(epic)
+          puts "#{epic_slug} is not a dark_factory epic — no gate-completeness requirement applies."
+          return
+        end
+        epics = [epic]
+      else
+        epics = store.list_epics(project['id']).select { |e| Output.dark_factory?(e) }
+      end
+
+      gaps = epics.flat_map { |e| audit_gaps_for_epic(store, e) }
+
+      if gaps.empty?
+        puts "No gaps found — every done story in a dark_factory epic has " \
+             "#{DARK_FACTORY_REQUIRED_GATES.join(' and ')} gate coverage."
+        return
+      end
+
+      gaps.each { |line| puts line }
+    end
+
+    # One "<slug> (<epic-slug>): missing <gates>" line per done story in +epic+
+    # that lacks full DARK_FACTORY_REQUIRED_GATES coverage; [] when clean.
+    def self.audit_gaps_for_epic(store, epic)
+      store.stories_for_epic(epic['id'])
+           .select { |s| s['status'] == 'done' }
+           .filter_map do |story|
+        missing = DARK_FACTORY_REQUIRED_GATES - recorded_gate_names(store, story['id'])
+        "#{story['slug']} (#{epic['slug']}): missing #{missing.join(', ')}" if missing.any?
       end
     end
 
@@ -4131,6 +4202,7 @@ module Tyrion
           tyrion unstart <slug>                    Reset to pending (crash recovery)
           tyrion backfill <slug> done "summary"    Mark pre-Tyrion work done
           tyrion drift                             Check if feature files have changed since last import
+          tyrion audit [--epic <slug>]             Flag done stories in dark_factory epics missing pre-push/uat gate coverage
           tyrion followup list <slug>              List followup notes (open + resolved)
           tyrion followup resolve <slug> <n>       Mark followup #n as resolved
 
