@@ -1794,7 +1794,7 @@ module Tyrion
         source_story_id: story && story['id'],
         parent_spike_id: active_spike && active_spike['id'],
         status:          'mark',
-        question:        args.first,
+        question:        args.join(' '),
         origin:          origin,
         headline:        headline,
         git_context:     Repo.git_context_json

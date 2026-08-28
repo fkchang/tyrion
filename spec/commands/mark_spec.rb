@@ -29,6 +29,18 @@ RSpec.describe 'tyrion mark' do
     end
   end
 
+  describe 'multi-word args' do
+    it 'joins unquoted multi-word args into the question instead of truncating to the first' do
+      out, = capture_io do
+        Tyrion::Commands.cmd_mark(['hello', 'world'], store)
+      end
+
+      disc_id = out.match(/\[mark\] (disc-\d+)/)[1]
+      disc = store.find_discovery(disc_id)
+      expect(disc['question']).to eq 'hello world'
+    end
+  end
+
   describe 'unique ids' do
     it 'assigns a different disc-id for each call' do
       out1, = capture_io { Tyrion::Commands.cmd_mark(['first'], store) }
