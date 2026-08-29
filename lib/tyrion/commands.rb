@@ -2088,8 +2088,8 @@ module Tyrion
       # same bug class as disc-092, just with a different flag spelling.
       reject_unknown_flags!(args, SPIKE_START_USAGE)
 
-      question = args.first&.strip
-      die SPIKE_START_USAGE if question.nil? || question.empty?
+      question = args.join(' ').strip
+      die SPIKE_START_USAGE if question.empty?
 
       project, = resolve_project_epic(store, require_epic: false)
 

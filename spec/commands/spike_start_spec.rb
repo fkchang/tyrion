@@ -47,6 +47,30 @@ RSpec.describe 'tyrion spike start' do
     end
   end
 
+  describe 'multi-word args' do
+    it 'joins unquoted multi-word args into the question instead of truncating to the first' do
+      input  = StringIO.new("\n\n")
+      output = StringIO.new
+
+      Tyrion::Commands.cmd_spike_start(
+        %w[Can concurrent writes cause scan duplication?],
+        store,
+        input: input,
+        output: output
+      )
+
+      disc_id = output.string.match(/\[active_spike\] (disc-\d+)/)[1]
+      disc = store.find_discovery(disc_id)
+      expect(disc['question']).to eq 'Can concurrent writes cause scan duplication?'
+    end
+
+    it 'dies on a usage error when no question args are given at all' do
+      expect { Tyrion::Commands.cmd_spike_start([], store) }.to raise_error(SystemExit)
+
+      expect(store.list_discoveries(project_id: ctx.project['id'])).to be_empty
+    end
+  end
+
   # Criterion 2 — one active spike enforced
   describe 'one active spike enforced' do
     it 'exits with an error referencing the existing spike when one is already active' do
