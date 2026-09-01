@@ -74,3 +74,11 @@ Top three required changes:
 1. Complete the lane/token contract: include `dispatched:` lanes and fingerprint every rendered value whose meaningful change must reload a view.
 2. Specify snapshot-generation handoff honestly and define safe dirty-path parsing/stat semantics.
 3. Add bulk phase-2 event queries for all epic stories/discoveries and exclude lifecycle action notes from the generic-note event stream.
+
+## Third pass (revision 3)
+
+1. **NEEDS_REVISION** — `dispatched:<label>` is now covered consistently with `dispatch_story` (`store.rb:714-728`), and tokens include ledger events, but the Fleet token fingerprints dirty count without the displayed newest dirty-file mtime; an edit that leaves the dirty-file count unchanged can remain stale.
+2. **ADDRESSED** — Snapshot handoff now promises same-or-newer generation and reseeds from the rendered snapshot; dirty paths use porcelain `-z`, consume rename/copy destination paths, and skip deletions/stat failures rather than relying on the existing line counter (`repo.rb:269-271`).
+3. **ADDRESSED** — Four epic-scoped phase-2 queries cover all-story notes, checked criteria, lifecycle timestamps, and sourced discoveries; generic notes explicitly exclude `metadata.action` lifecycle rows, matching block/unblock/reopen persistence (`commands.rb:1524-1591`).
+
+**NEEDS_REVISION**

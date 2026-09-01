@@ -144,7 +144,7 @@ One token endpoint per view, JSON `{token}`. The page seeds `data-token` at rend
 
 **Token composition rule:** fingerprint every value the page renders whose change should be seen, as canonical ids, counts, discrete buckets, or the timestamp of a discrete event, stably ordered. Never a rendered age, never a wall-clock-derived value that changes without a new fact behind it.
 
-- `GET /api/fleet_poll` (15s): for each in-progress story, `id:status:claimed_by:met:liveness_state:resolution_state` plus the newest-per-source event timestamps (`last_note_at`, newest `checked_at`, newest gate/commit note `created_at`, newest commit sha, dirty count), plus each attention item's `story_id:kind`. A new note within the same liveness bucket therefore reloads, because the row displays it; the bucket itself still flips once per threshold crossing.
+- `GET /api/fleet_poll` (15s): for each in-progress story, `id:status:claimed_by:met:liveness_state:resolution_state` plus the newest-per-source event timestamps (`last_note_at`, newest `checked_at`, newest gate/commit note `created_at`, newest commit sha, dirty count, newest dirty-file mtime as an epoch integer), plus each attention item's `story_id:kind`. A new note within the same liveness bucket therefore reloads, because the row displays it; the bucket itself still flips once per threshold crossing.
 - `GET /api/cockpit_poll?project=&epic=` (15s): the fleet token restricted to the epic, plus the newest Changes event key and the epic's status counts.
 - `GET /api/global_poll` (60s): per project `slug:status_bucket:worst_lane_state:done:total:activity_at`, in sort order (so a re-sort, a count change, and a new activity timestamp are each a change; `activity_at` is a stored event time, not an age).
 
@@ -256,3 +256,4 @@ Existing web specs exercise `TyrionWeb::Data` and view classes directly (e.g. `s
 | (pass 2) dirty-path parsing unspecified | Fixed: `-z --untracked-files=all`, rename/delete/stat-fail rules. |
 | (pass 2) no phase-2 event queries | Fixed: four epic-scoped capped queries. |
 | (pass 2) lifecycle notes double-emitted | Fixed: excluded from the generic note stream by `metadata.action`. |
+| (pass 3) fleet token misses same-count edits | Fixed: newest dirty-file mtime added to the fleet token (a file timestamp, not an age). |
