@@ -1,7 +1,7 @@
 # Fleet Visibility: Global View sort, Fleet board, Epic cockpit
 
 Date: 2026-09-01
-Status: revision 2, after Codex adversarial review (see `2026-09-01-fleet-visibility-codex-review.md`)
+Status: revision 3, after two Codex adversarial passes (see `2026-09-01-fleet-visibility-codex-review.md`)
 
 ## Problem
 
@@ -56,6 +56,7 @@ A lane is an in-progress story row plus its epic and project. `stories.claimed_b
 - explicit label from `TYRION_LANE` (e.g. `v0-A`), no process to probe
 - Codex thread token `<label>:<thread_id>`, no process to probe
 - Claude PID token `<label>:<pid>:<16-hex-start-stamp>`, probeable
+- `dispatched:<label>` pre-claim placeholder written by `tyrion assign` until a lane adopts it (`lib/tyrion/store.rb` ~714-728), no process to probe; renders as state `dispatched` (attention item only once older than the stalled threshold, since a dispatched-but-never-adopted story is a lane that never started)
 - nil: unclaimed
 
 ### Signal sources, per lane
@@ -64,7 +65,7 @@ A lane is an in-progress story row plus its epic and project. `stories.claimed_b
 
 **Process** (existing API): `Repo.lane_liveness(claimed_by)` returns `:live`, `:dead`, or `:unknown` (`lib/tyrion/repo.rb` ~137-176). `:dead` is a positive "the process is gone" finding, start-stamp checked against PID reuse. `:unknown` covers explicit labels, Codex tokens, and sandboxes where `ps` is denied; it is never treated as dead.
 
-**Worktree** (bounded, see resolver and budget below): dirty file count from `git status --porcelain`; newest mtime **among the dirty files only** (bounded by the dirty count, no recursive scan); newest commit time + subject from `git log -1`. Missing or ambiguous resolution is reported as such, not as inactivity.
+**Worktree** (bounded, see resolver and budget below): `git status --porcelain -z --untracked-files=all`, NUL-delimited so paths with spaces or newlines parse; dirty file count = record count; newest mtime **among those paths only** (bounded by the dirty count, no recursive scan). Rename records (`R`/`C`) carry two NUL-separated paths, stat the new one; deleted records (`D`) and any path whose stat fails are skipped, not errors. Newest commit time + subject from `git log -1 --format=%ct%n%s`. Missing or ambiguous resolution is reported as such, not as inactivity. (`Repo` already has a porcelain record counter at ~269-271; the `-z` path listing is new.)
 
 Every source reports `nil` for "no evidence" separately from a timestamp. The row carries the **newest signal per source** (`edit 40s · commit 6m · note 9m · gate 38m · process live`), not just the winner. This is what separates "busy coding, no notes for 20 minutes" from "nothing at all for 38 minutes".
 
@@ -81,7 +82,7 @@ Every source reports `nil` for "no evidence" separately from a timestamp. The ro
 
 ### Snapshot cache
 
-`Tyrion::Liveness::Snapshot.current(store, ttl: 10)` is the single entry point for every endpoint and page render. It is process-wide, TTL 10s, single-flight (a mutex; concurrent callers wait for the in-progress build rather than starting another). One snapshot holds every project's resolver result, every lane's signals, and the bulk ledger rows. A page render triggered by a token change reuses the snapshot that produced the token. Two browsers polling three views do not multiply git work. The TTL is below the 15s poll interval so a poll never sees a snapshot older than one interval.
+`Tyrion::Liveness::Snapshot.current(store, ttl: 10)` is the single entry point for every endpoint and page render. It is process-wide, TTL 10s, single-flight (a mutex; concurrent callers wait for the in-progress build rather than starting another). One snapshot holds every project's resolver result, every lane's signals, and the bulk ledger rows, stamped with a monotonically increasing `generation`. A page render triggered by a token change uses whatever snapshot is current at render time, which is the same generation or a newer one (the TTL may have expired between the poll and the reload); either way the render reflects state at least as fresh as the token that triggered it, and the page seeds its new `data-token` from the snapshot it rendered from, so the next poll compares against what is actually on screen. Two browsers polling three views do not multiply git work. The TTL is below the 15s poll interval so a poll never sees a snapshot older than one interval.
 
 Wall-clock budget: the whole worktree pass is capped at 3s per snapshot; repos not reached in time carry `partial: true` and their last known signals (or nil on first build).
 
@@ -93,7 +94,16 @@ New `Store` methods, each one SQL statement, keyed by story id:
 - `latest_note_per_story(story_ids)` → newest note `(created_at, kind, metadata)` per story via a window or `MAX` group.
 - `latest_gate_and_commit_per_story(story_ids)` → newest `gate` and newest `commit` note per story.
 - `latest_criterion_check_per_story(story_ids)` → `MAX(checked_at)` and met/total per story.
-- `project_activity` → per project `MAX` of `stories.updated_at`, `stories.last_note_at`, `criteria.checked_at`, `discoveries.updated_at` (if the column exists, else `created_at`).
+- `project_activity` → per project `MAX` of `stories.updated_at`, `stories.last_note_at`, `criteria.checked_at`, `discoveries.updated_at` (if the column exists, else `created_at`), plus done/total story counts.
+
+Phase 2 adds the event queries for the Changes feed. Existing note and criteria APIs are story-scoped (`store.rb` ~820-837, ~1112-1113) and the five queries above cover only in-progress/blocked stories with their latest row, so the feed needs its own, all keyed by `epic_id` and each capped at the feed limit (50) newest-first:
+
+- `epic_notes_recent(epic_id, limit:)` → notes for every story in the epic, any status, with `metadata`.
+- `epic_criteria_checked_recent(epic_id, limit:)` → checked criteria with text and `checked_at`.
+- `epic_story_lifecycle(epic_id)` → every story's `started_at`, `completed_at`, status.
+- `epic_marks_recent(epic_id, limit:)` → discoveries whose `source_story_id` is in the epic.
+
+Four statements, merged and re-capped in Ruby.
 
 `load_global_view` is currently N+1 over projects, epics, stories and discovery summaries (`data.rb` ~133-175); phase 1 replaces its activity and lane parts with these queries. The rest of the card stays as is.
 
@@ -132,11 +142,11 @@ From the same pass, scoped (fleet: all projects; cockpit: one epic). Ordered by 
 
 One token endpoint per view, JSON `{token}`. The page seeds `data-token` at render time from the same snapshot (the Ambient/Discoveries pattern; Active Story's `knownToken = null` bootstrap is not the model). The poll JS reloads on token change and **stops polling on a non-200**, so a 404 cannot loop. Relative ages on the page tick client-side from `data-at` attributes every 15s (as Ambient does outside its token branch), so ages and dimming stay honest without a reload.
 
-**Token composition rule:** only canonical ids and discrete buckets, stably ordered. Never a rendered age, never a raw timestamp that changes without meaning.
+**Token composition rule:** fingerprint every value the page renders whose change should be seen, as canonical ids, counts, discrete buckets, or the timestamp of a discrete event, stably ordered. Never a rendered age, never a wall-clock-derived value that changes without a new fact behind it.
 
-- `GET /api/fleet_poll` (15s): for each in-progress story, `id:status:claimed_by:met:liveness_state:resolution_state`, plus each attention item's `story_id:kind`. Liveness state is the bucket, so the token flips once per threshold crossing.
+- `GET /api/fleet_poll` (15s): for each in-progress story, `id:status:claimed_by:met:liveness_state:resolution_state` plus the newest-per-source event timestamps (`last_note_at`, newest `checked_at`, newest gate/commit note `created_at`, newest commit sha, dirty count), plus each attention item's `story_id:kind`. A new note within the same liveness bucket therefore reloads, because the row displays it; the bucket itself still flips once per threshold crossing.
 - `GET /api/cockpit_poll?project=&epic=` (15s): the fleet token restricted to the epic, plus the newest Changes event key and the epic's status counts.
-- `GET /api/global_poll` (60s): per project `slug:status_bucket:worst_lane_state`, in sort order (so a re-sort is itself a change).
+- `GET /api/global_poll` (60s): per project `slug:status_bucket:worst_lane_state:done:total:activity_at`, in sort order (so a re-sort, a count change, and a new activity timestamp are each a change; `activity_at` is a stored event time, not an age).
 
 Active cockpit tab lives in the URL (`?tab=now|changes|trail`).
 
@@ -169,7 +179,7 @@ New route and `Views::Cockpit`. Honors `?project=&epic=` multi-tab scoping; epic
 | done | `stories.completed_at` |
 | blocked / unblocked / reopened | `story_notes` with `metadata.action` (`commands.rb` ~1524-1591) |
 | criterion checked | `criteria.checked_at` (+ text) |
-| note | `story_notes` by kind (plan, progress, decision, blocker, recovery, handoff, followup, observation, session, test) |
+| note | `story_notes` by kind (plan, progress, decision, blocker, recovery, handoff, followup, observation, session, test), **excluding** rows whose `metadata.action` is block/unblock/reopen, which are already emitted above (the block/unblock/reopen commands persist exactly such blocker/recovery notes, so without this exclusion each lifecycle event appears twice) |
 | gate | `gate` note `metadata.gate/result` |
 | commit | `commit` note `metadata.shas` |
 | mark filed | `discoveries.created_at` where `source_story_id` in epic |
@@ -240,3 +250,9 @@ Existing web specs exercise `TyrionWeb::Data` and view classes directly (e.g. `s
 | Failure can fake "stalled" | Fixed: evidence marker, `stalled?`. |
 | Cut typical-time | Kept as phase 3 (Forrest's stated stretch goal) with the blocked-time limitation documented. |
 | Defer cockpit | Kept as phase 2 with explicit derivation and bulk-query contracts, per Forrest's priority order. |
+| (pass 2) `dispatched:` lanes missing | Fixed: added to the lane taxonomy with its own state. |
+| (pass 2) tokens miss same-bucket signal changes | Fixed: composition rule now fingerprints displayed event timestamps and counts. |
+| (pass 2) snapshot handoff over-promised | Fixed: generation wording; render uses same-or-newer snapshot and reseeds the token from it. |
+| (pass 2) dirty-path parsing unspecified | Fixed: `-z --untracked-files=all`, rename/delete/stat-fail rules. |
+| (pass 2) no phase-2 event queries | Fixed: four epic-scoped capped queries. |
+| (pass 2) lifecycle notes double-emitted | Fixed: excluded from the generic note stream by `metadata.action`. |

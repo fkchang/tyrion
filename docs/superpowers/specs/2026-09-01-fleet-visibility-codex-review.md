@@ -52,3 +52,25 @@ Top three required changes:
 1. Specify and test an explicit, ambiguity-detecting `project identity -> worktrees -> lane hash` resolver that never depends on the web process cwd.
 2. Make Claude transcript attribution a blocking spike with a verified lane/session key, or remove harness-derived `waiting`, `ended`, and question text from v1.
 3. Define canonical bucket-only poll tokens and a bounded, shared snapshot/cache model so time transitions occur once without rescanning every repo per client every 15 seconds.
+
+## Second pass (revision 2)
+
+### Required changes
+
+1. **ADDRESSED** — The WorktreeResolver now uses the explicit nullable project identity, scans worktrees from that root, accepts exactly one lane-hash match, and distinguishes `missing`, `ambiguous`, `repo_missing`, and `identity_missing`, with focused tests specified.
+2. **ADDRESSED** — Transcript-derived waiting/question state is removed from phases 1–3; attribution is now a blocking spike, while the existing tri-state process probe is described consistently with `Repo.lane_liveness` (`lib/tyrion/repo.rb:137-176`).
+3. **ADDRESSED** — Stable bucket tokens, client-side aging, non-200 polling shutdown, a process-wide single-flight TTL snapshot, subprocess timeouts, and a whole-pass budget are now explicit.
+
+### New factual errors and gaps
+
+- The `claimed_by` taxonomy is incomplete. An in-progress dispatched story carries `dispatched:<label>` until adoption (`lib/tyrion/store.rb:714-728`), although the spec lists only explicit, Codex, Claude-PID, and nil forms. Separately, the fleet token omits displayed signal changes (new note/gate/commit within the same liveness bucket), and the global token omits counts/activity changes that do not alter sort order or worst state. Those pages can remain stale despite meaningful new data.
+- `Snapshot.current(store, ttl: 10)` plus a mutex cannot guarantee that a subsequent page-render HTTP request reuses the exact snapshot that answered the poll: the TTL may expire between requests. The promise at `docs/superpowers/specs/2026-09-01-fleet-visibility-design.md:84` needs either generation pinning or weaker wording. The dirty-mtime implementation also needs a NUL-delimited `git status --porcelain -z --untracked-files=all` path contract, including rename and deletion handling; the existing helper only counts porcelain records (`lib/tyrion/repo.rb:269-271`).
+- The five bulk queries cannot produce the phase-2 Changes feed. They return only in-progress/blocked stories and only the latest note/check per story, while Changes needs up to 50 events across all epic stories and discoveries; existing APIs remain story-scoped (`lib/tyrion/store.rb:820-837`, `1112-1113`). The derivation table also double-emits block/unblock/reopen action notes as generic blocker/recovery notes because those commands persist exactly such notes (`lib/tyrion/commands.rb:1524-1530`, `1553-1558`, `1586-1591`).
+
+### Verdict
+
+**NEEDS_REVISION**
+
+1. Complete the lane/token contract: include `dispatched:` lanes and fingerprint every rendered value whose meaningful change must reload a view.
+2. Specify snapshot-generation handoff honestly and define safe dirty-path parsing/stat semantics.
+3. Add bulk phase-2 event queries for all epic stories/discoveries and exclude lifecycle action notes from the generic-note event stream.
