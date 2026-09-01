@@ -1,7 +1,7 @@
 # Fleet Visibility: Global View sort, Fleet board, Epic cockpit
 
 Date: 2026-09-01
-Status: draft, brainstormed with Forrest, pending Codex vet
+Status: revision 2, after Codex adversarial review (see `2026-09-01-fleet-visibility-codex-review.md`)
 
 ## Problem
 
@@ -12,169 +12,231 @@ Forrest runs many Tyrion projects at once, several with parallel agent lanes (a 
 
 Priority, in Forrest's order: **(B) is anything stuck or waiting on me** first, then **(A) what changed**, then **(D) what is each lane doing, with signs of being alive**. **(C) how long is left** is the stretch goal.
 
-## Scope
+## Scope and phasing
 
-Three deliverables, all in the Tyrion Sinatra web app (`web/`), all reading one new liveness module. No StreamWeaver canvas: these views poll, and canvas-push has no polling.
+All in the Tyrion Sinatra web app (`web/`), all reading one new liveness module. No StreamWeaver canvas: these views poll, and canvas-push has no polling.
 
-1. **Global View, minimal change**: keep the look, sort by real activity, add a liveness dot, poll.
-2. **`/fleet`, new route**: "what is in motion now" across every project, one row per in-progress story.
-3. **`/cockpit`, new route**: the session-tabs analogue, scoped to one epic. Tabs: Now, Changes, Trail.
+| Phase | Deliverable | Depends on |
+|---|---|---|
+| 1 | `Tyrion::Liveness` + snapshot cache + bulk Store queries | nothing |
+| 1 | Global View: sort by real activity, worst-lane glyph, 60s poll | phase 1 module |
+| 1 | `/fleet`: cross-project board, one row per in-progress story | phase 1 module |
+| 2 | `/cockpit`: Now / Changes / Trail for one epic | phase 1 + event derivation table below |
+| 3 | "Typical" time left (stretch) | phase 2 |
+| spike | Claude Code transcript adapter (waiting / question text) | attribution spike, see Follow-ups |
 
 Out of scope, logged:
 
 - Hiding old/done projects on Global View with archive or search: **disc-156**.
 - An ambient-style narrow strip (DOM-patched) for a split pane. Not wanted now; the design keeps the door open.
 - `tyrion heartbeat` push verb. Approach 1 (pull on poll) was chosen; heartbeat is the later hybrid upgrade.
-- Liveness adapters for Codex, Copilot, Gemini. Each gated on a spike of that harness first (see Follow-ups).
+- Harness adapters for Codex, Copilot, Gemini and the Claude transcript adapter. Each gated on a spike of that harness first.
 
 ## Decisions made during brainstorm
 
 | Question | Decision |
 |---|---|
 | Row unit | One row per **in-progress story**, grouped by project. An unclaimed in-progress story (protocol violation) shows as a row with no lane, which is itself an attention item. |
-| Liveness sources | Ledger + worktree as the floor (agent-agnostic), plus per-harness adapters when detectable. Claude Code adapter first. |
+| Liveness sources | Ledger + worktree + process liveness as the floor (agent-agnostic). Transcript-reading adapters only after an attribution spike. |
 | Form factor | Board and cockpit in the web app; no strip for now. |
 | Cockpit tabs | Now / Changes / Trail. Grows toward session-tabs' six only when a tab has real data. |
 | "Since you looked" delta | **Dropped.** Nobody can know when eyes landed on a pane beside a terminal. Changes is a recency feed with running relative timestamps that dim with age. |
-| Update mechanism | Reload-on-token-change, the existing `/api/poll` pattern. No JSON row rendering in JS. |
+| Update mechanism | Reload-on-token-change with a seeded token (the Ambient/Discoveries pattern, not Active Story's null-bootstrap). Relative ages tick client-side between reloads. |
 | Liveness thresholds | live < 2m, working < 15m, quiet < 30m, stalled >= 30m. Constants, tunable. |
-| Time left | "Typical" from completed-story wall clock in the epic, never criteria velocity. Shown with n. |
+| Time left | "Typical" from completed-story wall clock in the epic, never criteria velocity. Shown with n. Stretch, phase 3. |
 
 ## Liveness layer
 
-New module `Tyrion::Liveness` in `lib/tyrion/liveness.rb` (in lib, not web, so `tyrion status` can use it later). Pure functions over injected inputs; every poll recomputes; nothing is written to the DB.
+New module `Tyrion::Liveness` in `lib/tyrion/liveness.rb` (in lib, not web, so `tyrion status` can use it later). Pure functions over an injected snapshot; nothing is written to the DB.
 
-### Inputs per lane
+### Lane
 
-A lane is an in-progress story row (`stories.claimed_by` token, or nil if unclaimed) plus its project.
+A lane is an in-progress story row plus its epic and project. `stories.claimed_by` is one of (see `Commands.derive_lane_token`, `lib/tyrion/commands.rb` ~4378):
 
-**Ledger signals** (existing columns, no schema change):
+- explicit label from `TYRION_LANE` (e.g. `v0-A`), no process to probe
+- Codex thread token `<label>:<thread_id>`, no process to probe
+- Claude PID token `<label>:<pid>:<16-hex-start-stamp>`, probeable
+- nil: unclaimed
 
-- `stories.started_at`, `stories.claimed_at`
-- newest `story_notes.created_at` and its `kind` for the story
-- newest `criteria.checked_at` for the story
-- newest `gate` note (`metadata.gate`, `metadata.result`) and newest `commit` note (`metadata.shas`)
+### Signal sources, per lane
 
-**Worktree signals**:
+**Ledger** (existing columns, no schema change): `started_at`, `claimed_at`, `updated_at`; newest `story_notes.created_at` + `kind`; newest `criteria.checked_at`; newest `gate` note (`metadata.gate/result`); newest `commit` note (`metadata.shas`).
 
-- Worktree path resolution: `Repo.worktrees(project['primary_repo_identity'])` lists the repo's worktrees; the one whose `Repo.lane_hashes(path)` includes `Repo.lane_hash(claimed_by)` is the lane's worktree. Same matching `cmd_worktrees` uses (`lib/tyrion/commands.rb` ~1244-1262). `primary_repo_identity` is already the realpath of the main repo root.
-- newest mtime among files in the worktree (skip `.git`, `node_modules`, `tmp`, `log`, `vendor`; cap at a file-count budget, report `partial: true` when hit)
-- dirty file count (`git status --porcelain | wc -l`)
-- newest commit time and subject on the worktree's HEAD (`git log -1 --format=%ct%n%s`)
-- path missing or unreadable: all worktree signals nil, `worktree_missing: true`
+**Process** (existing API): `Repo.lane_liveness(claimed_by)` returns `:live`, `:dead`, or `:unknown` (`lib/tyrion/repo.rb` ~137-176). `:dead` is a positive "the process is gone" finding, start-stamp checked against PID reuse. `:unknown` covers explicit labels, Codex tokens, and sandboxes where `ps` is denied; it is never treated as dead.
 
-**Harness signals** via an adapter registry `Tyrion::Liveness::Adapters`. Each adapter implements `detect(lane, worktree_path) -> Hash | nil`. `nil` means "not my lane". Nothing depends on an adapter being present.
+**Worktree** (bounded, see resolver and budget below): dirty file count from `git status --porcelain`; newest mtime **among the dirty files only** (bounded by the dirty count, no recursive scan); newest commit time + subject from `git log -1`. Missing or ambiguous resolution is reported as such, not as inactivity.
 
-First adapter, **Claude Code**:
+Every source reports `nil` for "no evidence" separately from a timestamp. The row carries the **newest signal per source** (`edit 40s · commit 6m · note 9m · gate 38m · process live`), not just the winner. This is what separates "busy coding, no notes for 20 minutes" from "nothing at all for 38 minutes".
 
-- Transcript dir: `~/.claude/projects/<worktree path with "/" replaced by "-">/`. Newest `*.jsonl` by mtime is the live session (session ids rotate on `/clear`, mtime does not care).
-- `last_activity_at` = that file's mtime.
-- `state` from the tail of the file: `working` if the last entry is a tool call or a tool result; `waiting` if the last entry is an assistant turn that ended (or an `AskUserQuestion` tool_use with no result); `ended` if the process is gone and mtime is old. Exact tail heuristics are a spike item; the adapter must return `nil` rather than guess on an unparseable tail.
-- Question text for `waiting`: the last assistant text, truncated, so the attention item can say what was asked.
-- **Open question (spike before build):** where Agent-tool background subagent transcripts live and whether they are keyed by the subagent's worktree path. If not, builder lanes get worktree signals only from this adapter.
+### Lane-to-worktree resolver
+
+`Tyrion::Liveness::WorktreeResolver.new(projects)` builds, **once per snapshot**, `lane_hash -> [worktree paths]` per canonical repo:
+
+1. Repo root is `projects.primary_repo_identity` (nullable, `lib/tyrion/store.rb` ~27-39). Nil → every lane in the project is `identity_missing`. Path not a directory or `git -C <root> rev-parse` fails → `repo_missing`.
+2. `Repo.worktrees(root)` with the explicit root, never `Dir.pwd` (the web process runs from `web/`, `web/lib/tyrion_web/data.rb` ~34-36 defaults to cwd and must not be used here).
+3. For each worktree, `Repo.lane_hashes(path)`; the lane hash is `Repo.lane_hash(claimed_by)`.
+4. Exactly one match → that path. Zero → `missing`. More than one → `ambiguous` with the paths listed (`cmd_worktrees` tolerates this by rendering the lane under every match; the fleet must not pick one silently).
+
+`missing`, `ambiguous`, `repo_missing`, `identity_missing` are all distinct resolution states surfaced on the row and, for `missing` and `ambiguous`, as attention items. All git subprocesses run with a 2s timeout via `Open3` + `Timeout`; a timeout yields `nil` signals and `partial: true`.
+
+### Snapshot cache
+
+`Tyrion::Liveness::Snapshot.current(store, ttl: 10)` is the single entry point for every endpoint and page render. It is process-wide, TTL 10s, single-flight (a mutex; concurrent callers wait for the in-progress build rather than starting another). One snapshot holds every project's resolver result, every lane's signals, and the bulk ledger rows. A page render triggered by a token change reuses the snapshot that produced the token. Two browsers polling three views do not multiply git work. The TTL is below the 15s poll interval so a poll never sees a snapshot older than one interval.
+
+Wall-clock budget: the whole worktree pass is capped at 3s per snapshot; repos not reached in time carry `partial: true` and their last known signals (or nil on first build).
+
+### Bulk Store queries (no per-row queries)
+
+New `Store` methods, each one SQL statement, keyed by story id:
+
+- `in_progress_stories_across_projects` → stories joined to epics and projects with `claimed_by`, `started_at`, `updated_at`, `last_note_at`, project `primary_repo_identity`, plus `blocked` stories for attention items.
+- `latest_note_per_story(story_ids)` → newest note `(created_at, kind, metadata)` per story via a window or `MAX` group.
+- `latest_gate_and_commit_per_story(story_ids)` → newest `gate` and newest `commit` note per story.
+- `latest_criterion_check_per_story(story_ids)` → `MAX(checked_at)` and met/total per story.
+- `project_activity` → per project `MAX` of `stories.updated_at`, `stories.last_note_at`, `criteria.checked_at`, `discoveries.updated_at` (if the column exists, else `created_at`).
+
+`load_global_view` is currently N+1 over projects, epics, stories and discovery summaries (`data.rb` ~133-175); phase 1 replaces its activity and lane parts with these queries. The rest of the card stays as is.
 
 ### Derived state per lane
 
-Newest signal across all sources (`newest_at`) drives the ladder:
+Overrides first, then the age ladder over `newest_at` (newest non-nil signal across sources):
 
 | State | Rule | Glyph | Attention item? |
 |---|---|---|---|
+| dead | process liveness `:dead` | red X | yes, severity 1 |
+| unclaimed | in_progress with `claimed_by` nil | `?` | yes |
+| worktree missing/ambiguous | resolver state | broken link | yes |
 | live | `newest_at` < 2m | green, pulsing | no |
 | working | < 15m | green | no |
 | quiet | < 30m | amber | no |
-| stalled | >= 30m and story still in_progress | red | yes |
-| waiting | harness adapter reports `waiting` | hand | yes, regardless of age |
-| unclaimed | in_progress with `claimed_by` nil | `?` | yes |
-| blocked | story status `blocked` (not a lane, but same pass) | stop sign | yes |
+| stalled | >= 30m | red | yes |
+| blocked | story status `blocked` (not a lane, same pass) | stop sign | yes |
 
-Overrides beat the age ladder: `waiting` and `unclaimed` are decided first.
-
-The row also carries the **newest signal per source** (`edit 40s · commit 6m · note 9m · gate 38m · harness 12m`), not just the winner. This is what separates "busy coding, no notes for 20 minutes" from "nothing at all for 38 minutes".
+**Evidence marker.** When worktree signals are nil (resolver failure, timeout, partial) the ladder runs on ledger + process only and the row shows `ledger only` next to the state. A `stalled` with `ledger only` renders as `stalled?` (question mark) because absence of evidence was not confirmed. Unknown is always visible, never presented as proof of inactivity.
 
 ### Attention items
 
-Produced by the same pass, across the scope (fleet: all projects; cockpit: one epic):
+From the same pass, scoped (fleet: all projects; cockpit: one epic). Ordered by severity (dead, worktree missing/ambiguous, stalled, unclaimed, blocked) then age descending. Each has story slug, lane label, reason, and the timestamp the reason is measured from. **Tokens never include a rendered age.**
 
-- stalled lanes, waiting lanes, unclaimed in-progress stories, blocked stories, worktree-missing lanes
-- ordered by severity (waiting, stalled, worktree missing, unclaimed, blocked) then age descending
-- each has: story slug, lane, reason text, age
+### Time left ("typical", phase 3)
 
-### Time left ("typical", stretch goal)
-
-Pure function in the same module.
-
-- Sample: stories in the epic with status `done`, `completed_at - started_at` in minutes. Exclude blocked and abandoned. `n` = sample size.
-- `typical_minutes` = median of the sample when `n >= 2`; else the project-wide median when that has `n >= 5`; else nil (show nothing).
-- Progress band: `remaining_pending_or_in_progress * typical_minutes / max(live_lanes, 1)`, rendered as a rounded range ("about 1h") with `n` visible ("typical 14m per story, n=4").
-- Lane row: elapsed since `started_at` against `typical_minutes`. Past 2x typical turns the elapsed figure amber ("alive but slow"), distinct from the stalled state. No attention item in v1.
-- RIGOR-tag weighting deferred to v2, only with data behind it.
+- Sample: stories in the epic with status `done`, `completed_at - started_at` in minutes, excluding blocked and abandoned. Known limitation: time spent blocked mid-story is not subtracted (no per-story block-duration in the schema); `n` is shown so the reader can weigh it.
+- `typical_minutes` = median when `n >= 2`, else project-wide median when `n >= 5`, else nil (show nothing).
+- Progress band: `remaining * typical / max(live_lanes, 1)` as a rounded range ("about 1h") with `typical 14m per story, n=4`.
+- Lane row: elapsed vs typical; past 2x turns amber ("alive but slow"), no attention item in v1.
+- RIGOR weighting deferred until there is data.
 
 ## Endpoints and views
 
 ### Update mechanism
 
-One token endpoint per view, same contract as `GET /api/poll`: JSON `{token}`; the page JS polls, reloads on change, and seeds `data-token` at render time so there is no null-sentinel bootstrap branch. 404 on an unknown project/epic returns the same-shaped body.
+One token endpoint per view, JSON `{token}`. The page seeds `data-token` at render time from the same snapshot (the Ambient/Discoveries pattern; Active Story's `knownToken = null` bootstrap is not the model). The poll JS reloads on token change and **stops polling on a non-200**, so a 404 cannot loop. Relative ages on the page tick client-side from `data-at` attributes every 15s (as Ambient does outside its token branch), so ages and dimming stay honest without a reload.
 
-- `GET /api/fleet_poll` (15s): token fingerprints every in-progress story's id, status, `claimed_by`, criteria met count, and **liveness bucket** (not raw age, so it flips once on a threshold crossing), plus the attention item list.
-- `GET /api/cockpit_poll?project=&epic=` (15s): fleet token restricted to the epic, plus the newest Changes event id.
-- `GET /api/global_poll` (60s): per-project status bucket + newest activity time.
+**Token composition rule:** only canonical ids and discrete buckets, stably ordered. Never a rendered age, never a raw timestamp that changes without meaning.
 
-Active tab on the cockpit lives in the URL (`?tab=now|changes|trail`) so a reload lands on the same tab. Relative ages are recomputed by the reload.
+- `GET /api/fleet_poll` (15s): for each in-progress story, `id:status:claimed_by:met:liveness_state:resolution_state`, plus each attention item's `story_id:kind`. Liveness state is the bucket, so the token flips once per threshold crossing.
+- `GET /api/cockpit_poll?project=&epic=` (15s): the fleet token restricted to the epic, plus the newest Changes event key and the epic's status counts.
+- `GET /api/global_poll` (60s): per project `slug:status_bucket:worst_lane_state`, in sort order (so a re-sort is itself a change).
+
+Active cockpit tab lives in the URL (`?tab=now|changes|trail`).
 
 ### Global View (`/global`)
 
-- Sort: newest real activity first, where activity = max of `last_note_at`, newest `criteria.checked_at`, newest story `started_at`/`completed_at`, newest discovery `created_at`. Falls back to `projects.updated_at` only when all are nil.
-- Add the liveness glyph next to the in-progress story line on each card (from the lane's derived state). Cards otherwise unchanged; the look Forrest likes stays.
+- Sort: `project_activity` max descending; nil falls back to `projects.updated_at`. Activity includes `stories.updated_at` so context/next-action updates count.
+- Card glyph: the **worst** lane state across every in-progress story in the project (dead > worktree > stalled > quiet > working > live), with the count of lanes when more than one. The card's displayed story line is unchanged (still the legacy first-in-progress-of-active-epic pick, `data.rb` ~133-174); the glyph is project-level so sibling lanes are never hidden.
 - Poll every 60s, reload on token change.
 
 ### Fleet board (`/fleet`)
 
 New route and `Views::Fleet`. Not a War Room extension: War Room is per-project Kanban, the board is cross-project rows.
 
-- Header: `N live · N need you · last poll`.
-- **Needs you** band first (attention items across all projects), each linking to its cockpit.
-- **Lanes** grouped by project, project header links to the cockpit for that epic. Row = shared `Views::Components::LaneRow` Phlex component: glyph · lane · story · criteria `met/total` · newest-per-source signals · elapsed vs typical.
-- Projects with no in-progress story fold into one dim footer line: `Idle: uregistry ✓ · preso-skills · ...` with last-activity age.
-- Row sort inside a project: attention weight, then `newest_at` descending.
+- Header: `N live · N need you · snapshot age`.
+- **Needs you** band first, each item linking to its cockpit.
+- **Lanes** grouped by project; project header links to the cockpit. Row = shared `Views::Components::LaneRow`: glyph · lane label · story · `met/total` · newest-per-source signals · evidence marker · (phase 3) elapsed vs typical.
+- Idle projects fold into one dim footer line with last-activity age.
+- Sort inside a project: attention weight, then `newest_at` descending.
 
-### Epic cockpit (`/cockpit?project=&epic=`)
+### Epic cockpit (`/cockpit?project=&epic=`), phase 2
 
-New route and `Views::Cockpit`. Honors the existing `?project=&epic=` multi-tab scoping; epic switcher in `:scoped` mode.
+New route and `Views::Cockpit`. Honors `?project=&epic=` multi-tab scoping; epic switcher in `:scoped` mode.
 
-- **Now tab**: three bands. Needs you (attention items for this epic) · Lanes (`LaneRow`, same component as `/fleet`) · Progress (done/in progress/blocked/pending segmented bar, typical-time line).
-- **Changes tab**: recency feed, newest first, capped at 50 rows, dimming by age band (< 15m full, < 1h dim, older dimmer). Event sources merged by time: criteria checked, story status changes (started/done/blocked/unblocked/reopened), notes by kind (plan, progress, decision, blocker, recovery, handoff, followup, observation, session, test), gate results, commits, marks filed from a story in this epic (`source_story_id`), harness events (waiting/question) when an adapter exists. Each row: age · glyph · text · lane.
-- **Trail tab**: the full note timeline for the epic, no cap, no poll. Existing data, existing rendering where possible.
+- **Now**: Needs you · Lanes (`LaneRow`) · Progress (segmented bar; typical line in phase 3).
+- **Changes**: recency feed, newest first, cap 50, dim by age band (< 15m, < 1h, older), ages ticking client-side. Events are **derived**, there is no event log:
+
+| Event | Derived from |
+|---|---|
+| started | `stories.started_at` |
+| done | `stories.completed_at` |
+| blocked / unblocked / reopened | `story_notes` with `metadata.action` (`commands.rb` ~1524-1591) |
+| criterion checked | `criteria.checked_at` (+ text) |
+| note | `story_notes` by kind (plan, progress, decision, blocker, recovery, handoff, followup, observation, session, test) |
+| gate | `gate` note `metadata.gate/result` |
+| commit | `commit` note `metadata.shas` |
+| mark filed | `discoveries.created_at` where `source_story_id` in epic |
+| lane dead | process liveness transition observed by the snapshot (in-memory, not persisted; disappears on server restart, acceptable) |
+
+Claim events are not derivable (a claim only updates the row, `store.rb` ~1655-1664) and are omitted.
+
+- **Trail**: existing full note timeline for the epic, no cap, no poll.
 
 ### Shared pieces
 
-- `TyrionWeb::Data.load_fleet_view`, `load_cockpit_view`, and the extended `load_global_view` all call `Tyrion::Liveness` once per request; no per-row queries.
-- `Views::Components::LaneRow` is the single lane rendering; `/fleet` and `/cockpit` cannot drift.
-- `TyrionWeb::Presenter` gets `liveness_glyph(state)` and `age_band_css(seconds)`.
+- `TyrionWeb::Data.load_fleet_view`, `load_cockpit_view`, extended `load_global_view` all read `Liveness::Snapshot.current`.
+- `Views::Components::LaneRow` is the single lane rendering.
+- `TyrionWeb::Presenter` gets `liveness_glyph(state)`, `resolution_label(state)`, `age_band_css(seconds)`.
+
+### Privacy boundary
+
+The server binds `0.0.0.0` with no auth (`web/app.rb` ~21-28) for Tailscale phone access. Nothing in phases 1 to 3 renders transcript or prompt content: signals are timestamps, counts, commit subjects, and Tyrion's own notes. If the transcript adapter spike ever adds "question text" it is opt-in via env var, off by default, and truncated.
 
 ## Error handling
 
-Every source degrades to unknown, never to a crash and never to a false "alive":
+Every source degrades to nil (visible as `ledger only` / resolution state), never to a crash and never to a false "alive" or a confirmed "dead":
 
-- Worktree path missing/unreadable: signals nil, `worktree_missing` attention item.
-- Adapter transcript missing or tail unparseable: adapter returns nil; lane shows ledger + worktree only; a malformed last line is skipped.
-- Worktree scan over budget: `partial: true`, newest mtime so far is still used.
+- `primary_repo_identity` nil, path gone, not a git repo: resolution states above.
+- Git subprocess timeout (2s) or snapshot budget (3s): `partial: true`, nil signals for the unreached lanes.
+- `ps` unavailable: process liveness `:unknown`, ladder ignores it.
 - Future timestamps / clock skew: age clamps to 0.
-- Unknown project/epic on any poll endpoint: 404, same-shaped body.
-- `git` not on PATH or repo gone: worktree signals nil, no exception escapes the module.
+- Unknown project/epic on a poll endpoint: 404 with `{token: null}`; the page stops polling.
+- A snapshot build raising: the previous snapshot is served with `stale: true` and the error logged; a first-build failure renders the ledger-only view.
 
 ## Testing
 
-- `spec/liveness_spec.rb`: pure inputs. Each ladder state, each override, newest-per-source selection, missing worktree, scan budget, clock skew. Worktree cases use the existing `tyrion_worktree` helper.
-- `spec/liveness/claude_code_adapter_spec.rb`: one fixture transcript per state (working, waiting, ended) plus a malformed-tail fixture.
-- Time-left: `n < 2` shows nothing, project fallback at `n >= 5`, amber past 2x typical, blocked/abandoned excluded.
-- Token specs: stable across ticks with no change, flips exactly once on a bucket crossing.
-- Route specs (rack-test, as existing web specs): `/fleet` attention ordering and idle folding, `/cockpit` tab param and Changes cap, `/global` sort order.
+Existing web specs exercise `TyrionWeb::Data` and view classes directly (e.g. `spec/ambient_poll_spec.rb`), not Sinatra via Rack::Test. Follow that:
+
+- `spec/liveness_spec.rb`: ladder states and overrides from a hand-built snapshot; newest-per-source selection; evidence marker when worktree signals are nil; `stalled?` vs `stalled`; clock skew clamp.
+- `spec/liveness/worktree_resolver_spec.rb`: uses `tyrion_worktree` helper to create real worktrees with lane dirs; asserts one match, `missing`, `ambiguous` (same hash in two worktrees), `repo_missing`, `identity_missing`; explicit-root is passed (assert `Dir.pwd` is never consulted by stubbing `Repo.worktrees` to raise on nil).
+- `spec/liveness/snapshot_spec.rb`: TTL reuse, single-flight under two threads, budget `partial`, previous snapshot served on raise.
+- Store bulk query specs: shapes and that each is one statement (count `db.execute` calls via a spy).
+- Token specs: stable across ticks with no change; flips exactly once on a bucket crossing; never contains a digit sequence that looks like an age (regression guard for the rendered-age mistake).
+- Data/view specs for `/fleet` ordering and idle folding, `/cockpit` tab param and Changes derivation table, `/global` sort order and worst-lane glyph.
+- Phase 3: `n < 2` shows nothing, project fallback at `n >= 5`, amber past 2x, blocked/abandoned excluded.
 
 ## Follow-ups (not in this epic)
 
-- Spike: Claude Code subagent transcript location and tail heuristics (blocks the adapter design).
-- Spike each of Codex, Copilot, Gemini for a liveness signal before designing their adapters (per Forrest's rule: verify every target environment before finalizing).
+- **Spike, blocks the transcript adapter:** how to join a lane to a Claude Code session. `claimed_by` carries a PID for Claude lanes but no session id; `~/.claude/projects/<encoded cwd>/` is a worktree bucket holding multiple sessions and `agent-*.jsonl` subagent transcripts. Candidates: `lsof -p <pid>` for the open JSONL, or a lane-dir breadcrumb written by the implement skill. Until a verified join exists, no `waiting` state and no question text.
+- Spike each of Codex, Copilot, Gemini for a liveness signal before designing their adapters.
 - `tyrion heartbeat` verb and the hybrid fallback (approach 3).
 - `tyrion status` using `Tyrion::Liveness` for its lane lines.
 - Ambient-style strip (DOM-patched) if a split-pane glance surface is wanted again.
 - disc-156: hide/archive old projects on Global View, bring back via search.
+
+## Codex review disposition
+
+| Finding | Disposition |
+|---|---|
+| `/api/poll` contract misdescribed | Fixed: seeded-token pattern named as Ambient/Discoveries. |
+| No Rack::Test specs exist | Fixed: testing section follows Data/view-direct pattern. |
+| `primary_repo_identity` nullable/unvalidated | Fixed: resolver states. |
+| No story-status event log | Fixed: derivation table; claim events omitted. |
+| Global glyph ambiguity | Fixed: worst lane state per project. |
+| Lane→worktree not safe | Fixed: resolver with explicit root, single-match rule, four failure states. |
+| Transcript attribution unproven | Accepted: adapter removed from v1; replaced by existing `Repo.lane_liveness` process check; attribution is a blocking spike. |
+| Token instability | Fixed: bucket-only composition rule, client-side age ticking, stop on non-200. |
+| Unbounded poll cost | Fixed: single-flight TTL snapshot, dirty-files-only mtime, subprocess timeouts, wall-clock budget. |
+| No bulk-query path | Fixed: five named Store queries. |
+| Privacy of transcript text | Fixed: no transcript content in phases 1-3; opt-in only after spike. |
+| Activity omits `updated_at` | Fixed. |
+| Failure can fake "stalled" | Fixed: evidence marker, `stalled?`. |
+| Cut typical-time | Kept as phase 3 (Forrest's stated stretch goal) with the blocked-time limitation documented. |
+| Defer cockpit | Kept as phase 2 with explicit derivation and bulk-query contracts, per Forrest's priority order. |
