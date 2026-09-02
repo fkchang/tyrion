@@ -182,6 +182,48 @@ get "/api/fleet_poll" do
   { token: TyrionWeb::Data.fleet_poll_token(d) }.to_json
 end
 
+# ── Epic cockpit ───────────────────────────────────────────────────────────────
+#
+# One epic's slice of the fleet: Needs you, Lanes (the shared LaneRow), and
+# Progress on the Now tab; Changes and Trail fill out (cockpit-changes-trail-
+# tabs). Unlike /fleet and /global, this route IS scoped, so an unknown
+# project or epic is a real 404 rather than "show the sidebar's fallback."
+
+get "/cockpit" do
+  d = TyrionWeb::Data.load_cockpit_view(project_slug: params[:project], epic_slug: params[:epic], tab: params[:tab])
+  unless d[:project] && d[:epic]
+    base = TyrionWeb::Data.load_sidebar_data(d[:project], nil)
+    reason = d[:project] ? "Epic #{params[:epic]} not found." : "Project #{params[:project]} not found."
+    halt 404, phlex(Views::NotFoundView.new(
+      message: reason, project: d[:project], epic: nil,
+      stories: base[:stories], disc_summary: base[:disc_summary], epic_switcher: base[:epic_switcher],
+      **base_git
+    ))
+  end
+  phlex Views::Cockpit.new(
+    project: d[:project], epic: d[:epic], tab: d[:tab],
+    rows: d[:rows], attention: d[:attention], story_counts: d[:story_counts],
+    events: d[:events], trail_notes: d[:trail_notes],
+    stories: d[:stories], disc_summary: d[:disc_summary], epic_switcher: d[:epic_switcher],
+    project_slug: params[:project],
+    token: TyrionWeb::Data.cockpit_poll_token(d),
+    built_at: d[:built_at], stale: d[:stale], partial: d[:partial],
+    **base_git
+  )
+end
+
+# Reload-on-change companion for the cockpit. Unlike /api/fleet_poll and
+# /api/global_poll (unscoped, all-projects surfaces with no 404 branch), this
+# route IS scoped by ?project=&epic= the same way the page is, so an unknown
+# pair 404s with a null token exactly like /api/discoveries_poll.
+get "/api/cockpit_poll" do
+  content_type :json
+  d = TyrionWeb::Data.load_cockpit_view(project_slug: params[:project], epic_slug: params[:epic])
+  halt 404, { token: nil }.to_json unless d[:project] && d[:epic]
+
+  { token: TyrionWeb::Data.cockpit_poll_token(d) }.to_json
+end
+
 # ── Discoveries ────────────────────────────────────────────────────────────────
 
 get "/discoveries" do

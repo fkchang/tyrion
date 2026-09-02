@@ -1259,6 +1259,46 @@
   .lane-resolution { color: #b91c1c; font-size: 11px; font-style: italic; }
   .lane-evidence { color: var(--amber-dim); font-size: 11px; font-style: italic; }
 
+  /* ─── EPIC COCKPIT (ck-*) ───────────────────────────────────── */
+
+  .ck-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid rgba(107,78,42,.2); }
+  .ck-tab {
+    display: inline-block;
+    padding: 6px 14px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--ink-faint);
+    border-bottom: 2px solid transparent;
+  }
+  .ck-tab:hover { color: var(--ink-dim); }
+  .ck-tab.active { color: var(--amber-dim); border-bottom-color: var(--amber); font-weight: 600; }
+
+  .ck-blocked-overflow {
+    margin-top: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: #b91c1c;
+  }
+  .ck-blocked-overflow summary { cursor: pointer; opacity: .8; }
+  .ck-blocked-overflow summary:hover { opacity: 1; }
+  .ck-blocked-overflow[open] summary { margin-bottom: 4px; }
+
+  .ck-progress { margin-top: 18px; }
+  .ck-progress-track {
+    display: flex;
+    height: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(75,55,27,.18);
+    margin-bottom: 6px;
+  }
+  .ck-seg { height: 100%; }
+  .ck-seg-done    { background: var(--emerald); }
+  .ck-seg-active  { background: var(--amber); }
+  .ck-seg-blocked { background: var(--crimson); }
+  .ck-seg-pending { background: rgba(107,78,42,.35); }
+  .ck-progress-legend { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-faint); }
+
   /* ─── DISCOVERIES (dv-*) ────────────────────────────────────── */
 
   #s-discoveries {

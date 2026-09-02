@@ -269,14 +269,12 @@ module TyrionWeb
       }
     end
 
-    # Fingerprint for GET /api/fleet_poll: per-story identity/status/liveness/
-    # resolution plus every newest-per-source event timestamp the row
-    # displays, the newest commit sha, dirty count and newest dirty-file
-    # mtime (an epoch integer -- a file timestamp, not a rendered age), and
-    # each attention item's story_id + kind. No rendered age anywhere in it;
-    # ages tick client-side from data-at between reloads.
-    def self.fleet_poll_token(fleet_view)
-      row_fp = fleet_view[:projects].flat_map { |g| g[:rows] }.map do |r|
+    # Shared by fleet_poll_token and cockpit_poll_token ("the fleet token
+    # restricted to the epic" is the cockpit design's own words for reusing
+    # this exact fingerprint over a smaller row set) -- one place to remember
+    # when a field LaneRow renders needs to be added to the token.
+    def self.lane_row_fingerprint(rows)
+      rows.map do |r|
         [
           r['story_id'], r['status'], r['claimed_by'], r['met'], r['total'],
           r['display_state'], r['resolution_state'],
@@ -285,10 +283,159 @@ module TyrionWeb
           r['commit_sha'], r['dirty_count'], r['newest_dirty_mtime']
         ]
       end
-      attention_fp = fleet_view[:attention].map { |a| [a['story_id'], a['kind']] }
+    end
+
+    def self.attention_fingerprint(items)
+      items.map { |a| [a['story_id'], a['kind']] }
+    end
+
+    # Fingerprint for GET /api/fleet_poll: per-story identity/status/liveness/
+    # resolution plus every newest-per-source event timestamp the row
+    # displays, the newest commit sha, dirty count and newest dirty-file
+    # mtime (an epoch integer -- a file timestamp, not a rendered age), and
+    # each attention item's story_id + kind. No rendered age anywhere in it;
+    # ages tick client-side from data-at between reloads.
+    def self.fleet_poll_token(fleet_view)
+      row_fp = lane_row_fingerprint(fleet_view[:projects].flat_map { |g| g[:rows] })
+      attention_fp = attention_fingerprint(fleet_view[:attention])
       idle_fp = fleet_view[:idle_projects].map { |ip| [ip[:project]['slug'], ip[:last_activity_at]] }
 
       Digest::SHA256.hexdigest([row_fp, attention_fp, idle_fp].to_s)[0, 16]
+    end
+
+    COCKPIT_TABS = %w[now changes trail].freeze
+
+    def self.normalize_cockpit_tab(tab)
+      COCKPIT_TABS.include?(tab.to_s) ? tab.to_s : 'now'
+    end
+
+    EMPTY_STORY_COUNTS = { done: 0, in_progress: 0, blocked: 0, pending: 0, total: 0 }.freeze
+
+    # fleet-visibility/cockpit-now-tab + cockpit-changes-trail-tabs: one
+    # epic's slice of the same Liveness::Snapshot the fleet board reads, plus
+    # the Changes feed's merged events and (only when the Trail tab actually
+    # needs it) the full uncapped note timeline. project_slug/epic_slug are
+    # the string params straight off the URL; a nil epic (unknown slug, or no
+    # project to resolve it against) is the caller's 404 signal -- this
+    # method never raises for that, it just returns nothing to render.
+    def self.load_cockpit_view(project_slug: nil, epic_slug: nil, tab: 'now')
+      project = project_slug ? store.find_project_by_slug(project_slug) : resolve_active_project
+      epic    = project && epic_slug ? store.find_epic(project['id'], epic_slug) : nil
+      tab     = normalize_cockpit_tab(tab)
+
+      unless project && epic
+        return {
+          project: project, epic: nil, tab: tab, rows: [], attention: [], story_counts: EMPTY_STORY_COUNTS,
+          events: [], trail_notes: [], stories: [], disc_summary: empty_disc_summary, epic_switcher: [],
+          generation: nil, built_at: nil, stale: false, partial: false
+        }
+      end
+
+      snapshot = Tyrion::Liveness::Snapshot.current(store)
+      observe_dead_lanes(snapshot['rows'])
+
+      in_epic = ->(r) { r['project_slug'] == project['slug'] && r['epic_slug'] == epic['slug'] }
+      rows      = snapshot['rows'].select { |r| in_epic.call(r) && r['status'] == 'in_progress' }
+      attention = snapshot['attention'].select { |a| a['project_slug'] == project['slug'] && a['epic_slug'] == epic['slug'] }
+      dead_events = dead_lane_events_for(project['slug'], epic['slug'])
+
+      events = (Tyrion::Liveness.epic_events(store, epic['id']) + dead_events)
+               .sort_by { |e| -(e[:at] || 0) }.first(Tyrion::Liveness::EVENT_FEED_LIMIT)
+
+      # -1 is SQLite's own "no LIMIT" sentinel (epic_notes_recent's own doc
+      # comment) -- Trail wants the complete timeline, only fetched when the
+      # Trail tab is actually the one being rendered.
+      trail_notes = tab == 'trail' ? store.epic_notes_recent(epic['id'], limit: -1) : []
+
+      base = load_sidebar_data(project, epic)
+
+      {
+        project: project, epic: epic, tab: tab,
+        rows: rows, attention: attention, story_counts: story_counts(store.stories_for_epic(epic['id'])),
+        events: events, trail_notes: trail_notes,
+        stories: base[:stories], disc_summary: base[:disc_summary], epic_switcher: base[:epic_switcher],
+        generation: snapshot['generation'], built_at: snapshot['built_at'],
+        stale: snapshot['stale'], partial: snapshot['partial']
+      }
+    end
+
+    # Fingerprint for GET /api/cockpit_poll: "the fleet token restricted to
+    # the epic" (design's own words) -- the same row/attention fields
+    # fleet_poll_token fingerprints, but only for this epic's rows/attention
+    # -- plus the newest Changes event (kind+at+story_id, so a new event of an
+    # already-seen kind still changes it) and the epic's status counts.
+    def self.cockpit_poll_token(view)
+      row_fp = lane_row_fingerprint(view[:rows])
+      attention_fp = attention_fingerprint(view[:attention])
+      newest = view[:events]&.first
+      newest_fp = newest && [newest[:kind], newest[:at], newest[:story_id] || newest[:story_slug]]
+      counts_fp = view[:story_counts]&.values_at(:done, :in_progress, :blocked, :pending, :total)
+
+      Digest::SHA256.hexdigest([row_fp, attention_fp, newest_fp, counts_fp].to_s)[0, 16]
+    end
+
+    # In-memory only: the "lane dead" Changes event (fleet-visibility/cockpit-
+    # changes-trail-tabs) has no persisted event log to read from -- it is a
+    # transition THIS process observed between two Liveness::Snapshot builds.
+    # @dead_lane_known/@dead_lane_events are plain module ivars, not the DB:
+    # restarting the web process forgets every prior observation (a lane
+    # still dead after a restart is simply re-observed on the next request),
+    # which the design calls out as acceptable. Idempotent by construction --
+    # calling this twice with an unchanged snapshot's rows records nothing
+    # new the second time, since @dead_lane_known already reflects the first
+    # call -- so it's safe to call on every /cockpit render and every poll
+    # regardless of how often the snapshot itself actually rebuilt.
+    #
+    # Guarded by its own Mutex -- the same precedent Liveness::Snapshot sets
+    # right next to this (a private class-level Mutex around its build) --
+    # because Puma serves this web app with more than one thread, and an
+    # unguarded check-then-act ("was this story already known dead?") could
+    # let two overlapping requests each see "not yet dead" and both record
+    # the same transition.
+    DEAD_LANE_MUTEX = Mutex.new
+    private_constant :DEAD_LANE_MUTEX
+
+    def self.observe_dead_lanes(rows)
+      DEAD_LANE_MUTEX.synchronize do
+        @dead_lane_known  ||= {}
+        @dead_lane_events ||= []
+        Array(rows).each do |row|
+          story_id = row['story_id']
+          was_dead = @dead_lane_known[story_id] == Tyrion::Liveness::DEAD
+          is_dead  = row['state'] == Tyrion::Liveness::DEAD
+          if is_dead && !was_dead
+            @dead_lane_events << {
+              kind: 'lane_dead', at: Time.now.to_i, story_id: story_id, story_slug: row['slug'],
+              epic_slug: row['epic_slug'], project_slug: row['project_slug']
+            }
+          end
+          # Not pruned like @dead_lane_events below -- every story ID this
+          # process has ever seen stays a key for the process's lifetime.
+          # Harmless at Tyrion's scale (one entry per story ever in progress),
+          # so a real cap isn't worth the complexity, but it's the one
+          # unbounded structure here and worth naming as such.
+          @dead_lane_known[story_id] = row['state']
+        end
+        @dead_lane_events = @dead_lane_events.last(200)
+      end
+    end
+
+    # A snapshot of the observed lane_dead events, filtered to one project +
+    # epic -- reading @dead_lane_events through the same mutex observe_dead_
+    # lanes writes it under, so a caller never sees a half-appended array.
+    def self.dead_lane_events_for(project_slug, epic_slug)
+      DEAD_LANE_MUTEX.synchronize do
+        Array(@dead_lane_events).select { |e| e[:project_slug] == project_slug && e[:epic_slug] == epic_slug }
+      end
+    end
+
+    # Specs only -- nothing in the running system has a reason to forget an
+    # observation deliberately (mirrors Liveness::Snapshot.reset!).
+    def self.reset_dead_lane_observations!
+      DEAD_LANE_MUTEX.synchronize do
+        @dead_lane_known  = {}
+        @dead_lane_events = []
+      end
     end
 
     def self.load_discoveries_view(project_slug: nil)
