@@ -162,16 +162,54 @@ module Views
       div(class: "ck-seg #{css}", style: "width:#{pct}%;", title: count.to_s) {}
     end
 
-    # ── Changes tab (fleshed out by cockpit-changes-trail-tabs) ─────────────
+    # ── Changes tab ──────────────────────────────────────────────────────
+    #
+    # @events is already newest-first and already capped (Tyrion::Liveness.
+    # epic_events + TyrionWeb::Data's dead-lane merge do both), so this view
+    # has nothing left to sort or trim -- it renders exactly what it is
+    # given. There is deliberately no "since you looked" delta: nothing can
+    # know when a reader's eyes last landed on this pane, so the feed is pure
+    # recency, dimmed by age band instead.
 
     def render_changes
-      div(style: "font-size:13px;color:var(--ink-faint);font-style:italic;") { "Changes feed coming soon." }
+      if @events.empty?
+        div(style: "font-size:13px;color:var(--ink-faint);font-style:italic;") { "No changes yet." }
+      else
+        @events.each { |ev| render_change_row(ev) }
+      end
     end
 
-    # ── Trail tab (fleshed out by cockpit-changes-trail-tabs) ───────────────
+    def render_change_row(ev)
+      div(class: "ck-change-row #{TyrionWeb::Presenter.age_band_css(ev[:at])}") do
+        span(class: "ck-change-kind") { ev[:kind].to_s.tr('_', ' ') }
+        span(class: "ck-change-body") do
+          plain "#{ev[:story_slug]} — " if ev[:story_slug]
+          plain ev[:text].to_s
+        end
+        span(class: "ck-change-age", data: { at: ev[:at] }) { TyrionWeb::Presenter.time_ago_epoch(ev[:at]) }
+      end
+    end
+
+    # ── Trail tab ────────────────────────────────────────────────────────
+    #
+    # @trail_notes is the epic's complete, uncapped note timeline (Data's
+    # load_cockpit_view fetches it only for this tab, via epic_notes_recent's
+    # limit: -1). No poller, no cap -- this is deliberately the one tab in
+    # the cockpit that just shows everything.
 
     def render_trail
-      div(style: "font-size:13px;color:var(--ink-faint);font-style:italic;") { "Trail coming soon." }
+      if @trail_notes.empty?
+        div(style: "font-size:13px;color:var(--ink-faint);font-style:italic;") { "No notes yet." }
+      else
+        @trail_notes.each { |n| render_trail_note(n) }
+      end
+    end
+
+    def render_trail_note(n)
+      div(class: TyrionWeb::Presenter.note_kind_css(n['kind'])) do
+        div(class: "note-meta") { "#{n['story_slug']} · #{n['kind']} · #{TyrionWeb::Presenter.time_ago(n['created_at'])}" }
+        div(class: "note-body") { n['body'] }
+      end
     end
 
     # ── Poll badge + JS (same shape as Views::Fleet's own) ──────────────────
@@ -229,6 +267,28 @@ module Views
               }
             }
 
+            // Re-bands every Changes row from its own leaf .ck-change-age
+            // span every tick, token or not -- a 15m/1h boundary crossing
+            // must dim the row even when nothing else about the epic has
+            // changed. Only classList is touched here (never textContent),
+            // so this is safe on the row container even though it has
+            // children -- refreshAges above already owns the leaf span's text.
+            var RECENT = #{TyrionWeb::Presenter::CHANGE_RECENT_SECONDS};
+            var HOUR   = #{TyrionWeb::Presenter::CHANGE_HOUR_SECONDS};
+
+            function refreshChangeBands() {
+              var rows = document.querySelectorAll('.ck-change-row');
+              for (var i = 0; i < rows.length; i++) {
+                var ageSpan = rows[i].querySelector('.ck-change-age');
+                if (!ageSpan || !ageSpan.dataset.at) continue;
+                var age = Math.floor(Date.now() / 1000) - parseInt(ageSpan.dataset.at, 10);
+                if (age < 0) age = 0;
+                var band = age < RECENT ? 'ck-change-recent' : (age < HOUR ? 'ck-change-hour' : 'ck-change-old');
+                rows[i].classList.remove('ck-change-recent', 'ck-change-hour', 'ck-change-old');
+                rows[i].classList.add(band);
+              }
+            }
+
             function poll() {
               fetch('/api/cockpit_poll?project=' + encodeURIComponent(project) + '&epic=' + encodeURIComponent(epic))
                 .then(function (r) { if (!r.ok) throw new Error('poll'); return r.json(); })
@@ -249,8 +309,9 @@ module Views
             }
 
             refreshAges();
+            refreshChangeBands();
             poll();
-            setInterval(function () { refreshAges(); poll(); }, INTERVAL);
+            setInterval(function () { refreshAges(); refreshChangeBands(); poll(); }, INTERVAL);
           })();
         JS
       end

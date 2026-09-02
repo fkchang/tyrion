@@ -1251,8 +1251,15 @@
   }
   .lane-glyph { font-size: 12px; }
   .lane-label { color: var(--ink-faint); }
-  .lane-story { color: #1a0e05; text-decoration: none; font-weight: 600; }
-  .lane-story:hover { text-decoration: underline; }
+  /* Fix for a cockpit UAT finding (followup note on cockpit-now-tab): #1a0e05
+     (--ink) is a near-black tuned for the parchment-background story rows
+     (.story-row et al.), but .lane-row sits directly on the page's own dark
+     --bg (#0D0A07) with only a rgba(0,0,0,.10) tint over it -- near-black text
+     on a near-black background was nearly invisible. --text (#F5E6C8) is the
+     dark theme's own body-text color, already legible everywhere else on
+     this same background (e.g. the topbar brand, .fl-header). */
+  .lane-story { color: var(--text); text-decoration: none; font-weight: 600; }
+  .lane-story:hover { text-decoration: underline; color: var(--amber); }
   .lane-progress { color: var(--ink-faint); }
   .lane-signals { display: flex; gap: 10px; color: var(--ink-faint); font-size: 12px; }
   .lane-process { color: var(--ink-faint); font-size: 12px; }
@@ -1298,6 +1305,22 @@
   .ck-seg-blocked { background: var(--crimson); }
   .ck-seg-pending { background: rgba(107,78,42,.35); }
   .ck-progress-legend { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-faint); }
+
+  .ck-change-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(107,78,42,.12);
+  }
+  .ck-change-kind { flex-shrink: 0; color: var(--ink-faint); text-transform: uppercase; font-size: 11px; }
+  .ck-change-body { flex: 1; }
+  .ck-change-age  { color: var(--ink-faint); font-size: 12px; flex-shrink: 0; }
+  .ck-change-recent { opacity: 1; }
+  .ck-change-hour   { opacity: .75; }
+  .ck-change-old    { opacity: .5; }
 
   /* ─── DISCOVERIES (dv-*) ────────────────────────────────────── */
 

@@ -118,6 +118,27 @@ module TyrionWeb
     end
     private_class_method :age_words
 
+    # Age bands for the cockpit's Changes feed (fleet-visibility/cockpit-
+    # changes-trail-tabs): under 15 minutes, under an hour, older. A nil
+    # epoch (no evidence) dims to the oldest band rather than the newest --
+    # absence of a timestamp is not a reason to render something as fresh.
+    # The two second thresholds are interpolated into the Changes tab's
+    # client-side ticker JS so the boundary crossing dims a row without a
+    # token change; see Views::Cockpit's own comment for why.
+    CHANGE_RECENT_SECONDS = 900   # 15 minutes
+    CHANGE_HOUR_SECONDS   = 3600  # 1 hour
+
+    def self.age_band_css(epoch)
+      return 'ck-change-old' unless epoch
+
+      age = Time.now.to_i - epoch.to_i
+      age = 0 if age.negative?
+      return 'ck-change-recent' if age < CHANGE_RECENT_SECONDS
+      return 'ck-change-hour'   if age < CHANGE_HOUR_SECONDS
+
+      'ck-change-old'
+    end
+
     # Glyph + css class for a Liveness display_state (the raw ladder state, or
     # a raw state with the "?" evidence-marker suffix, e.g. "stalled?"). Falls
     # back to a neutral dot for anything unrecognized rather than raising --
