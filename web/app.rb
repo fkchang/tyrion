@@ -140,8 +140,19 @@ get "/global" do
     project_cards: d[:project_cards],
     project: proj, epic: epic, stories: base[:stories], disc_summary: base[:disc_summary],
     epic_switcher: base[:epic_switcher],
+    # Seeded so an unchanged first poll repaints nothing (Ambient/Discoveries pattern).
+    token: TyrionWeb::Data.global_poll_token(d[:project_cards]),
     **base_git
   )
+end
+
+# Reload-on-change companion for Global View. No project scope: this page has
+# none, it's the all-projects board, so unlike /api/discoveries_poll or
+# /api/ambient_poll there is no 404 branch to reach here.
+get "/api/global_poll" do
+  content_type :json
+  d = TyrionWeb::Data.load_global_view
+  { token: TyrionWeb::Data.global_poll_token(d[:project_cards]) }.to_json
 end
 
 # ── Discoveries ────────────────────────────────────────────────────────────────

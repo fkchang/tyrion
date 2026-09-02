@@ -1179,6 +1179,85 @@
     margin-top: 4px;
   }
 
+  /* ─── LIVENESS (lv-*) ───────────────────────────────────────── */
+  /* Shared by Global View's worst-lane glyph and the Fleet board's LaneRow. */
+
+  .lv-dead        { color: #b91c1c; }
+  .lv-unclaimed   { color: #b91c1c; }
+  .lv-dispatched  { color: var(--amber-dim); }
+  .lv-worktree    { color: #b91c1c; }
+  .lv-blocked     { color: #b91c1c; }
+  .lv-stalled     { color: #b91c1c; }
+  .lv-quiet       { color: var(--amber-dim); }
+  .lv-working     { color: #1e9e54; }
+  .lv-live        { color: #1e9e54; }
+  .lv-unknown     { color: var(--ink-faint); }
+  .lv-pulse       { animation: pulse 2s ease-in-out infinite; }
+  .lv-unsure      { opacity: .6; }
+
+  /* ─── FLEET BOARD (fl-*) ────────────────────────────────────── */
+
+  .fl-outer { max-width: 900px; margin: 0 auto; padding: 8px 0 40px; }
+  .fl-header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; }
+  .fl-summary { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink-faint); }
+  .fl-needs-you {
+    background: rgba(185,28,28,.08);
+    border: 1px solid rgba(185,28,28,.25);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 20px;
+  }
+  .fl-need-row {
+    display: block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: #b91c1c;
+    padding: 3px 0;
+  }
+  .fl-need-row:hover { text-decoration: underline; }
+  .fl-project-group { margin-bottom: 22px; }
+  .fl-project-header {
+    display: block;
+    font-family: 'Cinzel', serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a0e05;
+    margin-bottom: 6px;
+  }
+  .fl-project-header:hover { color: var(--amber-dim); }
+  .fl-idle-footer {
+    margin-top: 16px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(107,78,42,.2);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+    opacity: .7;
+  }
+  .fl-idle-item { display: inline-block; margin-right: 18px; }
+
+  .lane-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(107,78,42,.18);
+    margin-bottom: 4px;
+    background: rgba(0,0,0,.10);
+  }
+  .lane-glyph { font-size: 12px; }
+  .lane-label { color: var(--ink-faint); }
+  .lane-story { color: #1a0e05; text-decoration: none; font-weight: 600; }
+  .lane-story:hover { text-decoration: underline; }
+  .lane-progress { color: var(--ink-faint); }
+  .lane-signals { display: flex; gap: 10px; color: var(--ink-faint); font-size: 12px; }
+  .lane-process { color: var(--ink-faint); font-size: 12px; }
+  .lane-evidence { color: var(--amber-dim); font-size: 11px; font-style: italic; }
+
   /* ─── DISCOVERIES (dv-*) ────────────────────────────────────── */
 
   #s-discoveries {

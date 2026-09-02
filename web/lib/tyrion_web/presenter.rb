@@ -96,13 +96,93 @@ module TyrionWeb
 
     def self.time_ago(ts)
       return '—' unless ts
-      secs = (Time.now - Time.parse(ts.to_s)).to_i
+      age_words((Time.now - Time.parse(ts.to_s)).to_i)
+    end
+
+    # Same rendering as time_ago, for the epoch-integer timestamps Liveness
+    # signals carry (fleet-board's per-source signals, snapshot built_at) rather
+    # than the ISO8601 strings the ledger stores everywhere else.
+    def self.time_ago_epoch(epoch)
+      return '—' unless epoch
+      age_words(Time.now.to_i - epoch.to_i)
+    end
+
+    def self.age_words(secs)
+      secs = 0 if secs.negative?
       return 'just now' if secs < 60
       mins = secs / 60
       return "#{mins}m ago" if mins < 60
       hrs = mins / 60
       return "#{hrs}h ago" if hrs < 24
       "#{hrs / 24}d ago"
+    end
+    private_class_method :age_words
+
+    # Glyph + css class for a Liveness display_state (the raw ladder state, or
+    # a raw state with the "?" evidence-marker suffix, e.g. "stalled?"). Falls
+    # back to a neutral dot for anything unrecognized rather than raising --
+    # an unmapped state is a display gap, not a reason to break the page.
+    LIVENESS_GLYPH = {
+      'dead'               => { glyph: '✕', css: 'lv-dead',       label: 'dead' },
+      'unclaimed'          => { glyph: '?', css: 'lv-unclaimed',  label: 'unclaimed' },
+      'dispatched'         => { glyph: '↦', css: 'lv-dispatched', label: 'dispatched' },
+      'worktree_missing'   => { glyph: '⛓', css: 'lv-worktree',   label: 'worktree missing' },
+      'worktree_ambiguous' => { glyph: '⛓', css: 'lv-worktree',   label: 'worktree ambiguous' },
+      'blocked'            => { glyph: '⛔', css: 'lv-blocked',    label: 'blocked' },
+      'stalled'            => { glyph: '●', css: 'lv-stalled',    label: 'stalled' },
+      'stalled?'           => { glyph: '●', css: 'lv-stalled lv-unsure', label: 'stalled?' },
+      'quiet'              => { glyph: '●', css: 'lv-quiet',      label: 'quiet' },
+      'working'            => { glyph: '●', css: 'lv-working',    label: 'working' },
+      'live'               => { glyph: '●', css: 'lv-live lv-pulse', label: 'live' },
+    }.freeze
+    UNKNOWN_LIVENESS_GLYPH = { glyph: '·', css: 'lv-unknown', label: 'unknown' }.freeze
+
+    def self.liveness_glyph(state)
+      LIVENESS_GLYPH[state.to_s] || UNKNOWN_LIVENESS_GLYPH
+    end
+
+    # Worst-lane ranking for a project card / row group: lower is worse. This
+    # is a presentation-layer ordering, not Tyrion::Liveness::SEVERITY --
+    # SEVERITY only ranks the states that qualify as attention items, and the
+    # Global View glyph and Fleet board row sort both need every state a lane
+    # can be in (including the quiet ones) placed on one line. dispatched,
+    # unclaimed and blocked sit between stalled and quiet, preserving their
+    # relative order from Tyrion::Liveness::SEVERITY.
+    LANE_STATE_RANK = {
+      'dead' => 0,
+      'worktree_missing' => 1, 'worktree_ambiguous' => 1,
+      'stalled' => 2, 'stalled?' => 2,
+      'dispatched' => 3,
+      'unclaimed' => 4,
+      'blocked' => 5,
+      'quiet' => 6,
+      'working' => 7,
+      'live' => 8,
+    }.freeze
+    # One worse than the least-urgent ranked state (not LANE_STATE_RANK.size,
+    # which is only coincidentally correct today) -- an unrecognized state
+    # must sort as MORE urgent than every known one, not less, so a state
+    # added to Tyrion::Liveness tomorrow surfaces as the worst lane rather
+    # than being silently outranked by 'live'.
+    UNRANKED_LANE_STATE = -1
+
+    # The worst (lowest-ranked) state among a set of lane states. nil input
+    # (no lanes) yields nil -- callers decide what "no lanes" renders as.
+    def self.worst_lane_state(states)
+      Array(states).compact.min_by { |s| LANE_STATE_RANK[s.to_s] || UNRANKED_LANE_STATE }
+    end
+
+    # Human label for a Liveness::WorktreeResolver resolution state -- the
+    # board never renders the raw 'missing' / 'identity_missing' constant text.
+    RESOLUTION_LABEL = {
+      'missing'          => 'no worktree found',
+      'ambiguous'        => 'matches more than one worktree',
+      'repo_missing'     => 'repo path is gone',
+      'identity_missing' => 'no repo identity recorded',
+    }.freeze
+
+    def self.resolution_label(state)
+      RESOLUTION_LABEL[state.to_s]
     end
 
     def self.note_kind_css(kind)

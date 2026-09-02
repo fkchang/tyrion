@@ -130,14 +130,27 @@ module TyrionWeb
       }
     end
 
+    # fleet-visibility/global-view-activity-sort: activity and lane state now
+    # come from Liveness::Snapshot.current instead of the per-epic max_note_at
+    # fan-out this replaced. project_activity is read off the snapshot
+    # (snapshot['project_activity']), not queried a second time -- Snapshot
+    # already ran that four-subquery read once per build, and calling
+    # Store#project_activity again here would let this card's activity_at
+    # (fresh) and its worst_lane_state (as old as the snapshot's TTL) describe
+    # two different moments. Everything else about the card (counts,
+    # disc_summary, card_status) is untouched.
     def self.load_global_view
       projects = store.list_projects
+      snapshot = Tyrion::Liveness::Snapshot.current(store)
+      activity = snapshot['project_activity']
+      lanes_by_project = snapshot['rows'].select { |r| r['status'] == 'in_progress' }
+                                          .group_by { |r| r['project_id'] }
+
       project_cards = projects.map do |proj|
         epics = store.list_epics(proj['id'])
         active_epic = resolve_active_epic(proj)
 
         done_count = pending_count = blocked_count = active_count = 0
-        last_note_at = nil
 
         epics.each do |e|
           stories = store.stories_for_epic(e['id'])
@@ -146,12 +159,26 @@ module TyrionWeb
           pending_count += counts[:pending]
           blocked_count += counts[:blocked]
           active_count  += counts[:in_progress]
-          last_note_at   = [last_note_at, max_note_at(stories)].compact.max
         end
 
         in_progress = active_epic ? store.in_progress_story(active_epic['id']) : nil
         total = done_count + pending_count + blocked_count + active_count
         disc_summary = load_discovery_summary(proj['id'])
+
+        # activity_at unions stories.updated_at/last_note_at, criteria.checked_at
+        # and discoveries activity (Store#project_activity) -- a real event time,
+        # falling back to projects.updated_at (row touch time) only when nil,
+        # per the design's stated sort key.
+        activity_row = activity[proj['id']] || {}
+        activity_at  = activity_row['activity_at'] # already NULLIF'd to NULL in SQL, never ''
+        sort_key     = activity_at || proj['updated_at']
+
+        # display_state, not the raw ladder state -- LANE_STATE_RANK ranks
+        # "stalled?" (evidence: ledger only) at the same weight as "stalled",
+        # so this loses no ordering precision while letting the glyph render
+        # the uncertainty marker when that's the row actually driving it.
+        lanes = lanes_by_project[proj['id']] || []
+        worst_lane_state = TyrionWeb::Presenter.worst_lane_state(lanes.map { |r| r['display_state'] })
 
         # Precedence is load-bearing: story activity of any kind outranks discovery
         # activity, so :discovery only fires for a project with zero stories at all
@@ -171,11 +198,28 @@ module TyrionWeb
         {
           project: proj, active_epic: active_epic, in_progress: in_progress,
           done: done_count, pending: pending_count, blocked: blocked_count, active: active_count,
-          total: total, last_note_at: last_note_at, status: card_status, disc_summary: disc_summary
+          total: total, last_note_at: activity_at, status: card_status, disc_summary: disc_summary,
+          activity_at: activity_at, sort_key: sort_key,
+          worst_lane_state: worst_lane_state, lane_count: lanes.size
         }
       end
 
-      { project_cards: project_cards }
+      # Descending by real activity; a nil sort_key (no activity ever, no
+      # project row touch either) sorts last rather than first.
+      sorted = project_cards.sort_by { |c| c[:sort_key] || '' }.reverse
+
+      { project_cards: sorted }
+    end
+
+    # Fingerprint for GET /api/global_poll. Every element is a stored value --
+    # an id, a bucket, a count, or an event timestamp -- never a wall-clock-
+    # derived age, so the token changes only when something actually changed,
+    # in the page's own sort order (a re-sort is itself a change worth seeing).
+    def self.global_poll_token(project_cards)
+      fingerprint = project_cards.map do |c|
+        [c[:project]['slug'], c[:status], c[:worst_lane_state], c[:done], c[:total], c[:activity_at]]
+      end
+      Digest::SHA256.hexdigest(fingerprint.to_s)[0, 16]
     end
 
     def self.load_discoveries_view(project_slug: nil)
