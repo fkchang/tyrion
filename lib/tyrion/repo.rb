@@ -3,7 +3,9 @@
 require 'digest'
 require 'fileutils'
 require 'json'
+require 'open3'
 require 'shellwords'
+require 'timeout'
 
 module Tyrion
   # Repo — git repo identity and worktree state helpers.
@@ -237,10 +239,16 @@ module Tyrion
 
     # Raw `git worktree list --porcelain` output (seam — stubbed in specs).
     # Empty string when git is unavailable or this isn't a repo.
+    #
+    # Bounded by GIT_TIMEOUT_SECONDS like the fleet seams below, because the
+    # resolver calls this once per project while building a snapshot: a repo
+    # with a wedged index or a stale .git/worktrees entry would otherwise stall
+    # a whole page render with no cap at all. A timeout raises GitTimeout so the
+    # caller can report `partial` rather than an empty worktree list, which
+    # would read as "this repo has no worktrees" — a confident wrong answer.
     def self.git_worktree_list(path = nil)
       path ||= worktree_root
-      out = `git -C #{path.shellescape} worktree list --porcelain 2>/dev/null`
-      $?.success? ? out : ''
+      capture_with_timeout(['git', '-C', path.to_s, 'worktree', 'list', '--porcelain']).to_s
     end
 
     # Parse `git worktree list --porcelain` into [{path:, branch:, head:}].
@@ -269,6 +277,89 @@ module Tyrion
     def self.dirty_count(path = nil)
       path ||= worktree_root
       `git -C #{path.shellescape} status --porcelain 2>/dev/null`.lines.count
+    end
+
+    # -- bounded, explicit-root git seams (fleet liveness) --------------------
+    #
+    # Everything above this line defaults its path to the current worktree,
+    # which is correct for a CLI standing in the repo it is asking about. The
+    # fleet is the opposite case: one process asks about many repos it is not
+    # standing in (the web server runs from web/), so these seams REFUSE a nil
+    # root instead of defaulting, and cap every subprocess so one wedged git
+    # cannot stall a page render.
+
+    GIT_TIMEOUT_SECONDS = 2
+
+    # Raised when a subprocess exceeded its budget. Distinct from a nil return
+    # (which means "git ran and said no") because callers must be able to mark
+    # the answer `partial` rather than reporting confident absence.
+    class GitTimeout < StandardError; end
+
+    # Run +argv+ and return its stdout, or nil when it exits non-zero or could
+    # not be spawned. Raises GitTimeout after +timeout+ seconds, killing the
+    # child first so a hung process cannot outlive the call.
+    #
+    # The child's stderr goes to /dev/null rather than a pipe we read. Reading
+    # stdout to EOF and only then draining stderr deadlocks whenever the child
+    # fills the stderr pipe buffer first (git advice, hook warnings), and that
+    # deadlock would surface as a bogus GitTimeout on a perfectly healthy repo.
+    # No caller wants git's stderr, so the pipe simply should not exist.
+    #
+    # Output is scrubbed to valid UTF-8: a commit subject or filename authored
+    # under a non-UTF-8 locale would otherwise be tagged UTF-8 without being
+    # valid, and blow up much later at JSON encoding time in a poll endpoint,
+    # far from the repo that caused it.
+    def self.capture_with_timeout(argv, timeout: GIT_TIMEOUT_SECONDS)
+      io = IO.popen(argv, err: File::NULL)
+      begin
+        out = Timeout.timeout(timeout) { io.read }
+      rescue Timeout::Error
+        kill_process(io.pid)
+        raise GitTimeout
+      ensure
+        io.close
+      end
+      $?&.success? ? out.dup.force_encoding(Encoding::UTF_8).scrub : nil
+    rescue SystemCallError
+      nil
+    end
+
+    def self.kill_process(pid)
+      Process.kill('KILL', pid)
+    rescue Errno::ESRCH, Errno::EPERM
+      nil
+    end
+    private_class_method :kill_process
+
+    # `git -C <root> <args...>` with an explicit root — the whole point of this
+    # seam. A nil root here would silently mean "the web process's own cwd",
+    # which is a different repo than the one being asked about, so it raises.
+    def self.git_capture(root, *args, timeout: GIT_TIMEOUT_SECONDS)
+      raise ArgumentError, 'git_capture requires an explicit repo root' if root.nil? || root.to_s.strip.empty?
+
+      capture_with_timeout(['git', '-C', root.to_s, *args], timeout: timeout)
+    end
+
+    # True only when +root+ is a directory git will actually answer about.
+    def self.git_repo?(root)
+      return false unless root && File.directory?(root.to_s)
+
+      !git_capture(root, 'rev-parse', '--git-dir').nil?
+    end
+
+    # Raw `git status --porcelain -z --untracked-files=all` for +root+.
+    # NUL-delimited so paths containing spaces or newlines survive intact, and
+    # -z is also what makes rename records carry their original path as an
+    # extra field. nil when git could not answer.
+    def self.git_status_porcelain_z(root)
+      git_capture(root, 'status', '--porcelain', '-z', '--untracked-files=all')
+    end
+
+    # Raw `git log -1 --format=%H%n%ct%n%s` for +root+ — sha, commit epoch and
+    # subject, one per line. nil when git could not answer (including a repo
+    # with no commits yet).
+    def self.git_log_head(root)
+      git_capture(root, 'log', '-1', '--format=%H%n%ct%n%s')
     end
 
     def self.last_commit(path = nil)

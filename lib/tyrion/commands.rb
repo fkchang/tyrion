@@ -1249,8 +1249,14 @@ module Tyrion
         end
       end
 
-      worktrees = Repo.worktrees
-      matched   = {}
+      # git worktree list is capped at Repo::GIT_TIMEOUT_SECONDS; a wedged repo
+      # ends the command with a message rather than hanging the terminal.
+      worktrees = begin
+        Repo.worktrees
+      rescue Repo::GitTimeout
+        die "git worktree list timed out after #{Repo::GIT_TIMEOUT_SECONDS}s — is the repo wedged?"
+      end
+      matched = {}
 
       puts "#{Output.bold('WORKTREES')} — #{project['slug']}  " \
            "#{Output.dim("(#{pluralize(worktrees.size, 'worktree')} · #{pluralize(lanes.size, 'active lane')})")}"
