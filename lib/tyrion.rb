@@ -3,7 +3,7 @@
 require_relative 'tyrion/version'
 require_relative 'tyrion/output'
 require_relative 'tyrion/repo'
-require_relative 'tyrion/liveness/worktree_resolver'
+require_relative 'tyrion/liveness'
 require_relative 'tyrion/store'
 require_relative 'tyrion/web_server'
 require_relative 'tyrion/commands'
