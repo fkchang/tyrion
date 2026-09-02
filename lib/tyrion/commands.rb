@@ -2509,10 +2509,13 @@ module Tyrion
       'Usage: tyrion epic-context show [--epic <slug>] [--story <slug>]'
     EPIC_CONTEXT_APPEND_USAGE =
       'Usage: tyrion epic-context append [--epic <slug>] [--story <slug>] [--tags a,b] "learning"'
+    EPIC_CONTEXT_PROMOTE_USAGE =
+      'Usage: tyrion epic-context promote "<heading>" --to <epic-slug|path.org> [--under <heading>] [--epic <slug>]'
 
     # Composed from the per-subcommand usages, never re-typed, so a flag added
     # to one can't drift away from the group listing.
-    EPIC_CONTEXT_USAGE = [EPIC_CONTEXT_SHOW_USAGE, EPIC_CONTEXT_APPEND_USAGE].join("\n").freeze
+    EPIC_CONTEXT_USAGE =
+      [EPIC_CONTEXT_SHOW_USAGE, EPIC_CONTEXT_APPEND_USAGE, EPIC_CONTEXT_PROMOTE_USAGE].join("\n").freeze
 
     # The headline every learning is captured under. orgkit creates it as a
     # level-1 headline at the end of the file when it does not exist yet, so a
@@ -2540,8 +2543,9 @@ module Tyrion
 
     def self.cmd_epic_context(args, store)
       route_subcommand(args, 'epic-context', EPIC_CONTEXT_USAGE, {
-        'show'   => -> { cmd_epic_context_show(args, store) },
-        'append' => -> { cmd_epic_context_append(args, store) }
+        'show'    => -> { cmd_epic_context_show(args, store) },
+        'append'  => -> { cmd_epic_context_append(args, store) },
+        'promote' => -> { cmd_epic_context_promote(args, store) }
       })
     end
 
@@ -2553,9 +2557,9 @@ module Tyrion
       slug.tr('-', '_')
     end
 
-    # [epic, absolute context path] for `--epic <slug>` or the active epic.
-    # Dies rather than returning nil for either half: a missing epic and a
-    # missing wiki are both dead ends for every epic-context subcommand, and
+    # [project, epic, absolute context path] for `--epic <slug>` or the active
+    # epic. Dies rather than returning nil for either half: a missing epic and
+    # a missing wiki are both dead ends for every epic-context subcommand, and
     # each deserves its own message.
     def self.resolve_epic_context(store, epic_slug)
       if epic_slug
@@ -2563,7 +2567,7 @@ module Tyrion
         epic    = store.find_epic(project['id'], epic_slug)
         die "Epic not found: #{epic_slug}" unless epic
       else
-        _project, epic = resolve_project_epic(store)
+        project, epic = resolve_project_epic(store)
       end
 
       path = epic_context_path(epic['slug'])
@@ -2572,7 +2576,16 @@ module Tyrion
             "features/#{epic['slug']}.context.org (or .md) under #{epic_context_root}"
       end
 
-      [epic, path]
+      [project, epic, path]
+    end
+
+    # orgkit writes only org — a markdown wiki is a refusal everywhere, with
+    # the conversion named rather than left for the caller to guess.
+    def self.require_org_file!(path, role)
+      return if File.extname(path) == '.org'
+
+      die "#{role} #{path} is markdown — orgkit writes only org. Convert it first: " \
+          "orgkit import #{path} #{path.sub(/\.\w+\z/, '.org')}"
     end
 
     def self.cmd_epic_context_show(args, store)
@@ -2580,7 +2593,7 @@ module Tyrion
       story_slug = extract_flag_value(args, '--story')
       reject_unknown_flags!(args, EPIC_CONTEXT_SHOW_USAGE)
 
-      _epic, path = resolve_epic_context(store, epic_slug)
+      _project, _epic, path = resolve_epic_context(store, epic_slug)
       puts path
 
       # A markdown wiki has no tags to slice on. Print the whole thing and say
@@ -2614,11 +2627,8 @@ module Tyrion
       text = args.join(' ')
       die EPIC_CONTEXT_APPEND_USAGE if presence(text).nil?
 
-      epic, path = resolve_epic_context(store, epic_slug)
-      if File.extname(path) != '.org'
-        die "#{path} is markdown — orgkit writes only org. Convert it first: " \
-            "orgkit import #{path} #{path.sub(/\.md\z/, '.org')}"
-      end
+      _project, epic, path = resolve_epic_context(store, epic_slug)
+      require_org_file!(path, "The wiki for '#{epic['slug']}',")
 
       # prime_story_for, never resolve_my_story: recording a learning must not
       # claim, adopt or pin a story as a side effect. Another lane's story, or
@@ -2634,6 +2644,69 @@ module Tyrion
       print out unless out.to_s.empty?
       store.refresh_epic_context(epic['id'], File.read(path))
       puts "Appended to #{path}#{tags.empty? ? '' : " (tags: #{tags})"}"
+    end
+
+    # Move one learning up a scope — into a parent epic's wiki or a system doc
+    # — instead of copying it, so there is still exactly one copy of the fact.
+    # `--materialize-inherited-tags` writes the subtree's effective tags as
+    # literal tags before the move (org tag inheritance does not survive a
+    # change of parent), and `--stamp promoted_from=<epic>` records where it
+    # came from, which is the whole difference between promoting and retyping.
+    def self.cmd_epic_context_promote(args, store)
+      epic_slug = extract_flag_value(args, '--epic')
+      to        = extract_flag_value(args, '--to')
+      under     = extract_flag_value(args, '--under') || LEARNINGS_HEADING
+      reject_unknown_flags!(args, EPIC_CONTEXT_PROMOTE_USAGE)
+
+      heading = args.join(' ')
+      die EPIC_CONTEXT_PROMOTE_USAGE if presence(heading).nil? || presence(to).nil?
+
+      project, epic, src = resolve_epic_context(store, epic_slug)
+      require_org_file!(src, "The wiki for '#{epic['slug']}',")
+
+      dest = promote_destination(to)
+      die "Destination not found: #{dest}" unless File.exist?(dest)
+      require_org_file!(dest, 'The destination')
+
+      out = orgkit!('refile', src, heading, "#{dest}::#{under}",
+                    '--materialize-inherited-tags', '--stamp', "promoted_from=#{epic['slug']}",
+                    action: "refile #{src}")
+      print out unless out.to_s.empty?
+
+      store.refresh_epic_context(epic['id'], File.read(src))
+      dest_epic = tracked_epic_for_context(store, project, dest)
+      store.refresh_epic_context(dest_epic['id'], File.read(dest)) if dest_epic
+
+      puts "Promoted \"#{heading}\" from #{src} to #{dest}::#{under}"
+    end
+
+    # `--to` is a path when it looks like one — it contains a separator or has
+    # a file extension — and an epic slug otherwise. Epic slugs are
+    # hyphenated words with no dot in them, so testing for ANY extension
+    # rather than only `.org` is what lets `--to notes.md` fail with "orgkit
+    # writes only org" instead of the baffling "Destination not found:
+    # features/notes.md.context.org" a slug reading produces. A relative path
+    # resolves against the main checkout, not the caller's cwd, for the same
+    # reason everything else here does: the caller is usually in a worktree.
+    #
+    # A bare slug names an EPIC's wiki, so it resolves through the same
+    # .org-then-.md lookup the source side uses rather than assuming .org.
+    # Assuming would report "Destination not found: <slug>.context.org" for a
+    # parent epic whose wiki is still markdown — a false statement, since the
+    # file exists and is merely the wrong format. require_org_file! is what
+    # should say so, and it can only say it if it is handed the real path.
+    def self.promote_destination(to)
+      return File.expand_path(to, epic_context_root) if to.include?('/') || !File.extname(to).empty?
+
+      epic_context_path(to) || File.join(epic_context_root, 'features', "#{to}.context.org")
+    end
+
+    # The epic in +project+ whose own wiki is +path+, or nil. Matching on the
+    # resolved path rather than on the `--to` spelling means a destination
+    # given as a path still refreshes that epic's snapshot, exactly as a
+    # destination given as its slug does.
+    def self.tracked_epic_for_context(store, project, path)
+      store.list_epics(project['id']).find { |e| epic_context_path(e['slug']) == path }
     end
 
     # ── next ───────────────────────────────────────────────────────────────
@@ -4359,6 +4432,7 @@ module Tyrion
         Epic wiki (features/<epic>.context.org, resolved in the MAIN checkout):
           tyrion epic-context show [--epic <slug>] [--story <slug>]   Print the wiki, or just this story's slice
           tyrion epic-context append [--story <slug>] [--tags a,b] "learning"   Record a tagged learning under * Learnings
+          tyrion epic-context promote "<heading>" --to <epic-slug|path.org>     Move a learning up a scope, with provenance
 
         Discovery (SDRD spike loop) — add --auto on any of the four to record origin=agent:
           tyrion mark "description" [--headline "…"] [--auto]
