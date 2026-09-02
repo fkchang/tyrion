@@ -1625,7 +1625,171 @@ module Tyrion
       results
     end
 
+    # ── Fleet liveness bulk reads ──────────────────────────────────────────
+    #
+    # The fleet board renders every lane in every project on one page. These
+    # five methods answer that page in five statements total, replacing the
+    # per-story fan-out a naive render would do. Each issues EXACTLY ONE SQL
+    # statement (asserted in spec/store_bulk_liveness_spec.rb by a spy counting
+    # calls on the db handle), and the three that take `story_ids` short-circuit
+    # an empty list before with_db is ever entered — an empty fleet must cost
+    # zero queries, not one that matches nothing.
+
+    # Every lane in the ledger: one row per in_progress story across ALL
+    # projects and epics, joined to its epic and project. `blocked` rows come
+    # back too because the attention pass needs them; they are the only other
+    # status returned. Column names are prefixed where stories/epics/projects
+    # collide (`story_id`, `epic_slug`, `project_slug`) so a caller never has to
+    # know which table a bare `slug` came from.
+    def in_progress_stories_across_projects
+      with_db do |db|
+        db.execute(<<~SQL)
+          SELECT s.id            AS story_id,
+                 s.slug          AS slug,
+                 s.title         AS title,
+                 s.sequence      AS sequence,
+                 s.status        AS status,
+                 s.claimed_by    AS claimed_by,
+                 s.claimed_at    AS claimed_at,
+                 s.started_at    AS started_at,
+                 s.updated_at    AS updated_at,
+                 s.last_note_at  AS last_note_at,
+                 s.blocked_on    AS blocked_on,
+                 s.blocked_on_discovery AS blocked_on_discovery,
+                 e.id            AS epic_id,
+                 e.slug          AS epic_slug,
+                 e.name          AS epic_name,
+                 p.id            AS project_id,
+                 p.slug          AS project_slug,
+                 p.name          AS project_name,
+                 p.primary_repo_identity AS primary_repo_identity
+          FROM stories s
+          JOIN epics e    ON e.id = s.epic_id
+          JOIN projects p ON p.id = e.project_id
+          WHERE s.status IN ('in_progress', 'blocked')
+          ORDER BY p.slug, e.slug, s.sequence
+        SQL
+      end
+    end
+
+    # story_id => newest note row (created_at, kind, body, metadata).
+    # ROW_NUMBER breaks ties on id so two notes written in the same microsecond
+    # still yield one deterministic winner rather than an arbitrary one.
+    def latest_note_per_story(story_ids)
+      ids, placeholders = story_id_in_clause(story_ids)
+      return {} unless ids
+
+      rows = with_db do |db|
+        db.execute(<<~SQL, ids)
+          SELECT story_id, created_at, kind, body, metadata
+          FROM (
+            SELECT story_id, created_at, kind, body, metadata,
+                   ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY created_at DESC, id DESC) AS rn
+            FROM story_notes
+            WHERE story_id IN (#{placeholders})
+          )
+          WHERE rn = 1
+        SQL
+      end
+      rows.to_h { |r| [r['story_id'], r] }
+    end
+
+    # story_id => {'gate' => newest gate note or nil, 'commit' => newest commit
+    # note or nil}. Both are returned as separate values because they answer
+    # different questions: the gate is a quality verdict, the commit is a
+    # liveness signal, and a lane can have one without the other.
+    def latest_gate_and_commit_per_story(story_ids)
+      ids, placeholders = story_id_in_clause(story_ids)
+      return {} unless ids
+
+      rows = with_db do |db|
+        db.execute(<<~SQL, ids)
+          SELECT story_id, kind, created_at, body, metadata
+          FROM (
+            SELECT story_id, kind, created_at, body, metadata,
+                   ROW_NUMBER() OVER (PARTITION BY story_id, kind ORDER BY created_at DESC, id DESC) AS rn
+            FROM story_notes
+            WHERE kind IN ('gate', 'commit') AND story_id IN (#{placeholders})
+          )
+          WHERE rn = 1
+        SQL
+      end
+      result = ids.to_h { |id| [id, { 'gate' => nil, 'commit' => nil }] }
+      rows.each { |r| result[r['story_id']][r['kind']] = r }
+      result
+    end
+
+    # story_id => {'newest_checked_at' =>, 'met' =>, 'total' =>}. A story with
+    # criteria but none checked reports a nil newest_checked_at with real
+    # counts; a story with no criteria at all is absent from the result.
+    def latest_criterion_check_per_story(story_ids)
+      ids, placeholders = story_id_in_clause(story_ids)
+      return {} unless ids
+
+      rows = with_db do |db|
+        db.execute(<<~SQL, ids)
+          SELECT story_id,
+                 MAX(checked_at) AS newest_checked_at,
+                 SUM(CASE WHEN status = 'met' THEN 1 ELSE 0 END) AS met,
+                 COUNT(*) AS total
+          FROM criteria
+          WHERE story_id IN (#{placeholders})
+          GROUP BY story_id
+        SQL
+      end
+      rows.to_h do |r|
+        [r['story_id'], { 'newest_checked_at' => r['newest_checked_at'], 'met' => r['met'].to_i, 'total' => r['total'].to_i }]
+      end
+    end
+
+    # project_id => {'activity_at' =>, 'done' =>, 'total' =>, ...}. `activity_at`
+    # is the newest of four real event times, so a Global View sorted by it puts
+    # the projects actually in motion on top instead of the ones whose row was
+    # last touched. Every figure is a correlated scalar subquery rather than a
+    # join: joining stories to criteria and discoveries would multiply rows and
+    # silently inflate `done`/`total`. The coalesce-to-'' dance is needed because
+    # SQLite's scalar max() returns NULL if ANY argument is NULL, and ISO8601
+    # timestamps sort correctly against '' as the low sentinel.
+    def project_activity
+      rows = with_db do |db|
+        db.execute(<<~SQL)
+          SELECT p.id         AS project_id,
+                 p.slug       AS project_slug,
+                 p.name       AS project_name,
+                 p.status     AS project_status,
+                 p.updated_at AS project_updated_at,
+                 NULLIF(MAX(
+                   COALESCE((SELECT MAX(s.updated_at)   FROM stories s JOIN epics e ON e.id = s.epic_id WHERE e.project_id = p.id), ''),
+                   COALESCE((SELECT MAX(s.last_note_at) FROM stories s JOIN epics e ON e.id = s.epic_id WHERE e.project_id = p.id), ''),
+                   COALESCE((SELECT MAX(c.checked_at)   FROM criteria c JOIN stories s ON s.id = c.story_id
+                                                        JOIN epics e ON e.id = s.epic_id WHERE e.project_id = p.id), ''),
+                   COALESCE((SELECT MAX(d.updated_at)   FROM discoveries d WHERE d.project_id = p.id), '')
+                 ), '') AS activity_at,
+                 (SELECT COUNT(*) FROM stories s JOIN epics e ON e.id = s.epic_id
+                   WHERE e.project_id = p.id AND s.status = 'done') AS done,
+                 (SELECT COUNT(*) FROM stories s JOIN epics e ON e.id = s.epic_id
+                   WHERE e.project_id = p.id) AS total
+          FROM projects p
+          ORDER BY p.slug
+        SQL
+      end
+      rows.to_h do |r|
+        [r['project_id'], r.merge('done' => r['done'].to_i, 'total' => r['total'].to_i)]
+      end
+    end
+
     private
+
+    # Dedup a story_ids argument and build its IN-clause placeholder string.
+    # Returns nil (not an empty pair) when there is nothing to query, which is
+    # what lets every bulk read short-circuit BEFORE with_db opens a connection:
+    # an empty fleet must cost zero queries, not one that matches nothing.
+    def story_id_in_clause(story_ids)
+      ids = Array(story_ids).compact.uniq
+      return nil if ids.empty?
+
+      [ids, ids.map { '?' }.join(',')]
+    end
 
     # Neutralize LIKE metacharacters so a term like "50%" or "foo_bar" matches
     # literally. Pairs with `ESCAPE '\'` in the query.
