@@ -1772,4 +1772,125 @@ RSpec.describe Tyrion::Store do
       expect(store.epic_wave_plan(graph)).to eq({})
     end
   end
+
+  # ── Epic event feed reads (fleet-visibility/epic-event-queries) ──────────
+  #
+  # Four epic-scoped, capped, newest-first reads Tyrion::Liveness.epic_events
+  # merges into the cockpit's Changes feed. Each keys on epic_id and covers
+  # every story in the epic regardless of status.
+  describe 'epic event feed reads' do
+    let(:project) { make_project }
+    let(:epic)    { make_epic(project_id: project['id']) }
+    let(:other_epic) { make_epic(project_id: project['id'], slug: 'epic-two') }
+
+    describe '#epic_notes_recent' do
+      it 'returns notes for every story in the epic regardless of status, newest first, with story_slug' do
+        done_story = make_story(epic_id: epic['id'], slug: 'done-story')
+        store.complete_story(done_story['id'], 'summary', force: true)
+        pending_story = make_story(epic_id: epic['id'], slug: 'pending-story')
+        store.add_note(pending_story['id'], 'progress', 'older note', metadata: nil)
+        store.add_note(pending_story['id'], 'progress', 'newer note', metadata: nil)
+
+        other_story = make_story(epic_id: other_epic['id'], slug: 'other-story')
+        store.add_note(other_story['id'], 'progress', 'wrong epic')
+
+        rows = store.epic_notes_recent(epic['id'], limit: 50)
+
+        bodies = rows.map { |r| r['body'] }
+        expect(bodies).to include('summary', 'older note', 'newer note')
+        expect(bodies).not_to include('wrong epic')
+        expect(rows.first['body']).to eq 'newer note'
+        expect(rows.find { |r| r['body'] == 'newer note' }['story_slug']).to eq 'pending-story'
+      end
+
+      it 'caps at the given limit' do
+        s = make_story(epic_id: epic['id'])
+        5.times { |i| store.add_note(s['id'], 'progress', "note #{i}") }
+        expect(store.epic_notes_recent(epic['id'], limit: 2).size).to eq 2
+      end
+
+      it 'returns every note with no cap when limit is -1 (SQLite\'s no-limit sentinel)' do
+        s = make_story(epic_id: epic['id'])
+        60.times { |i| store.add_note(s['id'], 'progress', "note #{i}") }
+        expect(store.epic_notes_recent(epic['id'], limit: -1).size).to eq 60
+      end
+    end
+
+    describe '#epic_criteria_checked_recent' do
+      it 'returns checked criteria with text and checked_at, newest first, excluding unchecked ones' do
+        s = make_story(epic_id: epic['id'])
+        store.add_criteria(s['id'], gwt_clauses)
+        criteria = store.criteria_for_story(s['id'])
+        store.check_criterion(s['id'], criteria[0]['position'], 'evidence 1')
+        store.check_criterion(s['id'], criteria[2]['position'], 'evidence 2')
+
+        rows = store.epic_criteria_checked_recent(epic['id'], limit: 50)
+
+        expect(rows.size).to eq 2
+        expect(rows.first['checked_at']).not_to be_nil
+        expect(rows.map { |r| r['text'] }).to include(criteria[0]['text'], criteria[2]['text'])
+        expect(rows.first['story_slug']).to eq s['slug']
+      end
+
+      it 'caps at the given limit, newest checked_at first' do
+        s = make_story(epic_id: epic['id'])
+        store.add_criteria(s['id'], gwt_clauses)
+        criteria = store.criteria_for_story(s['id'])
+        criteria.each { |c| store.check_criterion(s['id'], c['position'], 'ok') }
+
+        rows = store.epic_criteria_checked_recent(epic['id'], limit: 1)
+        expect(rows.size).to eq 1
+      end
+    end
+
+    describe '#epic_story_lifecycle' do
+      it 'returns started_at and completed_at for every story in the epic' do
+        started  = make_story(epic_id: epic['id'], slug: 'started')
+        store.start_story(started['id'], claimed_by: 'lane-1')
+        done = make_story(epic_id: epic['id'], slug: 'done')
+        store.complete_story(done['id'], 'summary', force: true)
+        pending = make_story(epic_id: epic['id'], slug: 'pending')
+
+        rows = store.epic_story_lifecycle(epic['id'])
+
+        expect(rows.map { |r| r['slug'] }).to contain_exactly('started', 'done', 'pending')
+        expect(rows.find { |r| r['slug'] == 'started' }['started_at']).not_to be_nil
+        expect(rows.find { |r| r['slug'] == 'done' }['completed_at']).not_to be_nil
+        expect(rows.find { |r| r['slug'] == 'pending' }['started_at']).to be_nil
+      end
+
+      it 'does not return stories from another epic' do
+        make_story(epic_id: other_epic['id'], slug: 'elsewhere')
+        rows = store.epic_story_lifecycle(epic['id'])
+        expect(rows.map { |r| r['slug'] }).not_to include('elsewhere')
+      end
+    end
+
+    describe '#epic_marks_recent' do
+      it 'returns discoveries whose source_story_id is a story in the epic, newest first' do
+        s = make_story(epic_id: epic['id'], slug: 'source-story')
+        older = store.create_discovery(project_id: project['id'], status: 'mark', source_story_id: s['id'], question: 'older mark')
+        store.send(:with_db) { |db| db.execute('UPDATE discoveries SET created_at = ? WHERE id = ?', ['2020-01-01T00:00:00Z', older['id']]) }
+        newer = store.create_discovery(project_id: project['id'], status: 'mark', source_story_id: s['id'], question: 'newer mark')
+
+        rows = store.epic_marks_recent(epic['id'], limit: 50)
+
+        expect(rows.map { |r| r['id'] }).to eq [newer['id'], older['id']]
+        expect(rows.first['story_slug']).to eq 'source-story'
+      end
+
+      it 'excludes marks sourced from a story outside the epic' do
+        other_story = make_story(epic_id: other_epic['id'], slug: 'other-story')
+        store.create_discovery(project_id: project['id'], status: 'mark', source_story_id: other_story['id'], question: 'elsewhere')
+
+        rows = store.epic_marks_recent(epic['id'], limit: 50)
+        expect(rows).to be_empty
+      end
+
+      it 'excludes discoveries with no source_story_id' do
+        store.create_discovery(project_id: project['id'], status: 'mark', question: 'no source')
+        expect(store.epic_marks_recent(epic['id'], limit: 50)).to be_empty
+      end
+    end
+  end
 end

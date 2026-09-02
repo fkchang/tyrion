@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'time'
+require 'json'
 require_relative 'liveness/worktree_resolver'
 require_relative 'liveness/snapshot'
 
@@ -50,6 +51,16 @@ module Tyrion
     }.freeze
 
     DISPATCH_PREFIX = 'dispatched:'
+
+    # Epic event feed (Changes tab, fleet-visibility/epic-event-queries).
+    EVENT_FEED_LIMIT = 50
+
+    # kind => the human-facing 'action' value the block/unblock/reopen
+    # commands stamp into metadata (commands.rb ~1524-1591). These are the
+    # ONLY note rows that ever carry metadata.action, and each maps to its
+    # own lifecycle event kind rather than the generic 'note' kind -- the
+    # double-emit trap epic_events exists to close.
+    LIFECYCLE_ACTION_KIND = { 'block' => 'blocked', 'unblock' => 'unblocked', 'reopen' => 'reopened' }.freeze
 
     module_function
 
@@ -261,6 +272,86 @@ module Tyrion
       else                Time.parse(value.to_s).to_i
       end
     rescue ArgumentError
+      nil
+    end
+
+    # ── Epic event feed (Changes tab, fleet-visibility/epic-event-queries) ──
+    #
+    # There is no event log; this derives one from Store's four epic-scoped
+    # bulk reads per the design's derivation table. Every event is a plain
+    # Hash with a symbol `:kind`, an integer `:at` (epoch, via `epoch` above),
+    # and `:story_slug`; kind-specific fields (`:text`, `:disc_id`, ...) ride
+    # alongside. Claim events are omitted entirely -- a claim only updates the
+    # story row and emits no note, so there is nothing to derive it from.
+    def epic_events(store, epic_id, limit: EVENT_FEED_LIMIT)
+      events = []
+      events.concat(note_events(store.epic_notes_recent(epic_id, limit: limit)))
+      events.concat(criterion_events(store.epic_criteria_checked_recent(epic_id, limit: limit)))
+      events.concat(lifecycle_events(store.epic_story_lifecycle(epic_id, limit: limit)))
+      events.concat(mark_events(store.epic_marks_recent(epic_id, limit: limit)))
+      events.sort_by { |e| -(e[:at] || 0) }.first(limit)
+    end
+
+    # One event per note row -- EXCEPT a block/unblock/reopen row, which
+    # already carries its own lifecycle kind via metadata.action and must not
+    # also surface as a generic 'note' (that's the double-emit this guards
+    # against), and a gate/commit row, which gets its own richer kind instead
+    # of the generic one.
+    def note_events(notes)
+      notes.filter_map do |n|
+        meta = parse_note_metadata(n['metadata'])
+        action = meta && meta['action']
+
+        if (kind = LIFECYCLE_ACTION_KIND[action])
+          { kind: kind, at: epoch(n['created_at']), story_slug: n['story_slug'], text: n['body'] }
+        elsif n['kind'] == 'gate'
+          gate_text = meta && "#{meta['gate']}: #{meta['result']}"
+          { kind: 'gate', at: epoch(n['created_at']), story_slug: n['story_slug'], text: gate_text || n['body'] }
+        elsif n['kind'] == 'commit'
+          shas = meta && meta['shas']
+          { kind: 'commit', at: epoch(n['created_at']), story_slug: n['story_slug'],
+            text: Array(shas).any? ? "commit #{Array(shas).join(', ')}" : n['body'] }
+        else
+          { kind: 'note', at: epoch(n['created_at']), story_slug: n['story_slug'], text: n['body'] }
+        end
+      end
+    end
+
+    def criterion_events(rows)
+      rows.map do |c|
+        { kind: 'criterion_checked', at: epoch(c['checked_at']), story_slug: c['story_slug'],
+          text: "checked: #{c['text']}" }
+      end
+    end
+
+    def lifecycle_events(rows)
+      rows.flat_map do |s|
+        events = []
+        events << { kind: 'started', at: epoch(s['started_at']), story_slug: s['slug'], text: 'started' } if s['started_at']
+        events << { kind: 'done', at: epoch(s['completed_at']), story_slug: s['slug'], text: 'done' } if s['completed_at']
+        events
+      end
+    end
+
+    # Output.discovery_glance_text is the single headline-or-question fallback
+    # rule CLI and web already share (CLAUDE.md's "Headline" section) --
+    # reused here rather than re-deriving a second, weaker version of it.
+    def mark_events(rows)
+      rows.map do |d|
+        { kind: 'mark', at: epoch(d['created_at']), story_slug: d['story_slug'], disc_id: d['id'],
+          text: "mark filed: #{Output.discovery_glance_text(d)}" }
+      end
+    end
+
+    # Every caller of Store#add_note pre-serializes its metadata with
+    # JSON.dump before passing it in, so every row here is either nil or a
+    # JSON string. An unparseable value collapses to nil rather than raising
+    # -- same conservative direction as `epoch` above.
+    def parse_note_metadata(raw)
+      return nil if raw.nil?
+
+      JSON.parse(raw)
+    rescue JSON::ParserError
       nil
     end
   end

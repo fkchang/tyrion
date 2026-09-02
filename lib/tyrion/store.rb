@@ -1778,6 +1778,91 @@ module Tyrion
       end
     end
 
+    # ── Epic event feed (Changes tab) ───────────────────────────────────────
+    #
+    # Four epic-scoped, capped, newest-first reads that Tyrion::Liveness.
+    # epic_events merges into one derived feed -- there is no event log, so
+    # this is Store's half of the derivation table in
+    # docs/superpowers/specs/2026-09-01-fleet-visibility-design.md. Every
+    # story in the epic is covered regardless of status: a done story's
+    # history still belongs on the feed, and claim events are not derivable
+    # (a claim only updates the story row and emits no note) so there is no
+    # fifth query for them.
+    #
+    # DEFAULT_EVENT_FEED_LIMIT mirrors Tyrion::Liveness::EVENT_FEED_LIMIT (50)
+    # -- kept as its own constant, not a direct reference, so this data-access
+    # layer doesn't have to load the derived-view layer above it just for a
+    # default value. Every real caller (Liveness.epic_events) passes `limit:`
+    # explicitly regardless, so this default only matters for a caller using
+    # one of these methods on its own.
+    DEFAULT_EVENT_FEED_LIMIT = 50
+
+    # Every note for every story in the epic, any kind, newest first, with
+    # the owning story's slug so the feed can attribute it without a second
+    # lookup. -1 is SQLite's own "no LIMIT" sentinel (a negative LIMIT means
+    # unlimited), not a magic number invented here -- it's how the cockpit's
+    # Trail tab gets the complete, uncapped timeline through this same query
+    # instead of a second, near-duplicate one.
+    def epic_notes_recent(epic_id, limit: DEFAULT_EVENT_FEED_LIMIT)
+      with_db do |db|
+        db.execute(<<~SQL, [epic_id, limit])
+          SELECT n.id, n.story_id, n.kind, n.body, n.metadata, n.created_at, s.slug AS story_slug
+          FROM story_notes n
+          JOIN stories s ON s.id = n.story_id
+          WHERE s.epic_id = ?
+          ORDER BY n.created_at DESC
+          LIMIT ?
+        SQL
+      end
+    end
+
+    # Checked criteria only (unchecked rows have no checked_at and are not
+    # events), with the criterion text and owning story slug.
+    def epic_criteria_checked_recent(epic_id, limit: DEFAULT_EVENT_FEED_LIMIT)
+      with_db do |db|
+        db.execute(<<~SQL, [epic_id, limit])
+          SELECT c.id, c.story_id, c.text, c.checked_at, s.slug AS story_slug
+          FROM criteria c
+          JOIN stories s ON s.id = c.story_id
+          WHERE s.epic_id = ? AND c.checked_at IS NOT NULL
+          ORDER BY c.checked_at DESC
+          LIMIT ?
+        SQL
+      end
+    end
+
+    # started/completed timestamps for every story in the epic -- the source
+    # for the "started" and "done" derived events. Ordered by whichever
+    # timestamp is most recent so the cap keeps the most recently touched
+    # stories rather than an arbitrary slice.
+    def epic_story_lifecycle(epic_id, limit: DEFAULT_EVENT_FEED_LIMIT)
+      with_db do |db|
+        db.execute(<<~SQL, [epic_id, limit])
+          SELECT id AS story_id, slug, started_at, completed_at
+          FROM stories
+          WHERE epic_id = ?
+          ORDER BY COALESCE(completed_at, started_at, updated_at) DESC
+          LIMIT ?
+        SQL
+      end
+    end
+
+    # Discoveries filed FROM a story in this epic (source_story_id), not
+    # discoveries merely filed under the epic -- the "mark filed" event is
+    # about where the noticing happened, matching the design's own wording.
+    def epic_marks_recent(epic_id, limit: DEFAULT_EVENT_FEED_LIMIT)
+      with_db do |db|
+        db.execute(<<~SQL, [epic_id, limit])
+          SELECT d.id, d.headline, d.question, d.created_at, s.slug AS story_slug
+          FROM discoveries d
+          JOIN stories s ON s.id = d.source_story_id
+          WHERE s.epic_id = ?
+          ORDER BY d.created_at DESC
+          LIMIT ?
+        SQL
+      end
+    end
+
     private
 
     # Dedup a story_ids argument and build its IN-clause placeholder string.
