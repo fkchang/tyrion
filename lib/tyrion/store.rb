@@ -211,6 +211,23 @@ module Tyrion
       end
     end
 
+    # Re-point an epic's DB snapshot at the wiki file after a write to it.
+    # The hash is computed HERE, from the same string that is stored, so
+    # context_md and context_source_hash can never describe different content
+    # — that pair is what the importer's idempotency check compares against,
+    # and a mismatch would make every subsequent import look like a change.
+    def refresh_epic_context(epic_id, content)
+      with_db do |db|
+        db.transaction(:immediate) do
+          db.execute(
+            'UPDATE epics SET context_md = ?, context_source_hash = ?, updated_at = ? WHERE id = ?',
+            [content, Digest::SHA256.hexdigest(content), now, epic_id]
+          )
+          db.get_first_row('SELECT * FROM epics WHERE id = ?', [epic_id])
+        end
+      end
+    end
+
     def find_epic(project_id, epic_slug)
       with_db { |db| db.get_first_row('SELECT * FROM epics WHERE project_id = ? AND slug = ?', [project_id, epic_slug]) }
     end

@@ -2505,10 +2505,19 @@ module Tyrion
     # builder usually runs from a git worktree that branches from origin/main
     # and does not contain the wiki at all.
 
-    EPIC_CONTEXT_USAGE = <<~USAGE.freeze
-      Usage: tyrion epic-context [show]
-        tyrion epic-context show [--epic <slug>] [--story <slug>]
-    USAGE
+    EPIC_CONTEXT_SHOW_USAGE =
+      'Usage: tyrion epic-context show [--epic <slug>] [--story <slug>]'
+    EPIC_CONTEXT_APPEND_USAGE =
+      'Usage: tyrion epic-context append [--epic <slug>] [--story <slug>] [--tags a,b] "learning"'
+
+    # Composed from the per-subcommand usages, never re-typed, so a flag added
+    # to one can't drift away from the group listing.
+    EPIC_CONTEXT_USAGE = [EPIC_CONTEXT_SHOW_USAGE, EPIC_CONTEXT_APPEND_USAGE].join("\n").freeze
+
+    # The headline every learning is captured under. orgkit creates it as a
+    # level-1 headline at the end of the file when it does not exist yet, so a
+    # wiki that predates the Learnings convention still accepts an append.
+    LEARNINGS_HEADING = 'Learnings'
 
     # Runs orgkit and returns its stdout, or dies. A missing binary and a
     # non-zero exit are the only two ways this shell-out fails, and both have
@@ -2531,7 +2540,8 @@ module Tyrion
 
     def self.cmd_epic_context(args, store)
       route_subcommand(args, 'epic-context', EPIC_CONTEXT_USAGE, {
-        'show' => -> { cmd_epic_context_show(args, store) }
+        'show'   => -> { cmd_epic_context_show(args, store) },
+        'append' => -> { cmd_epic_context_append(args, store) }
       })
     end
 
@@ -2568,7 +2578,7 @@ module Tyrion
     def self.cmd_epic_context_show(args, store)
       epic_slug  = extract_flag_value(args, '--epic')
       story_slug = extract_flag_value(args, '--story')
-      reject_unknown_flags!(args, EPIC_CONTEXT_USAGE)
+      reject_unknown_flags!(args, EPIC_CONTEXT_SHOW_USAGE)
 
       _epic, path = resolve_epic_context(store, epic_slug)
       puts path
@@ -2586,6 +2596,44 @@ module Tyrion
 
       puts orgkit!('sections', path, '--tag', org_tag_for(story_slug), '--include-untagged',
                    action: "sections #{path}")
+    end
+
+    # The ONLY write path into the epic wiki. Two things make it safe to run
+    # from anywhere: the file is resolved by absolute path in the main
+    # checkout (so a linked worktree appends to the one true copy rather than
+    # a doomed local one), and the DB snapshot is refreshed from disk ONLY
+    # after orgkit reports success — a failed capture leaves the ledger
+    # exactly as it was, so the DB can never become a competing copy of a
+    # write that did not happen.
+    def self.cmd_epic_context_append(args, store)
+      epic_slug  = extract_flag_value(args, '--epic')
+      story_slug = extract_flag_value(args, '--story')
+      extra_tags = extract_flag_value(args, '--tags')
+      reject_unknown_flags!(args, EPIC_CONTEXT_APPEND_USAGE)
+
+      text = args.join(' ')
+      die EPIC_CONTEXT_APPEND_USAGE if presence(text).nil?
+
+      epic, path = resolve_epic_context(store, epic_slug)
+      if File.extname(path) != '.org'
+        die "#{path} is markdown — orgkit writes only org. Convert it first: " \
+            "orgkit import #{path} #{path.sub(/\.md\z/, '.org')}"
+      end
+
+      # prime_story_for, never resolve_my_story: recording a learning must not
+      # claim, adopt or pin a story as a side effect. Another lane's story, or
+      # one pinned but not in_progress, resolves to nothing and the learning is
+      # simply filed with whatever tags were given.
+      story_slug ||= prime_story_for(store, epic, current_lane_token)&.dig('slug')
+      tags = [story_slug && org_tag_for(story_slug), presence(extra_tags)].compact.join(',')
+
+      argv  = ['capture', path, text, '--under', LEARNINGS_HEADING]
+      argv += ['--tags', tags] unless tags.empty?
+
+      out = orgkit!(*argv, action: "capture #{path}")
+      print out unless out.to_s.empty?
+      store.refresh_epic_context(epic['id'], File.read(path))
+      puts "Appended to #{path}#{tags.empty? ? '' : " (tags: #{tags})"}"
     end
 
     # ── next ───────────────────────────────────────────────────────────────
@@ -4310,6 +4358,7 @@ module Tyrion
 
         Epic wiki (features/<epic>.context.org, resolved in the MAIN checkout):
           tyrion epic-context show [--epic <slug>] [--story <slug>]   Print the wiki, or just this story's slice
+          tyrion epic-context append [--story <slug>] [--tags a,b] "learning"   Record a tagged learning under * Learnings
 
         Discovery (SDRD spike loop) — add --auto on any of the four to record origin=agent:
           tyrion mark "description" [--headline "…"] [--auto]
