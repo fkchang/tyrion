@@ -222,6 +222,75 @@ module TyrionWeb
       Digest::SHA256.hexdigest(fingerprint.to_s)[0, 16]
     end
 
+    # fleet-visibility/fleet-board: cross-project board, one row per
+    # in-progress story grouped by project. Reads Liveness::Snapshot.current
+    # exclusively -- no per-row queries, no git calls from this layer.
+    def self.load_fleet_view
+      snapshot  = Tyrion::Liveness::Snapshot.current(store)
+      activity  = snapshot['project_activity']
+      projects  = store.list_projects
+
+      # Rows, not the blocked stories the same snapshot also carries -- the
+      # fleet board's row unit is "one row per in-progress story" (blocked
+      # stories still surface via the attention band below, which the
+      # snapshot already derives from the same underlying rows).
+      in_progress_rows = snapshot['rows'].select { |r| r['status'] == 'in_progress' }
+      by_project = in_progress_rows.group_by { |r| r['project_id'] }
+
+      grouped = projects.filter_map do |proj|
+        prows = by_project[proj['id']]
+        next nil if prows.nil? || prows.empty?
+
+        # Attention weight then newest_at descending, per the design's own
+        # words -- attention weight IS Tyrion::Liveness::SEVERITY, the same
+        # table attention_items sorts by, not a second ranking table.
+        sorted = prows.sort_by { |r| [TyrionWeb::Presenter.attention_weight(r['state']), -(r['newest_at'] || 0)] }
+        { project: proj, rows: sorted }
+      end
+      # Groups themselves sort worst-first too ("everything waiting on me on
+      # one screen, worst first") -- a project holding a dead lane must not
+      # render below three quiet ones just because store.list_projects said so.
+      grouped.sort_by! { |g| g[:rows].map { |r| TyrionWeb::Presenter.attention_weight(r['state']) }.min }
+
+      idle_projects = projects.reject { |proj| by_project.key?(proj['id']) }.map do |proj|
+        act = activity[proj['id']] || {}
+        { project: proj, last_activity_at: Tyrion::Liveness.epoch(act['activity_at'] || proj['updated_at']) }
+      end
+
+      {
+        projects: grouped,
+        idle_projects: idle_projects,
+        attention: snapshot['attention'],
+        live_count: in_progress_rows.count { |r| r['state'] == 'live' },
+        generation: snapshot['generation'],
+        built_at: snapshot['built_at'],
+        stale: snapshot['stale'],
+        partial: snapshot['partial']
+      }
+    end
+
+    # Fingerprint for GET /api/fleet_poll: per-story identity/status/liveness/
+    # resolution plus every newest-per-source event timestamp the row
+    # displays, the newest commit sha, dirty count and newest dirty-file
+    # mtime (an epoch integer -- a file timestamp, not a rendered age), and
+    # each attention item's story_id + kind. No rendered age anywhere in it;
+    # ages tick client-side from data-at between reloads.
+    def self.fleet_poll_token(fleet_view)
+      row_fp = fleet_view[:projects].flat_map { |g| g[:rows] }.map do |r|
+        [
+          r['story_id'], r['status'], r['claimed_by'], r['met'], r['total'],
+          r['display_state'], r['resolution_state'],
+          r['signals']['note'], r['signals']['criterion'], r['signals']['gate'], r['signals']['commit'],
+          r['signals']['edit'], r['signals']['process'],
+          r['commit_sha'], r['dirty_count'], r['newest_dirty_mtime']
+        ]
+      end
+      attention_fp = fleet_view[:attention].map { |a| [a['story_id'], a['kind']] }
+      idle_fp = fleet_view[:idle_projects].map { |ip| [ip[:project]['slug'], ip[:last_activity_at]] }
+
+      Digest::SHA256.hexdigest([row_fp, attention_fp, idle_fp].to_s)[0, 16]
+    end
+
     def self.load_discoveries_view(project_slug: nil)
       project = project_slug ? store.find_project_by_slug(project_slug) : resolve_active_project
       return { project: nil, spike: nil, findings_ready: [], marks: [] } unless project

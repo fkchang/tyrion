@@ -1256,6 +1256,7 @@
   .lane-progress { color: var(--ink-faint); }
   .lane-signals { display: flex; gap: 10px; color: var(--ink-faint); font-size: 12px; }
   .lane-process { color: var(--ink-faint); font-size: 12px; }
+  .lane-resolution { color: #b91c1c; font-size: 11px; font-style: italic; }
   .lane-evidence { color: var(--amber-dim); font-size: 11px; font-style: italic; }
 
   /* ─── DISCOVERIES (dv-*) ────────────────────────────────────── */

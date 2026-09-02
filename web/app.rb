@@ -155,6 +155,33 @@ get "/api/global_poll" do
   { token: TyrionWeb::Data.global_poll_token(d[:project_cards]) }.to_json
 end
 
+# ── Fleet board ────────────────────────────────────────────────────────────────
+#
+# Cross-project board, one row per in-progress story across every project --
+# not scoped by ?project=/?epic= the way most other routes are (Global View's
+# sibling: an all-projects surface, sidebar context comes from whatever the
+# CLI's active project/epic happen to be, same pattern as /global).
+
+get "/fleet" do
+  d    = TyrionWeb::Data.load_fleet_view
+  proj = TyrionWeb::Data.resolve_active_project
+  epic = proj ? TyrionWeb::Data.resolve_active_epic(proj) : nil
+  base = TyrionWeb::Data.load_sidebar_data(proj, epic)
+  phlex Views::Fleet.new(
+    fleet: d,
+    project: proj, epic: epic, stories: base[:stories], disc_summary: base[:disc_summary],
+    epic_switcher: base[:epic_switcher],
+    token: TyrionWeb::Data.fleet_poll_token(d),
+    **base_git
+  )
+end
+
+get "/api/fleet_poll" do
+  content_type :json
+  d = TyrionWeb::Data.load_fleet_view
+  { token: TyrionWeb::Data.fleet_poll_token(d) }.to_json
+end
+
 # ── Discoveries ────────────────────────────────────────────────────────────────
 
 get "/discoveries" do

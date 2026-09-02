@@ -185,6 +185,18 @@ module TyrionWeb
       RESOLUTION_LABEL[state.to_s]
     end
 
+    # Fleet board's within-project row sort ("attention weight then newest_at
+    # descending") is literally Tyrion::Liveness::SEVERITY -- the same table
+    # attention_items itself sorts by -- not a second ranking table. A state
+    # that never qualifies as an attention item (live/working/quiet) sorts
+    # after every real attention state, ranked among themselves by recency
+    # via the newest_at tiebreaker the caller adds.
+    NON_ATTENTION_WEIGHT = Tyrion::Liveness::SEVERITY.values.max + 1
+
+    def self.attention_weight(state)
+      Tyrion::Liveness::SEVERITY[state.to_s] || NON_ATTENTION_WEIGHT
+    end
+
     def self.note_kind_css(kind)
       "as-note-entry #{kind}"
     end
