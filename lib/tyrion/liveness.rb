@@ -2,6 +2,7 @@
 
 require 'time'
 require_relative 'liveness/worktree_resolver'
+require_relative 'liveness/snapshot'
 
 module Tyrion
   # Liveness — derives "what is this lane doing, and how do I know?" from an

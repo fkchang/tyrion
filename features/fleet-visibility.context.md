@@ -286,7 +286,7 @@ in the builder.
 
 | Lane | Builder tier | Wall-clock | Rediscoveries | Notes |
 |---|---|---|---|---|
-| A |  |  |  |  |
+| A | Opus 5 (1M) | ~3h20m (17:05-20:25, 2026-09-01) | 3 | 4 strict stories, one warm session, no per-story subagent. Every story TDD-red-first; three mutation checks (rename guard, single-flight mutex, stderr deadlock) confirmed the guards were load-bearing. DHH review found 3 real defects in story 2 and 3 in story 3, all fixed with specs before close. Suite 1346 -> 1424 examples. |
 | B |  |  |  |  |
 | C |  |  |  |  |
 | D |  |  |  |  |
@@ -295,3 +295,28 @@ in the builder.
 corrects any drifted file:line above in the same commit as the story that found it.
 
 ## Learnings
+
+### From lane A (phase 1 liveness layer, 2026-09-01)
+
+**The public API lane B consumes.** All of it is loaded by `require 'tyrion'`.
+
+- `Store#in_progress_stories_across_projects` returns an array of rows, one per `in_progress` **and** `blocked` story, with `story_id`, `slug`, `title`, `sequence`, `status`, `claimed_by`, `claimed_at`, `started_at`, `updated_at`, `last_note_at`, `blocked_on`, `blocked_on_discovery`, `epic_id`, `epic_slug`, `epic_name`, `project_id`, `project_slug`, `project_name`, `primary_repo_identity`.
+- `Store#latest_note_per_story(ids)`, `#latest_gate_and_commit_per_story(ids)` (values are `{'gate' => row_or_nil, 'commit' => row_or_nil}`), `#latest_criterion_check_per_story(ids)` (values are `{'newest_checked_at', 'met', 'total'}`) — all keyed by story id, all return `{}` on an empty id list without issuing SQL.
+- `Store#project_activity` is keyed by project id; values carry `project_slug`, `project_name`, `project_status`, `project_updated_at`, `activity_at` (nullable), `done`, `total`. **This is the sort key for `global-view-activity-sort`**, with `project_updated_at` as the documented fallback when `activity_at` is nil.
+- `Liveness::Snapshot.current(store)` is the one hash to render from. Keys: `generation`, `built_at` (epoch integer), `stale`, `partial`, `error`, `rows`, `attention`, `lanes_by_story`, `worktree`, `resolution`, `project_activity`, `ledger`.
+- Each row in `rows`: `story_id`, `slug`, `project_id`, `project_slug`, `epic_slug`, `status`, `claimed_by`, `lane`, `state`, `display_state`, `newest_at`, `age_seconds`, `signals`, `evidence`, `resolution_state`, `resolution_paths`, `worktree_path`, `dirty_count`, `newest_dirty_mtime`, `commit_sha`, `commit_subject`, `partial`, `blocked_on`, `met`, `total`, `attention_at`, `attention_age_seconds`.
+- Each item in `attention`: `story_id`, `slug`, `lane`, `project_slug`, `epic_slug`, `kind`, `severity`, `reason`, `at`, `age_seconds`.
+- `Liveness::Snapshot::POLL_INTERVAL_SECONDS` is 15 — use it for the fleet poller rather than hardcoding. The Global View poller is specified at 60s, a different number on purpose.
+
+**Things that will bite lane B if it does not know them.**
+
+1. `Store#add_note` binds `metadata` **raw**, so every caller passes `JSON.dump(...)`, never a Hash. A Hash raises `no such bind parameter`, which reads like a SQL bug and is not one.
+2. `idx_one_unclaimed_in_progress_story_per_epic` forbids two *unclaimed* `in_progress` stories in one epic. Any fixture with several live lanes in one epic must give each a distinct `claimed_by`, or the insert fails with a UNIQUE constraint on `stories.epic_id`.
+3. **A row's `commit_sha`, `commit_subject` and `dirty_count` can be carried-forward values from a build that never reached the worktree.** Check `partial` / `evidence` before rendering them as current fact. The snapshot refuses to carry them across a worktree-path change, so they are never from the wrong repo, but they can be stale.
+4. `git status --porcelain -z` emits a rename's **destination first** and the original as a following NUL field — the opposite of the non-`-z` `old -> new` rendering. Already handled in the resolver; recorded because it is easy to get backwards.
+5. `Repo.git_capture` **raises `ArgumentError` on a nil or empty root**, deliberately (the web process's cwd is `web/`). Never hand it `Data.repo_root`.
+6. `Repo::GitTimeout` is distinct from a nil return on purpose: nil means git answered and the answer was no; the exception means we never found out, and only that may render as `partial`.
+
+**Correction to section 2.** `Store#dispatch_story` writes `claimed_by = "dispatched:#{label}"` at `store.rb:725` as recorded, but `Store#assign_story` (`store.rb:701-713`) writes `"assigned:#{label}"` — a second pre-claim prefix the spec's lane taxonomy does not mention. The ladder treats `assigned:` as an ordinary explicit label, which is harmless (it reads as a lane whose age decides its state), but lane C should revisit it if the cockpit surfaces pre-claims.
+
+**Measurement note.** The three rediscoveries were all blind spots in section 2 rather than drifted line numbers: the `add_note` metadata contract, the unclaimed-in-progress unique index, and the real field order of `git status -z` rename records. All three are now recorded here and in CLAUDE.md.
