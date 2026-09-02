@@ -4445,6 +4445,25 @@ module Tyrion
       [project, epic]
     end
 
+    # The ONE checkout every epic-context read and write resolves against: the
+    # main root when git can name it, else this worktree. Repo.main_root
+    # already returns nil rather than raising on a non-git dir or a git
+    # timeout, so this is the single place that fallback is expressed.
+    def self.epic_context_root
+      Repo.main_root || Repo.worktree_root
+    end
+
+    # Absolute path of +epic_slug+'s context file under +root+, or nil when the
+    # epic has no wiki. `.org` wins whenever both extensions are present — the
+    # precedence itself lives in Importer.context_sidecar_path, the same lookup
+    # the importer uses to fill epics.context_md, so the file the CLI reads and
+    # the file the ledger snapshots are the same file by construction.
+    def self.epic_context_path(epic_slug, root: epic_context_root)
+      return nil if root.nil? || epic_slug.nil?
+
+      Importer.context_sidecar_path(File.join(root, 'features'), epic_slug)
+    end
+
     # Six-rung story resolver for the current lane. Returns a story hash or nil.
     # Rung 1: explicit_slug given → always wins (dies if not found).
     # Rung 2: in_progress story whose claimed_by == current lane token (PRIMARY; survives /clear).

@@ -44,6 +44,30 @@ module Tyrion
       tyrion_root(path) || path
     end
 
+    # The MAIN checkout's absolute path, even when called from a linked
+    # worktree. `git rev-parse --git-common-dir` names the shared .git
+    # directory — the linked worktree's own .git file points at the main
+    # checkout's, so its dirname is the main checkout in both cases (and in
+    # the main checkout it is simply `<root>/.git`).
+    #
+    # This exists because agent worktrees branch from origin/main and usually
+    # do NOT contain features/<epic>.context.{org,md}: resolving the epic wiki
+    # relative to the worktree would read a missing file and write a copy that
+    # dies at merge. Every epic-context read and write goes through here.
+    #
+    # Returns nil — never raises — when git cannot answer (non-git directory,
+    # empty root, or a GitTimeout from the bounded seam), so callers fall back
+    # to worktree_root.
+    def self.main_root(path = nil)
+      path ||= worktree_root
+      common = git_capture(path, 'rev-parse', '--path-format=absolute', '--git-common-dir').to_s.strip
+      return nil if common.empty?
+
+      File.dirname(common)
+    rescue ArgumentError, GitTimeout
+      nil
+    end
+
     def self.active_project(root = nil)
       root ||= worktree_root
       f = "#{root}/.tyrion/active-project"

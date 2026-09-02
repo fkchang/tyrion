@@ -551,5 +551,56 @@ RSpec.describe Tyrion::Importer do
         expect(output).to match(/already up to date/)
       end
     end
+
+    # ── .context.org sibling import ─────────────────────────────────────────
+    # New epics get a real org wiki from shape time onward; existing .context.md
+    # files keep working. .org wins whenever both are present.
+
+    context '.context.org sibling file' do
+      let(:org_content) { "#+TITLE: My Context\n\n* Learnings\n" }
+      let(:md_content)  { "# My Context\n\nThe legacy markdown copy.\n" }
+      let(:org_path)    { File.join(ctx.tmpdir, 'sample-epic.context.org') }
+      let(:md_path)     { File.join(ctx.tmpdir, 'sample-epic.context.md') }
+
+      def epic
+        store.find_epic(ctx.project['id'], 'sample-epic')
+      end
+
+      it 'loads context_md from a sibling .context.org file' do
+        File.write(org_path, org_content)
+        run_import
+        expect(epic['context_md']).to eq org_content
+      end
+
+      it 'stores the .org file hash in context_source_hash' do
+        File.write(org_path, org_content)
+        run_import
+        expect(epic['context_source_hash']).to eq Digest::SHA256.hexdigest(org_content)
+      end
+
+      it 'prefers the .org file over a .md sibling when both exist' do
+        File.write(org_path, org_content)
+        File.write(md_path, md_content)
+        run_import
+        expect(epic['context_md']).to eq org_content
+        expect(epic['context_source_hash']).to eq Digest::SHA256.hexdigest(org_content)
+      end
+
+      it 'is idempotent when the .org file is unchanged' do
+        File.write(org_path, org_content)
+        run_import
+        output = run_import
+        expect(output).to match(/already up to date/)
+      end
+
+      it 're-imports when the .org file changes even if the feature hash is unchanged' do
+        File.write(org_path, org_content)
+        run_import
+        File.write(org_path, "#{org_content}** a new learning\n")
+        output = run_import
+        expect(output).to match(/Import complete/)
+        expect(epic['context_md']).to include('a new learning')
+      end
+    end
   end
 end

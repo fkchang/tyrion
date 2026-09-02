@@ -17,6 +17,23 @@ module Tyrion
       'good', 'better', 'best', 'as expected', 'makes sense'
     ].freeze
 
+    # Extensions an epic wiki can be written in, in precedence order. `.org` is
+    # the format new epics get from shape time onward (it is the one orgkit can
+    # slice, tag and refile); `.md` stays readable so existing wikis keep
+    # working untouched.
+    CONTEXT_EXTENSIONS = %w[org md].freeze
+
+    # The epic wiki sitting beside the .feature file, `.org` before `.md`, or
+    # nil when the epic has no sidecar at all (context_md/context_source_hash
+    # then stay nil). Commands.epic_context_path resolves through this same
+    # method, so the DB snapshot and the CLI cannot disagree about which file
+    # is the wiki.
+    def self.context_sidecar_path(dir, epic_slug)
+      CONTEXT_EXTENSIONS
+        .map { |ext| File.join(dir, "#{epic_slug}.context.#{ext}") }
+        .find { |candidate| File.exist?(candidate) }
+    end
+
     def self.run(args, store)
       confirm_abandon = args.delete('--confirm-abandon')
       force           = args.delete('--force')
@@ -36,8 +53,8 @@ module Tyrion
 
       epic_slug    = File.basename(path, '.feature')
       file_hash    = Digest::SHA256.file(path).hexdigest
-      context_path = File.join(File.dirname(path), "#{epic_slug}.context.md")
-      context_md, context_hash = if File.exist?(context_path)
+      context_path = context_sidecar_path(File.dirname(path), epic_slug)
+      context_md, context_hash = if context_path
         content = File.read(context_path)
         [content, Digest::SHA256.hexdigest(content)]
       else
