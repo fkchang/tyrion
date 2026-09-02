@@ -1,0 +1,42 @@
+#+TITLE: epic-context: epic wiki (read FIRST via `tyrion epic-context show --story <slug>`, append via `tyrion epic-context append`)
+#+DATE: 2026-09-02
+
+* Where the knowledge already is
+- Design + rulings: /Users/fkchang/work/cultiv-ai/wiki/research/org-mode-knowledge-management-for-ukf-2026-09-01.md sections F (rulings), J (roadmap, ruling 10 = this epic), K (Q1 RULED: --story is a consumer-side tag alias; slugs map s1-2 -> s1_2; orgkit gains --include-untagged; learnings are tagged headlines under * Learnings via orgkit capture).
+- Protocol: /Users/fkchang/cultiv-os/cabinet/secretaries/cultiv_dev/research/messages-inspiration/zulip/13-conduct-protocol-grouping-and-epic-wiki.md section 5 (scope rule, tag convention, promotion ops = capture/refile/archive) and section 4 (what Tyrion absorbs).
+- orgkit: /Users/fkchang/work/orgkit/docs/for_llms.md (CLI contract, mutation safety, exit codes 0/1/2/3) and docs/spike-2026-09.md (amendments A1-A7). `orgkit help <cmd>` is the authoritative reference.
+- Survey of tyrion's context plumbing with file:line (Sonnet, 2026-09-02): /private/tmp/claude-504/-Users-fkchang-work-tyrion/0b67a03d-6f29-4d1d-b455-a3a229c2b2f8/scratchpad/tyrion-context-survey.md (scratchpad; facts copied below).
+- Reference shape of a live markdown epic wiki (read-only, owned by another session): /Users/fkchang/work/cultiv-ai/features/messages-reading-layer.context.md
+
+* Verified facts
+- Importer sidecar lookup is a literal join: lib/tyrion/importer.rb:37-45 `File.join(File.dirname(path), "#{epic_slug}.context.md")`. No glob; a `.context.org` sibling is NOT picked up today. Stored in epics.context_md / epics.context_source_hash (store.rb:47,52); idempotency at importer.rb:47-52 checks feature hash AND context hash.
+- `tyrion context <story> "text"` = cmd_context (commands.rb:2482-2493) updates a STORY's current_context; dispatched at commands.rb:121 inside the top-level `case` (commands.rb:82-141). Hyphenated command names (`claim-next`, `setup-codex`) are plain string keys, so `epic-context` cannot collide. `epic` subcommands go through route_subcommand (commands.rb:212-223) from cmd_epic (commands.rb:430-444).
+- Active epic resolution: resolve_project_epic (commands.rb:4433-4446) -> Repo.active_epic(token:) (repo.rb:79-82) -> read_state (repo.rb:192-200, per-lane file then shared fallback). `--epic <slug>` exists ONLY on cmd_audit (commands.rb:2968); copy that flag-parsing shape.
+- Repo.worktree_root (repo.rb:43-45) walks up from cwd for .tyrion/marker, else Dir.pwd. There is NO Repo.root / Repo.main_root anywhere: nothing derives the main checkout from inside a worktree. Repo.worktrees (repo.rb:256-275) lists all worktrees, first entry is git's main but untagged. projects.primary_repo_identity is a repo-identity string (realpath of the shared .git dir), not a checkout path.
+- Bounded git seam: Repo.git_capture(root, *args) (repo.rb:337) raises ArgumentError on nil/empty root, times out at Repo::GIT_TIMEOUT_SECONDS raising Repo::GitTimeout. Use it for `git rev-parse --path-format=absolute --git-common-dir` (dirname = main checkout; in the main checkout it is `<root>/.git` itself).
+- cmd_epic_show prints context_md truncated to 800 chars (commands.rb:556-559). skills/tyrion-implement/SKILL.md:75,83-99 reads context_md for `PROTOTYPE:` and `Plan file:` lines as literal text with no root resolution (the worktree-absence friction). skills/tyrion-orchestrate/SKILL.md:116,122,140-141 has the agent hand-track `<main-checkout>` and cd-prefix commands.
+- tyrion-shape Step 4 writes .tyrion/projects/<slug>/ABOUT.md, features/<slug>.feature, features/<slug>.context.md.
+- Specs: tyrion_worktree / stub_repo helpers at spec/support/tyrion_test_helpers.rb:18-48 (rspec-mocks on Tyrion::Repo module methods). Real-subprocess pattern: spec/repo_commits_since_spec.rb:11-13 (local system('git',...) helper, real repo in tmpdir). Degrade-path pattern: spec/liveness/worktree_resolver_spec.rb:225,272,281,291 (`allow(Tyrion::Repo).to receive(:git_capture).and_raise(Tyrion::Repo::GitTimeout)`). Stub at the seam, not at Open3/Kernel.
+- Help is one hand-maintained heredoc in `def self.usage` (commands.rb:4144+), dispatched at commands.rb:141.
+- orgkit CLI today (installed 2026-09-01, `which orgkit` = rvm ruby-3.3.5 bin): describe, sections, ast, import, set-prop, refile, archive. `refile FILE TARGET DEST` already has `--materialize-inherited-tags` and `--stamp KEY=VALUE` (repeatable), and DEST accepts `OTHERFILE::target` to move across files. `sections` already has `--include-untagged-top-level` (whole level-1 subtree); Lane A is adding `capture` and `--include-untagged` (own-body semantics: an untagged headline prints its headline+body only, children evaluated individually) and reinstalling. Until Lane A lands, stub the seam in specs and gate the integration spec on `orgkit help capture` succeeding.
+
+* Gotchas already paid for
+- Org tags cannot contain hyphens (Emacs 29.4 tag class: alnum, `_`, `@`, `#`, `%`); `:s1-2:` parses as title text with no tags. Map story slugs with `slug.tr('-', '_')` before passing --tag/--tags. orgkit does not translate.
+- Agent worktrees branch from origin/main, so the wiki is usually absent in the worktree; one messages-reading-layer builder wrote Learnings to its worktree copy and they were lost at merge. Every read/write in this epic goes through the main-checkout absolute path.
+- orgkit exit 3 = mutation refused (stale sha, ambiguous target, lock held) and leaves every byte unchanged; exit 2 = usage. Surface orgkit's stderr verbatim; do not paraphrase it.
+- Store#add_note metadata: is bound RAW: pass JSON.dump(...), never a Hash.
+- Do not confuse epics.context_md (the DB SNAPSHOT of the file, refreshed after every write) with the file. The file is the source of truth; the DB copy exists so drift/epic show/prime work without touching disk.
+- The web UI (web/) is not in scope; nothing there needs to change for this epic.
+
+* Lanes
+| Lane | Stories | Builder | Why one lane |
+|---|---|---|---|
+| A (orgkit, ~/work/orgkit) | capture, sections --include-untagged, rake install | Opus | Emacs-oracle goldens + mutation contract share one warm session |
+| B (tyrion, this repo) | main-root-and-context-path, epic-context-show, epic-context-append, epic-context-promote, shape-seeds-org-context | Opus, sequential in the main checkout | all five touch commands.rb + the same seam; show/append/promote share the resolver from story 1 |
+
+* Instrument
+| Story | Builder | Start | End | Wall-clock | Gate attempts | Rediscoveries |
+|---|---|---|---|---|---|---|
+
+* Learnings
+# Append only via: tyrion epic-context append --story <slug> "<what you learned> (file:line)"
