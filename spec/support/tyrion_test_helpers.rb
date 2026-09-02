@@ -47,6 +47,20 @@ module TyrionTestHelpers
     overrides.each { |m, v| allow(Tyrion::Repo).to receive(m).and_return(v) }
   end
 
+  # True when the real orgkit binary is on PATH AND its `help <subcommand>`
+  # output satisfies +expect+ (a Regexp, or nil to only require exit 0). Every
+  # real-binary integration spec gates on this: orgkit is a separate gem in a
+  # separate repo, so a spec that goes red because it is not installed (or is
+  # an older build) is reporting on the wrong project.
+  def orgkit_supports?(subcommand, expect = nil)
+    out, _err, status = Tyrion::Orgkit.run('help', subcommand)
+    return false unless status.success?
+
+    expect.nil? || out.match?(expect)
+  rescue Errno::ENOENT
+    false
+  end
+
   # Capture stdout + stderr from a block. Saves current $stdout/$stderr (not constants)
   # so it composes with nested capture_io calls. Returns [stdout_str, stderr_str].
   def capture_io

@@ -7,6 +7,7 @@ require 'time'
 require 'timeout'
 require_relative 'importer'
 require_relative 'lesson_miner'
+require_relative 'orgkit'
 
 module Tyrion
   module Commands
@@ -119,6 +120,7 @@ module Tyrion
       when 'gate'         then cmd_gate(args, store)
       when 'commits'      then cmd_commits(args, store)
       when 'context'      then cmd_context(args, store)
+      when 'epic-context' then cmd_epic_context(args, store)
       when 'next'         then cmd_next(args, store)
       when 'reconcile'    then cmd_reconcile(args, store)
       when 'criteria'     then cmd_criteria(args, store)
@@ -2492,6 +2494,100 @@ module Tyrion
       puts "Context updated for #{slug}"
     end
 
+    # ── epic-context ───────────────────────────────────────────────────────
+    #
+    # `tyrion epic-context` is the EPIC's wiki (features/<epic>.context.org),
+    # a different object from `tyrion context <story> "text"` above, which
+    # updates one STORY's current_context. They share no code and no state.
+    #
+    # Every subcommand resolves its file by ABSOLUTE path under the main
+    # checkout (Commands.epic_context_path → Repo.main_root), because a
+    # builder usually runs from a git worktree that branches from origin/main
+    # and does not contain the wiki at all.
+
+    EPIC_CONTEXT_USAGE = <<~USAGE.freeze
+      Usage: tyrion epic-context [show]
+        tyrion epic-context show [--epic <slug>] [--story <slug>]
+    USAGE
+
+    # Runs orgkit and returns its stdout, or dies. A missing binary and a
+    # non-zero exit are the only two ways this shell-out fails, and both have
+    # to read as a CLI error: without the ENOENT rescue an uninstalled orgkit
+    # surfaces as a raw Errno backtrace. orgkit's stderr is printed VERBATIM —
+    # it already names the file, the target and the refusal reason far better
+    # than a paraphrase would.
+    def self.orgkit!(*argv, action:)
+      out, err, status = Orgkit.run(*argv)
+      unless status.success?
+        $stderr.puts err unless err.to_s.empty?
+        die "orgkit #{action} failed"
+      end
+
+      out
+    rescue Errno::ENOENT
+      die "orgkit is not installed or not on PATH. tyrion epic-context needs it — " \
+          'install it with `rake install` from an orgkit checkout, then re-run.'
+    end
+
+    def self.cmd_epic_context(args, store)
+      route_subcommand(args, 'epic-context', EPIC_CONTEXT_USAGE, {
+        'show' => -> { cmd_epic_context_show(args, store) }
+      })
+    end
+
+    # Story slugs are hyphenated; org tags are not — Emacs's tag class is
+    # alnum plus `_ @ # %`, so `:s1-2:` is not a tag at all, it parses as
+    # title text. orgkit does not translate this, so we do, at the one place
+    # a slug becomes a tag.
+    def self.org_tag_for(slug)
+      slug.tr('-', '_')
+    end
+
+    # [epic, absolute context path] for `--epic <slug>` or the active epic.
+    # Dies rather than returning nil for either half: a missing epic and a
+    # missing wiki are both dead ends for every epic-context subcommand, and
+    # each deserves its own message.
+    def self.resolve_epic_context(store, epic_slug)
+      if epic_slug
+        project = resolve_project(store)
+        epic    = store.find_epic(project['id'], epic_slug)
+        die "Epic not found: #{epic_slug}" unless epic
+      else
+        _project, epic = resolve_project_epic(store)
+      end
+
+      path = epic_context_path(epic['slug'])
+      unless path
+        die "No context file for epic '#{epic['slug']}'. Expected " \
+            "features/#{epic['slug']}.context.org (or .md) under #{epic_context_root}"
+      end
+
+      [epic, path]
+    end
+
+    def self.cmd_epic_context_show(args, store)
+      epic_slug  = extract_flag_value(args, '--epic')
+      story_slug = extract_flag_value(args, '--story')
+      reject_unknown_flags!(args, EPIC_CONTEXT_USAGE)
+
+      _epic, path = resolve_epic_context(store, epic_slug)
+      puts path
+
+      # A markdown wiki has no tags to slice on. Print the whole thing and say
+      # why the slice did not happen — refusing outright would make --story
+      # unusable on every pre-org epic for no gain.
+      if File.extname(path) != '.org'
+        puts "(story slicing needs an .org context file — convert with: orgkit import #{path} #{path.sub(/\.md\z/, '.org')})" if story_slug
+        puts File.read(path)
+        return
+      end
+
+      return puts File.read(path) unless story_slug
+
+      puts orgkit!('sections', path, '--tag', org_tag_for(story_slug), '--include-untagged',
+                   action: "sections #{path}")
+    end
+
     # ── next ───────────────────────────────────────────────────────────────
 
     def self.cmd_next(args, store)
@@ -4211,6 +4307,9 @@ module Tyrion
           tyrion audit [--epic <slug>]             Flag done stories in dark_factory epics missing pre-push/uat gate coverage
           tyrion followup list <slug>              List followup notes (open + resolved)
           tyrion followup resolve <slug> <n>       Mark followup #n as resolved
+
+        Epic wiki (features/<epic>.context.org, resolved in the MAIN checkout):
+          tyrion epic-context show [--epic <slug>] [--story <slug>]   Print the wiki, or just this story's slice
 
         Discovery (SDRD spike loop) — add --auto on any of the four to record origin=agent:
           tyrion mark "description" [--headline "…"] [--auto]

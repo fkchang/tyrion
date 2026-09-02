@@ -40,3 +40,4 @@
 
 * Learnings
 # Append only via: tyrion epic-context append --story <slug> "<what you learned> (file:line)"
+** 2026-09-01 orgkit is NOT in tyrion's Gemfile, so under bundler (bundle exec rspec, tyrion web, any source-checkout run) rubygems refuses the binary with "can't find executable orgkit for gem orgkit ... not currently included in the bundle" -- every shell-out must leave the bundle first. Tyrion::Orgkit.run wraps capture3 in Bundler.with_unbundled_env when Bundler is defined (lib/tyrion/orgkit.rb:26-44). Symptom if missed: the real-binary integration specs silently SKIP forever because their on-PATH guard runs through the same broken seam. :epic_context_show:
