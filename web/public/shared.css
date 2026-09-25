@@ -1266,6 +1266,45 @@
   .lane-resolution { color: #b91c1c; font-size: 11px; font-style: italic; }
   .lane-evidence { color: var(--amber-dim); font-size: 11px; font-style: italic; }
 
+  /* ─── ATTENTION BOARD (at-*) ────────────────────────────────── */
+  /* "Needs your attention": one epic-per-card cross-project board, reusing
+     .fl-outer/.fl-header/.fl-summary from the fleet board -- same shape
+     (header + summary line + grouped rows), new (at-*) classes only for the
+     genuinely new content (an epic card, its waiting reasons, lanes and
+     suggested commands). */
+  .at-purpose { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-faint); margin: 2px 0 16px; }
+  .at-section-title {
+    font-family: 'Cinzel', serif; font-size: 15px; font-weight: 600;
+    margin: 18px 0 8px; color: #1a0e05;
+  }
+  .at-section-title.at-waiting-title { color: var(--ink-faint); }
+  .at-epic-card {
+    border: 1px solid rgba(107,78,42,.2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+    background: rgba(0,0,0,.08);
+  }
+  .at-epic-card.at-waiting { opacity: .7; }
+  .at-epic-header {
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+  }
+  .at-epic-link { color: var(--text); text-decoration: none; font-weight: 600; }
+  .at-epic-link:hover { text-decoration: underline; color: var(--amber); }
+  .at-epic-detail { color: var(--ink-faint); font-size: 12px; }
+  .at-reason { color: #b45309; font-size: 12px; display: block; margin-top: 4px; }
+  .at-current { font-size: 12px; color: var(--ink-faint); margin-top: 4px; }
+  .at-lane { font-size: 12px; color: var(--ink-faint); margin-top: 2px; font-family: 'IBM Plex Mono', monospace; }
+  .at-cmd {
+    font-size: 12px; color: var(--amber-dim); margin-top: 2px;
+    font-family: 'IBM Plex Mono', monospace; display: block;
+  }
+  .at-fine-footer {
+    margin-top: 16px; padding-top: 10px; border-top: 1px solid rgba(107,78,42,.2);
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-faint); opacity: .7;
+  }
+
   /* ─── EPIC COCKPIT (ck-*) ───────────────────────────────────── */
 
   .ck-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid rgba(107,78,42,.2); }

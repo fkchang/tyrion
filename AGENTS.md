@@ -180,6 +180,7 @@ tyrion check <slug> <position> "evidence"  Mark criterion met (mutating)
 tyrion uncheck <slug> <position>           Revert a checked criterion (mutating)
 tyrion done <slug> "summary" [--force] [--require-gates=<n1,n2>]  Complete story; --require-gates refuses unless each named gate has a note (mutating). dark_factory epics auto-require pre-push+uat.
 tyrion audit [--epic <slug>]               Flag done stories in dark_factory epics missing pre-push/uat gate coverage (read-only)
+tyrion attention [--json] [--stale-days N] [--project <slug>]  Cross-project: epics stalled (quiet mid-flight) or waiting (paused/blocked) (read-only)
 tyrion block <slug> "reason" [--discovery disc-NNN]  Block a story, incl. a done one (mutating)
 tyrion unblock <slug>                      Unblock a story — restores prior status, never a bare 'done' (mutating)
 tyrion reopen <slug> "reason"              Reopen a done story -> in_progress, for post-done rework (mutating)

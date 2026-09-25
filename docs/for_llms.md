@@ -60,6 +60,10 @@ tyrion prime                                   # read-only tiered briefing for S
 tyrion mark "worth remembering later"          # instant reconnaissance bookmark
 tyrion spike start "question" / tyrion spike done / tyrion spike promote <disc-id>
 tyrion depends add <slug> <dep> / tyrion wave show / tyrion wave next
+
+tyrion attention [--json] [--stale-days N] [--project <slug>]
+                                                # cross-project: epics gone quiet mid-flight (stalled)
+                                                # or already paused/blocked (waiting) — see web /attention too
 ```
 
 ## The Claude Code Skills (the driver; CLI is the engine)

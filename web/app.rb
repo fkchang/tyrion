@@ -182,6 +182,35 @@ get "/api/fleet_poll" do
   { token: TyrionWeb::Data.fleet_poll_token(d) }.to_json
 end
 
+# ── Attention board ───────────────────────────────────────────────────────────
+#
+# Cross-project, like /fleet and /global: "what needs Forrest's attention,
+# Tyrion-wise" across every project's active/paused epics, not scoped by
+# ?project=/?epic= the way most other routes are. ?project= here narrows the
+# fold itself (Tyrion::Attention's own project_slug filter), not just the
+# sidebar context.
+
+get "/attention" do
+  stale_days = (params[:stale_days] || Tyrion::Attention::DEFAULT_STALE_DAYS).to_i
+  d    = TyrionWeb::Data.load_attention_view(stale_days: stale_days, project_slug: params[:project])
+  proj = TyrionWeb::Data.resolve_active_project
+  epic = proj ? TyrionWeb::Data.resolve_active_epic(proj) : nil
+  base = TyrionWeb::Data.load_sidebar_data(proj, epic)
+  phlex Views::Attention.new(
+    report: d,
+    project: proj, epic: epic, stories: base[:stories], disc_summary: base[:disc_summary],
+    epic_switcher: base[:epic_switcher],
+    token: TyrionWeb::Data.attention_poll_token(d),
+    **base_git
+  )
+end
+
+get "/api/attention_poll" do
+  content_type :json
+  d = TyrionWeb::Data.load_attention_view
+  { token: TyrionWeb::Data.attention_poll_token(d) }.to_json
+end
+
 # ── Epic cockpit ───────────────────────────────────────────────────────────────
 #
 # One epic's slice of the fleet: Needs you, Lanes (the shared LaneRow), and

@@ -109,6 +109,7 @@ module Tyrion
       when 'unclaim'      then cmd_unclaim(args, store)
       when 'whoami'       then cmd_whoami(args, store)
       when 'worktrees'    then cmd_worktrees(args, store)
+      when 'attention'    then cmd_attention(args, store)
       when 'web', 'dashboard' then cmd_web(args, store)
       when 'pocket'       then cmd_pocket(args, store)
       when 'mark'         then cmd_mark(args, store)
@@ -1308,6 +1309,88 @@ module Tyrion
 
     def self.pluralize(n, word)
       "#{n} #{word}#{'s' unless n == 1}"
+    end
+
+    # ── attention ──────────────────────────────────────────────────────────
+    # `tyrion attention` — cross-project, cross-epic: what needs Forrest's
+    # attention Tyrion-wise, right now. Read-only, and deliberately does NOT
+    # go through resolve_project — it must work from any cwd, including one
+    # with no active project at all. Tyrion::Attention owns the fold; this is
+    # just the gather-and-render wrapper the CLI and `--json` share.
+
+    ATTENTION_USAGE = 'Usage: tyrion attention [--json] [--stale-days N] [--project <slug>]'
+
+    def self.cmd_attention(args, store)
+      return puts ATTENTION_USAGE if help_requested?(args)
+
+      json_output  = args.delete('--json')
+      stale_days   = (extract_flag_value(args, '--stale-days') || Attention::DEFAULT_STALE_DAYS).to_i
+      project_slug = extract_flag_value(args, '--project')
+      reject_unknown_flags!(args, ATTENTION_USAGE)
+
+      if project_slug
+        die "Project not found: #{project_slug}" unless store.find_project_by_slug(project_slug)
+      end
+
+      gathered = Attention.gather(store)
+      snapshot = Liveness::Snapshot.current(store)
+      report = Attention.build(gathered, snapshot_rows: snapshot['rows'], stale_days: stale_days, project_slug: project_slug)
+
+      return puts JSON.pretty_generate(report) if json_output
+
+      print_attention_report(report)
+    end
+
+    def self.print_attention_report(report)
+      stalled = report['epics'].select { |e| e['category'] == Attention::STALLED }
+      waiting = report['epics'].select { |e| e['category'] == Attention::WAITING }
+      s = report['summary']
+
+      puts "#{Output.bold('NEEDS YOUR ATTENTION')} #{Output.dim("— Tyrion, as of #{report['generated_at']}")}"
+      puts Output.dim("stalled: partly done, no activity for longer than #{report['stale_days']} days · " \
+                       "waiting: paused or blocked on something")
+      puts "#{Output.yellow(pluralize(s['stalled'], 'stalled epic'))} · " \
+           "#{Output.cyan(pluralize(s['waiting'], 'waiting epic'))} · " \
+           "#{Output.dim("#{s['fine']} fine")}"
+      puts
+
+      if stalled.empty? && waiting.empty?
+        puts Output.dim('Nothing needs attention right now.')
+        return
+      end
+
+      unless stalled.empty?
+        puts Output.bold('STALLED')
+        stalled.each { |e| print_attention_epic(e) }
+      end
+
+      return if waiting.empty?
+
+      puts Output.bold('WAITING')
+      waiting.each { |e| print_attention_epic(e) }
+    end
+
+    def self.print_attention_epic(e)
+      badge  = e['mode'] == 'dark_factory' ? '🏭 ' : ''
+      counts = e['counts']
+      detail = "#{counts['done']}/#{counts['total']} done"
+      detail += " · idle #{pluralize(e['idle_days'], 'day')}" if e['idle_days']
+      puts "  #{badge}#{e['project_slug']} / #{Output.bold(e['epic_slug'])}  #{e['epic_name']}  #{Output.dim(detail)}"
+
+      e['waiting_reasons'].each { |r| puts "      #{Output.yellow('waiting:')} #{r}" }
+
+      if (cs = e['current_story'])
+        puts "      current: #{cs['slug']}#{cs['next_action'] ? " — #{cs['next_action']}" : ''}"
+      end
+
+      e['lanes'].each do |l|
+        live = l['live'] ? Output.green('live') : Output.dim('not live')
+        pid  = l['pid'] ? " pid #{l['pid']}" : ''
+        puts "      lane: #{Output.dim(l['token'])} (#{live}#{pid})"
+      end
+
+      e['suggested_commands'].each { |c| puts "      #{Output.dim('→')} #{c}" }
+      puts
     end
 
     # ── web ────────────────────────────────────────────────────────────────
@@ -4410,6 +4493,8 @@ module Tyrion
           tyrion unclaim <slug> [--steal]          Release a claim → pending (frees a dead lane; --steal for a live one)
           tyrion whoami                            Show this lane's token, liveness, and claimed story
           tyrion worktrees                         Dashboard of all git worktrees + active lanes (path, branch, epic, story, owner, live/dead)
+          tyrion attention [--json] [--stale-days N] [--project <slug>]
+                                                    Cross-project: epics stalled (gone quiet mid-flight) or waiting (paused/blocked)
           tyrion resume [slug]                     Read-only context dump
           tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session|followup)
           tyrion context <slug> "text"             Update current_context

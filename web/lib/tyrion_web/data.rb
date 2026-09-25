@@ -303,6 +303,28 @@ module TyrionWeb
       Digest::SHA256.hexdigest([row_fp, attention_fp, idle_fp].to_s)[0, 16]
     end
 
+    # "Needs your attention": one pure fold (Tyrion::Attention) over every
+    # project's active/paused epics, plus the same Liveness::Snapshot the
+    # fleet board reads for lane pid/liveness/worktree info. Never computed
+    # twice -- `tyrion attention --json` and this view call the identical
+    # Attention.build over the identical gather.
+    def self.load_attention_view(stale_days: Tyrion::Attention::DEFAULT_STALE_DAYS, project_slug: nil)
+      gathered = Tyrion::Attention.gather(store)
+      snapshot = Tyrion::Liveness::Snapshot.current(store)
+      Tyrion::Attention.build(gathered, snapshot_rows: snapshot['rows'], stale_days: stale_days, project_slug: project_slug)
+    end
+
+    # Fingerprint for GET /api/attention_poll. Every element is a value the
+    # page actually renders -- never a rendered age -- so the token changes
+    # only when the fold's own output would look different.
+    def self.attention_poll_token(report)
+      fingerprint = report['epics'].map do |e|
+        [e['project_slug'], e['epic_slug'], e['category'], e['counts'], e['idle_days'],
+         e['waiting_reasons'], e['current_story'], e['lanes']]
+      end
+      Digest::SHA256.hexdigest([report['stale_days'], fingerprint].to_s)[0, 16]
+    end
+
     COCKPIT_TABS = %w[now changes trail].freeze
 
     def self.normalize_cockpit_tab(tab)

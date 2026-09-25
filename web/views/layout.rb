@@ -25,6 +25,7 @@ module Views
       { id: :active,      path: '/',            icon: '📖', label: 'Active Story' },
       { id: :global,      path: '/global',      icon: '🌍', label: 'Global View'  },
       { id: :fleet,       path: '/fleet',       icon: '🚀', label: 'Fleet'        },
+      { id: :attention,   path: '/attention',   icon: '🔔', label: 'Attention'    },
       { id: :discoveries, path: '/discoveries', icon: '💡', label: 'Discoveries'  },
       { id: :about,       path: '/about',       icon: '❓', label: 'About Tyrion' },
     ].freeze
