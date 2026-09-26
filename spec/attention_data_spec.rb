@@ -25,8 +25,12 @@ RSpec.describe 'TyrionWeb::Data.load_attention_view and Views::Attention' do
     t = (Time.now.utc - (days_ago * 86_400)).iso8601(6)
     store.send(:with_db) do |db|
       db.execute(
-        'UPDATE stories SET updated_at = ?, completed_at = CASE WHEN completed_at IS NOT NULL THEN ? ELSE completed_at END WHERE epic_id = ?',
-        [t, t, epic_id]
+        'UPDATE stories SET updated_at = ?, ' \
+        'completed_at = CASE WHEN completed_at IS NOT NULL THEN ? ELSE completed_at END, ' \
+        'claimed_at = CASE WHEN claimed_at IS NOT NULL THEN ? ELSE claimed_at END, ' \
+        'last_note_at = CASE WHEN last_note_at IS NOT NULL THEN ? ELSE last_note_at END ' \
+        'WHERE epic_id = ?',
+        [t, t, t, t, epic_id]
       )
     end
   end

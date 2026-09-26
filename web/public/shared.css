@@ -1296,6 +1296,15 @@
   .at-reason { color: #b45309; font-size: 12px; display: block; margin-top: 4px; }
   .at-current { font-size: 12px; color: var(--ink-faint); margin-top: 4px; }
   .at-lane { font-size: 12px; color: var(--ink-faint); margin-top: 2px; font-family: 'IBM Plex Mono', monospace; }
+  .at-resume {
+    font-size: 12px; color: #1e9e54; margin: 2px 0 2px 14px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .at-resume code {
+    background: rgba(0,0,0,.25); border-radius: 4px; padding: 1px 6px;
+    color: var(--text); user-select: all;
+  }
+  .at-resume-candidate { color: var(--amber-dim); }
   .at-cmd {
     font-size: 12px; color: var(--amber-dim); margin-top: 2px;
     font-family: 'IBM Plex Mono', monospace; display: block;

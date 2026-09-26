@@ -102,6 +102,21 @@ module Views
         plain " #{lane['token']}"
         plain " (pid #{lane['pid']})" if lane['pid']
       end
+      render_resume_hint(lane['resume_hint'])
+    end
+
+    # Best-effort: a live lane's hint is an exact `lsof`-confirmed session,
+    # a dead lane's is an unverified guess (SessionResolver never returns
+    # one unless two independent signals agree, but "agree" is still not
+    # "confirmed") -- the label says so every time, never bare.
+    def render_resume_hint(hint)
+      return unless hint
+
+      confirmed = hint['confidence'] == Tyrion::SessionResolver::CONFIRMED
+      div(class: "at-resume#{confirmed ? '' : ' at-resume-candidate'}") do
+        plain(confirmed ? "resume: " : "resume (unconfirmed — verify first): ")
+        code { hint['command'] }
+      end
     end
 
     def render_fine_footer

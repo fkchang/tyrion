@@ -1335,6 +1335,7 @@ module Tyrion
       gathered = Attention.gather(store)
       snapshot = Liveness::Snapshot.current(store)
       report = Attention.build(gathered, snapshot_rows: snapshot['rows'], stale_days: stale_days, project_slug: project_slug)
+      report = SessionResolver.enrich_lanes(report)
 
       return puts JSON.pretty_generate(report) if json_output
 
@@ -1387,10 +1388,21 @@ module Tyrion
         live = l['live'] ? Output.green('live') : Output.dim('not live')
         pid  = l['pid'] ? " pid #{l['pid']}" : ''
         puts "      lane: #{Output.dim(l['token'])} (#{live}#{pid})"
+        print_resume_hint(l['resume_hint'])
       end
 
       e['suggested_commands'].each { |c| puts "      #{Output.dim('→')} #{c}" }
       puts
+    end
+
+    def self.print_resume_hint(hint)
+      return unless hint
+
+      if hint['confidence'] == SessionResolver::CONFIRMED
+        puts "      #{Output.green('resume:')} #{hint['command']}"
+      else
+        puts "      #{Output.yellow('resume (unconfirmed — verify before resuming):')} #{hint['command']}"
+      end
     end
 
     # ── web ────────────────────────────────────────────────────────────────
@@ -4495,6 +4507,7 @@ module Tyrion
           tyrion worktrees                         Dashboard of all git worktrees + active lanes (path, branch, epic, story, owner, live/dead)
           tyrion attention [--json] [--stale-days N] [--project <slug>]
                                                     Cross-project: epics stalled (gone quiet mid-flight) or waiting (paused/blocked)
+                                                    — a stalled lane may include a best-effort `claude -r <id>` resume hint
           tyrion resume [slug]                     Read-only context dump
           tyrion note <slug> <kind> "body"         Append note (kinds: plan|progress|decision|blocker|test|handoff|recovery|session|followup)
           tyrion context <slug> "text"             Update current_context

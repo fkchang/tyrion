@@ -311,7 +311,8 @@ module TyrionWeb
     def self.load_attention_view(stale_days: Tyrion::Attention::DEFAULT_STALE_DAYS, project_slug: nil)
       gathered = Tyrion::Attention.gather(store)
       snapshot = Tyrion::Liveness::Snapshot.current(store)
-      Tyrion::Attention.build(gathered, snapshot_rows: snapshot['rows'], stale_days: stale_days, project_slug: project_slug)
+      report = Tyrion::Attention.build(gathered, snapshot_rows: snapshot['rows'], stale_days: stale_days, project_slug: project_slug)
+      Tyrion::SessionResolver.enrich_lanes(report)
     end
 
     # Fingerprint for GET /api/attention_poll. Every element is a value the
