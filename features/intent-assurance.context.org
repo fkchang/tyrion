@@ -1,0 +1,48 @@
+#+TITLE: intent-assurance: epic wiki (read FIRST via `tyrion epic-context show --story <slug>`)
+#+DATE: 2026-09-27
+
+* Where the knowledge already is
+- Origin: session-workspace discussion surfaced incomplete Mission Briefs and the need to test intended outcomes in design and implementation. This is a RELATED standalone epic, not a prerequisite for that initiative.
+- disc-008 already names Gherkin-derived checks, intent probes and criteria/tests/evidence coverage. Fold this idea into this epic rather than filing a duplicate; do not resolve the mark until actual work/evidence warrants it.
+- features/superpowers-stack.feature defines existing gate/spec-review seams. features/dark-factory-mode.context.md:19-26 discusses deferred intent probes and reverse traceability; independent-verification remains separate work in dark-factory-mode.
+- Current prior-art/policy comparison: docs/research/intent-review-prior-art-2026-09-27.md. Version/update audit: docs/research/review-tool-versions-2026-09-27.md. Read before selecting exact tool invocations.
+- Project ABOUT.md already proposes short display summaries alongside canonical Gherkin. This request confirms both should be available.
+
+* Verified facts
+- Mission Brief renders only stories.intent: web/views/active_story.rb:137-149. Importer prefers # Intent over narrative: lib/tyrion/importer.rb:182-211,238-241.
+- Gherkin steps become criteria; --criteria=then moves Given/When to observation notes: lib/tyrion/importer.rb:113-120,215-226. View strips keyword by displaying criterion text alone: web/views/active_story.rb:247-266. Only five recent notes load: web/lib/tyrion_web/data.rb:60-61.
+- There is no raw scenario field: lib/tyrion/store.rb:60-113. Epic source path/hash exists, but missing/changed source or legacy rows cannot recover an exact original from intent/criteria alone.
+- Live UI on 2026-09-27: typical-time-left displayed In order to/I want in Mission Brief, outcomes under Criteria, Given/When in notes. This verifies presentation fragmentation, not absence of all authored intent.
+- Existing gate command accepts arbitrary name, verdict, detail and metadata: lib/tyrion/commands.rb:2461-2485. Closure checks gate presence/latest failure but not evidence revision: commands.rb:3009-3051,4655-4662.
+
+* Gotchas already paid for
+- User approved the Opus-vetted human-witness amendment on 2026-09-27. The specification baseline declares required human witnesses and whether dependent work may proceed while validation is pending. An unwitnessed required outcome prevents completion; no agent may fabricate a user witness. Prefer existing story states plus an explicit pending-validation reason/next action over adding a new database status. See docs/trilaws-shape-amendments.md and docs/research/opus-trilaws-review-2026-09-27.md.
+- One canonical behavior source, two presentations: summary for scanning; full imported scenario/narrative and applicable Background for inspection. Snapshot/provenance and drift rules must prevent rendering guessed or current-file text as the reviewed historical revision.
+- Distinguish As/In order/I want purpose from Given/When/Then behavioral contract. Preserve both; a keyword count is not an intent-completeness test.
+- Suggested minimal gate names: intent-design and intent-implementation. Reuse append-only gate notes and existing review machinery; do not build another test runner or duplicate spec-review prompts when one review can supply explicit traceability.
+- Design evidence maps each intended outcome to the design response, source revision, design revision, reviewer and verdict. Missing/ambiguous intent stays unresolved rather than guessed. Approved exclusions retain the user decision and reason.
+- Implementation evidence maps outcomes to executable tests, witnessed UI/CLI behavior, or explicit human/judge assessment. Classify which proof is appropriate; never substitute test-suite success for a promised user experience or claim semantic certainty from an AI score.
+- Gate evidence must identify current scenario/design/implementation revisions. A relevant change makes the prior pass stale while preserving history; opted-in closure must enforce validity, not merely see a gate note of that name.
+- First application can retrospectively review the then-current worker launcher as a real sample. Record this as a current review, not a fabricated earlier gate. Do not add a circular prerequisite or reopen legacy done stories automatically.
+- Bounded first version: author a coverage rubric and two concrete counterexamples (tests pass but an outcome is absent; design changed after approval) before automating pass/fail bookkeeping. Human witness remains required for subjective outcomes until independent-verification policy is actually available.
+- Scenario order: source/brief -> design gate -> implementation gate. Strict rigor and one batch per scenario. Existing pre-push/UAT/spec-review remain applicable, not replaced.
+- Policy refinement from user: rigor and autonomy are independent axes. Proposed additional intent gates are optional at trivial/loose and required with deeper independent review at strict. This does not turn off already-required pre-push/UAT/tests. Persist selected policy before execution; changing a CLI flag cannot silently erase a required gate.
+- At EVERY rigor, dark_factory requires explicit user approval of the applicable specification baseline before unattended dispatch. The baseline contains the epic scope, affected story narratives/scenarios/acceptance outcomes, and any design constraints the user approved. Agent review is not user approval. Material scope/behavior changes require renewed approval; routine implementation choices do not. Approval records need the actual user decision's provenance and baseline revision, not an agent-authored assertion of approval.
+- Record phases/capabilities, not blind tool brands: specification/design review, intent/spec compliance, code quality, witnessed behavior. Map available versioned Superpowers/BMAD/gstack capabilities to those phases before execution and record skipped optional phases or unavailable required phases explicitly. One review may supply multiple labeled verdicts when it actually examines all required evidence; do not run three frameworks over the same diff as ceremony.
+- Prior-art comparison and installed-version audit belong with the review-policy story. User raised potentially stale BMAD, Superpowers plugin freshness and gstack update behavior; inspect actual installation/update scope before adopting or updating anything. Existing installed and upstream behavior can differ.
+- Version audit on 2026-09-27: Superpowers registered at 5.0.5, marketplace upstream advertises 6.3.0 while repo release is 6.4.2; local gstack1.60.1.0 versus upstream1.91.2.0; BMAD6.0.0-alpha.5 found as a stretch_timer project copy, not a Tyrion install. Superpowers6 removed legacy reviewer prompt paths referenced by Tyrion. No updater ran during that audit; the subsequent user-selected BMAD reference action is recorded below.
+- User clarified BMAD may remain scoped to stretch_timer and offered a reference clone instead of installing globally. Chosen action: clean pinned v6.12.0 reference at /Users/fkchang/work/stretch_timer/references/bmad-method-v6.12.0, commit05bfbd46d00766ec88eb9b42e76be2c575d64d7b. No installer/global registration; old active project commands remain unchanged. This resolves the reference scope question, not migration of the old installation.
+- BMAD v6.12.0 spec-template.md has a human-owned frozen-after-approval intent/boundaries section and separate append-only implementation/review logs. Its claims-check treats author narrative as claims to verify. Its verification-gap lens asks whether a realistic regression at the actual consumer would be caught. Borrow those mechanisms, not the whole framework. Its verification-gap prompt returns a clean-sounding result for unreadable input; our gate must instead mark missing review input unreviewed/blocked, never pass.
+- Refined sequence: brief preservation and policy resolution; user-spec approval enforcement; design/implementation evidence gates. All five scenarios strict, one batch each. The related workspace pilot need not wait for all this automation; apply the agreed review questions manually through existing gates in the meantime.
+- Related but out of scope: broad RIGOR x AUTONOMY planning (disc-002), general gate engine independence, repository-wide retrospective legacy rewriting, percentage-only dashboards and automatically generated tests treated as independent proof.
+
+* Lanes
+| Lane | Stories | Builder | Why one lane |
+| Intent assurance | Brief preservation then two review gates | Assigned independently | Related reusable capability without blocking original pilot |
+
+* Instrument
+| Story | Builder | Start | End | Wall-clock | Gate attempts | Rediscoveries |
+|---|---|---|---|---|---|---|
+
+* Learnings
+# Append only via: tyrion epic-context append --story <slug> "<what you learned> (file:line)"

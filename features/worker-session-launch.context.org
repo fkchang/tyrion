@@ -1,0 +1,35 @@
+#+TITLE: worker-session-launch: epic wiki (read FIRST via `tyrion epic-context show --story <slug>`)
+#+DATE: 2026-09-27
+
+* Where the knowledge already is
+- Parent: session-workspace. This is the first dogfood work item; its launched worker later becomes the workspace pilot's sample lane.
+- Existing /Users/fkchang/work/claude_code_history/bin/worker-session and lib/worker_session_launcher.rb.
+- Existing /Users/fkchang/.claude/skills/worker-session/SKILL.md and parent research summary.
+
+* Verified facts
+- WorkerSessionLauncher#caller_terminal and #plan choose Herdr/cmux/iTerm from caller environment; unknown callers refuse. Herdr launch uses target_for(dir), can reuse an occupied idle target, then sends a Claude command and focuses its tab (external launcher file:42,67,147).
+- The launcher currently supports Claude only. Its display name is not an implemented messaging registry; ListAgents/SendMessage are skill guidance, not a portable cross-provider delivery guarantee.
+- These features are not present in Tyrion merely because research tested Herdr APIs. New scenarios are pending work, not already-completed spike stories.
+
+* Gotchas already paid for
+- User approved the four Opus-vetted Trilaws amendments on 2026-09-27. Launch unknown-outcome reconciliation and complete revisioned handoff are now acceptance requirements. Review: docs/research/opus-trilaws-review-2026-09-27.md; approved amendment record: docs/trilaws-shape-amendments.md. Reconcile a possibly-started worker before retry; do not silently duplicate an attempt. The handoff carries canonical scenario/constraints, not just its short label.
+- First implementation decision: keep one shared launcher implementation and give Tyrion/Codex a thin entry point. The external repo's guidance must be read before edits there. User's request to keep the work in Tyrion is a ledger/surface requirement, not permission to fork duplicate launch code.
+- Explicit runtime destination is separate from agent selection. Preserve automatic caller-based routing as default; add explicit Herdr scope. First supported target is Claude, no implied Codex/Copilot launching support.
+- Create a fresh tab; never use cwd to choose an occupied agent to overwrite. Reuse existing safe prompt-file handling, and validate provider/model/permission arguments rather than passing arbitrary shell fragments.
+- A launched process, a ready agent and receipt of an instruction are different states. Trust/approval screens may require user action. Return pending/needs-input/failure honestly and clean up only resources this launch owns.
+- The handle needs stable worker/lane identity, display name, runtime/socket scope, terminal ID, process lifetime, current native reference with freshness, and capability flags. No requirement to create a general registry/database framework before a thin handle proves itself.
+- Follow-up receipt must be correlated to the exact target and instruction. Use a harmless unique marker for UAT, distinguish prompt delivery from accepted/finished work, and do not retry unknown outcomes blindly.
+- Closed-loop story verification remains Tyrion's responsibility; agent done cannot check criteria automatically.
+- disc-158 informs exact native linkage; transcript inference remains out of scope. disc-165 informs fresh worktree/ownership checks; no shared-checkout worker edits without an explicit isolation decision.
+- Sequence: explicit launch -> verified handle -> follow-up receipt. One batch per story, strict rigor. Use existing review/pre-push/UAT gates; manually document intended-outcome coverage now without waiting for intent-assurance automation.
+
+* Lanes
+| Lane | Stories | Builder | Why one lane |
+| Worker launcher | All three scenarios sequentially | Assigned at implementation | One shared launch/handle/delivery contract |
+
+* Instrument
+| Story | Builder | Start | End | Wall-clock | Gate attempts | Rediscoveries |
+|---|---|---|---|---|---|---|
+
+* Learnings
+# Append only via: tyrion epic-context append --story <slug> "<what you learned> (file:line)"

@@ -1,0 +1,52 @@
+#+TITLE: session-workspace: epic wiki (read FIRST via `tyrion epic-context show --story <slug>`)
+#+DATE: 2026-09-27
+
+* Where the knowledge already is
+- User objective: Fleet / Needs Me -> selected lane -> correct existing terminal with Tyrion context. Reverse entry: terminal -> pinned companion. Voice is a later consumer of this foundation.
+- Original conversation research: /Users/fkchang/work/tyrion/docs/tyrion-session-workspace-tlps-v0.md
+- Latest provider evidence: /Users/fkchang/work/tyrion/docs/research/native-identity-freshness-proof-2026-09-26.md
+- Underlying audits and executable scratch harnesses: /Users/fkchang/work/tyrion/docs/research/ and docs/research/spikes/. These directories are locally retained but gitignored; findings below preserve the essential record in tracked context.
+- Existing worker-session skill: /Users/fkchang/.claude/skills/worker-session/SKILL.md. Implementation: /Users/fkchang/work/claude_code_history/lib/worker_session_launcher.rb.
+- Proposed child epics: worker-session-launch; session-workspace-pilot. Related independent epic: intent-assurance, born from inspection of this initiative. It is NOT a prerequisite or a child required to finish the workspace pilot.
+
+* Verified facts
+- Research was conducted outside the production Tyrion ledger. Do not invent retrospective done stories, completion dates or gates. Preserve scoped findings and their evidence, then import only remaining work as pending.
+| Experiment | Verified result | Limit |
+| Herdr inventory | Installed 0.8.0/protocol 19 supplies scoped panes, terminals and native references | Several panes share a cwd; cwd cannot identify a worker |
+| Terminal rendering | Actual ANSI frames rendered via xterm6, including wide/combining text, colors, cursor and alternate screens | Fixture-level fidelity, not exhaustive terminal conformance |
+| Live terminal | Input/resize, observers, takeover/release and reconnect worked in disposable sessions | Validation and PTY write remain separate operations |
+| Claude companion | Actual startup UUID/PID/lane correlation; context changes preserved draft/focus/connection | Custom scratch hooks, not shipped integration |
+| Claude clear | Two changes automatically rebound with verified events; delayed input refused | Controlled fixture; not all resume/restart cases |
+| Codex/Copilot UI | Both real CLIs passed terminal + companion draft/focus tests | File-hook native identity was late or unverified after reset |
+| Codex alternative | Same-app-server events precede turns; exclusive connection relay attributed start/clear responses | Controlled new launch topology; global broadcasts alone lack terminal attribution |
+| Copilot alternative | 1.0.89-4 SDK extension joined current session before turn and refreshed after two clears | Required session-only experimental mode; not yet reporting into shared binding |
+- All named scratch sessions and servers were stopped. Default Herdr remained running. Production application code was not changed by the spikes.
+- Existing Fleet links to story detail: web/views/components/lane_row.rb:48. Cockpit is epic-scoped: web/app.rb:221. Its current reload-on-change behavior is at web/views/cockpit.rb:300.
+- Existing epic containment/prerequisite semantics are documented in features/epic-relationships.feature. No generic related-epic relation is proposed here; context provenance links express relatedness without inventing blockers.
+
+* Gotchas already paid for
+- Scope is an explicitly bound managed-worker pilot first. Never pretend all pre-existing sessions can be discovered safely or migrated without further work.
+- Separate worker/lane, runtime terminal/process and native conversation. A native UUID can change with unchanged PID/terminal. Provider references may be paths, not UUIDs.
+- Herdr control refusal can exit 0: inspect terminal.closed and require readiness evidence. Idle/working/done is not Tyrion acceptance evidence.
+- A browser companion must update independently; whole-page reload would interrupt the embedded terminal.
+- No approved visual prototype yet. Prior diagnostic terminal pages are functional test harnesses, not a visual specification for the product.
+- Child work is tracked here in the Tyrion project. Reuse the existing launcher behind a Tyrion-facing seam; do not silently duplicate it or assume the external repo's implementation belongs here. Agree the code ownership/extraction seam before implementation.
+- Claude is first; Codex/Copilot are near-term adapter coverage, Gemini/pi later. Model choice is independent of worker identity.
+- Discovery recall: disc-004, disc-158, disc-165 inform child work; disc-008 informs intent-assurance. Existing marks are not resolved by drafting these epics.
+- leaving disc-002 open — consider tyrion discovery defer disc-002 if out of scope
+- leaving disc-156 open — consider tyrion discovery defer disc-156 if out of scope
+- leaving disc-164 open — consider tyrion discovery defer disc-164 if out of scope
+- leaving disc-166 open — consider tyrion discovery defer disc-166 if out of scope
+- leaving disc-168 open — consider tyrion discovery defer disc-168 if out of scope
+- These are scope disclosures, not recommendations to discard the work. No discovery status was changed.
+
+* Lanes
+| Lane | Stories | Builder | Why one lane |
+| Shape | Container and child definitions | Coordinator | Preserve user intent and evidence without backdating ledger work |
+
+* Instrument
+| Story | Builder | Start | End | Wall-clock | Gate attempts | Rediscoveries |
+|---|---|---|---|---|---|---|
+
+* Learnings
+# Append only via: tyrion epic-context append --story <slug> "<what you learned> (file:line)"

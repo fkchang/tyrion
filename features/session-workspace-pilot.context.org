@@ -1,0 +1,36 @@
+#+TITLE: session-workspace-pilot: epic wiki (read FIRST via `tyrion epic-context show --story <slug>`)
+#+DATE: 2026-09-27
+
+* Where the knowledge already is
+- Parent: session-workspace. Prerequisite: worker-session-launch supplies the exact worker handle used by this pilot.
+- Existing Fleet/cockpit views and web/views/components/lane_row.rb.
+- Tested transport and companion seams: docs/research/live-terminal-control-proof-2026-09-26.md and docs/research/real-agent-companion-proof-2026-09-26.md.
+- Related independent epic: intent-assurance. Its gates may later review this work, but it does not block the pilot.
+
+* Verified facts
+- Fleet's shared lane row currently links to /stories/<story_id> (web/views/components/lane_row.rb:48), not a terminal workspace.
+- Cockpit's poller reloads its window on changed token (web/views/cockpit.rb:300). The terminal needs a stable lifetime separate from companion refresh.
+- Read-only observers and explicit control passed fixture tests; real Claude/Codex/Copilot draft/focus continuity was witnessed in separate harnesses.
+
+* Gotchas already paid for
+- User approved the interrupted-return trial on 2026-09-27 following the Opus Trilaws review. Define the trial before implementation and obtain user-confirmed evidence after a real interruption/absence. Context refresh and deterministic focus checks alone do not establish this human outcome. See docs/trilaws-shape-amendments.md.
+- Reuse existing Fleet, story/context data and presenter vocabulary. Do not invent a second work ledger or redesign all Needs Me filtering in this epic.
+- Open read-only, display the selected work and the runtime identity, and distinguish conversation freshness from terminal reachability. A provider without verified fresh native metadata is not labeled verified.
+- Product input requires scoped access, origin checks and fresh target/ownership checks. Existing web binds beyond loopback for Tailscale use; the loopback research bridge is not production access control.
+- A check-to-write race remains from the experiments. Define the supported manual-control contract before implementation; do not claim atomic process-bound delivery from separate checks. Automated semantic prompting can remain unavailable where its guarantees are not met.
+- Preserve terminal DOM/connection/draft/focus on ledger updates. Explicitly test unavailable target, replacement process, two lanes sharing cwd, disconnect and concurrent observer/controller ownership.
+- First human trial is this initiative's Claude worker; existing terminal remains fallback. Measure terminal hunting, ID copying, incorrect target, lost draft and intervention count, not only browser rendering success.
+- disc-004 folds into context-at-a-glance; disc-158 informs identity limits. disc-156/disc-164 Fleet cleanup and disc-166/disc-168 cosmetic/readability fixes remain independent backlog; see parent callouts.
+- No approved visual prototype: prior pages demonstrate transport only. Use the visual-plan/design workflow before coding the actual view.
+- Sequence: open-bound-lane-workspace then dogfood-workspace-on-its-own-worker. Strict rigor; one batch per scenario. No startup of an implementation worker before the launcher and isolation policy are reviewable.
+
+* Lanes
+| Lane | Stories | Builder | Why one lane |
+| Workspace | Both pilot scenarios | Assigned at implementation | Integration and witnessed user loop share one binding |
+
+* Instrument
+| Story | Builder | Start | End | Wall-clock | Gate attempts | Rediscoveries |
+|---|---|---|---|---|---|---|
+
+* Learnings
+# Append only via: tyrion epic-context append --story <slug> "<what you learned> (file:line)"
