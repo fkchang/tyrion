@@ -235,15 +235,29 @@ agents filing autonomously must pass it. Every surface tags each discovery
 `tyrion help` for the full scroll.
 
 To launch a worker from Tyrion, first dispatch or claim its story for the
-target lane. Then run `tyrion worker launch <slug> --worktree <registered-path>
---task-file <brief.md> --name <display-name> --lane <token> --attempt <unique-id>`.
-The command calls the shared `worker-session` executable on `PATH`. For a
-source checkout, set `TYRION_WORKER_SESSION_BIN` to its absolute path. The
-result is JSON: `started`, `needs_input`, `failed`, or `unknown`. A retry with
-the same attempt reconciles the original tab and never creates another for
-that attempt. `started` confirms a working process; task receipt and story
-completion require separate evidence. Pass `--herdr-session <name>` to keep
-the launch in a named Herdr server, for example during an isolated trial.
+target lane. The worktree must be registered with Git, and the task file must
+exist. The command calls the shared `worker-session` executable on `PATH`;
+for a source checkout, set `TYRION_WORKER_SESSION_BIN` to its absolute path.
+Preview the exact launch before starting an agent:
+
+```bash
+TYRION_WORKER_SESSION_BIN=/absolute/path/to/worker-session \
+  tyrion worker launch my-story --worktree /absolute/path/to/worktree \
+  --task-file /absolute/path/to/brief.md --name "my worker" \
+  --lane my-worker-lane --attempt attempt-001 \
+  --herdr-session my-scratch-session --dry-run
+```
+
+The preview prints JSON containing `"status":"dry_run"`,
+`"success":true`, `"lane":"my-worker-lane"`,
+`"attempt":"attempt-001"`, and `"runtime_scope":"my-scratch-session"`.
+It creates no tab, starts no agent, and writes no attempt state. Once the
+preview is correct, remove `--dry-run` to launch with the same options. A real
+launch returns JSON with `started`,
+`needs_input`, `failed`, or `unknown`. A retry with the same attempt reconciles
+the original tab and never creates another for that attempt. `started`
+confirms a working process; task receipt and story completion require
+separate evidence. Omit `--herdr-session` to use the default Herdr server.
 
 ---
 
