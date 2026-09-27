@@ -189,6 +189,7 @@ tyrion pocket                    Compact briefing for agent handoff
 tyrion prime                     Read-only tiered briefing for SessionStart/PreCompact hooks
 
 tyrion start <slug>              Claim a story
+tyrion worker launch <slug> ...  Start a claimed Claude worker in a fresh Herdr tab
 tyrion block <slug> "reason"     Mark a story blocked (shows in war room BLOCKED lane) — works on a done story too
 tyrion unblock <slug>            Clear the block — restores prior status (never re-seals a done story unverified)
 tyrion reopen <slug> "reason"    Reopen a done story → in_progress, for post-done rework
@@ -232,6 +233,17 @@ agents filing autonomously must pass it. Every surface tags each discovery
 `[agent]` or `[human]`.
 
 `tyrion help` for the full scroll.
+
+To launch a worker from Tyrion, first dispatch or claim its story for the
+target lane. Then run `tyrion worker launch <slug> --worktree <registered-path>
+--task-file <brief.md> --name <display-name> --lane <token> --attempt <unique-id>`.
+The command calls the shared `worker-session` executable on `PATH`. For a
+source checkout, set `TYRION_WORKER_SESSION_BIN` to its absolute path. The
+result is JSON: `started`, `needs_input`, `failed`, or `unknown`. A retry with
+the same attempt reconciles the original tab and never creates another for
+that attempt. `started` confirms a working process; task receipt and story
+completion require separate evidence. Pass `--herdr-session <name>` to keep
+the launch in a named Herdr server, for example during an isolated trial.
 
 ---
 

@@ -8,6 +8,7 @@ require 'timeout'
 require_relative 'importer'
 require_relative 'lesson_miner'
 require_relative 'orgkit'
+require_relative 'worker_session'
 
 module Tyrion
   module Commands
@@ -109,6 +110,7 @@ module Tyrion
       when 'unclaim'      then cmd_unclaim(args, store)
       when 'whoami'       then cmd_whoami(args, store)
       when 'worktrees'    then cmd_worktrees(args, store)
+      when 'worker'       then cmd_worker(args, store)
       when 'attention'    then cmd_attention(args, store)
       when 'web', 'dashboard' then cmd_web(args, store)
       when 'pocket'       then cmd_pocket(args, store)
@@ -1506,6 +1508,85 @@ module Tyrion
       else
         puts "#{Output.dim('○')} not running  (port #{port})"
       end
+    end
+
+    # ── assign ─────────────────────────────────────────────────────────────
+
+    WORKER_USAGE = 'Usage: tyrion worker launch <story> --worktree PATH --task-file PATH --name NAME --lane TOKEN --attempt ID [--herdr-session NAME] [--model MODEL] [--mode MODE] [--dry-run]'
+
+    def self.cmd_worker(args, store)
+      return puts WORKER_USAGE if help_requested?(args) || args.first == 'help'
+      die WORKER_USAGE unless args.shift == 'launch'
+
+      slug = args.shift
+      worktree = extract_flag_value(args, '--worktree')
+      task_file = extract_flag_value(args, '--task-file')
+      name = extract_flag_value(args, '--name')
+      lane = extract_flag_value(args, '--lane')
+      attempt = extract_flag_value(args, '--attempt')
+      herdr_session = extract_flag_value(args, '--herdr-session')
+      model = extract_flag_value(args, '--model')
+      mode = extract_flag_value(args, '--mode')
+      dry_run = args.delete('--dry-run')
+      die WORKER_USAGE unless [slug, worktree, task_file, name, lane, attempt].all? { |v| presence(v) } && args.empty?
+
+      _project, epic = resolve_project_epic(store)
+      story = store.find_story(epic['id'], slug)
+      die "Story not found: #{slug} in epic #{epic['slug']}" unless story
+      die "Story #{slug} must be in_progress before worker launch" unless story['status'] == 'in_progress'
+      owner = story['claimed_by']
+      die "Story #{slug} is assigned to #{owner || 'no lane'}, not #{lane}" \
+        unless [lane, "dispatched:#{lane}"].include?(owner)
+
+      die "Task file not readable: #{task_file}" unless File.file?(task_file) && File.readable?(task_file)
+      die "Worktree does not exist: #{worktree}" unless Dir.exist?(worktree)
+      real_worktree = File.realpath(worktree)
+      registered = Repo.worktrees(Repo.main_root || Repo.worktree_root).any? do |entry|
+        File.realpath(entry[:path]) == real_worktree
+      rescue Errno::ENOENT
+        false
+      end
+      die "#{worktree} is not a registered git worktree for this project" unless registered
+
+      argv = ['--dir', real_worktree, '--task-file', File.realpath(task_file), '--name', name,
+              '--provider', 'claude', '--runtime', 'herdr', '--lane', lane, '--attempt', attempt, '--json']
+      argv += ['--model', model] if model
+      argv += ['--mode', mode] if mode
+      argv << '--dry-run' if dry_run
+      argv += ['--herdr-session', herdr_session] if herdr_session
+
+      stdout, stderr, process_status = begin
+        WorkerSession.run(*argv)
+      rescue Errno::ENOENT => e
+        die "worker-session executable unavailable: #{e.message}; install it or set TYRION_WORKER_SESSION_BIN"
+      end
+      die "worker-session returned no structured result: #{stderr}" if stdout.to_s.strip.empty?
+
+      result = JSON.parse(stdout)
+      die 'worker-session returned an invalid structured result' unless result.is_a?(Hash)
+
+      expected_exit = { 'started' => 0, 'dry_run' => 0, 'failed' => 1,
+                        'unknown' => 2, 'needs_input' => 3 }[result['status']]
+      die 'worker-session returned an invalid structured result' unless expected_exit
+      if process_status.exitstatus != expected_exit || result['success'] != (expected_exit == 0)
+        die 'worker-session result and exit code disagree; launch outcome is unverified'
+      end
+      unless result['status'] == 'failed'
+        expected_scope = herdr_session || 'default'
+        unless result['attempt'] == attempt && result['lane'] == lane &&
+               result['via'] == 'herdr' && result['runtime_scope'] == expected_scope
+          die 'worker-session result does not match the requested attempt, lane, or runtime scope'
+        end
+      end
+
+      puts stdout
+      exit(process_status.exitstatus) unless process_status.success?
+    rescue Errno::ENOENT => e
+      die "worktree or task file disappeared during launch: #{e.message}"
+    rescue ArgumentError => e
+      die e.message
+    rescue JSON::ParserError
+      die 'worker-session returned an invalid structured result'
     end
 
     # ── assign ─────────────────────────────────────────────────────────────
@@ -4505,6 +4586,8 @@ module Tyrion
           tyrion unclaim <slug> [--steal]          Release a claim → pending (frees a dead lane; --steal for a live one)
           tyrion whoami                            Show this lane's token, liveness, and claimed story
           tyrion worktrees                         Dashboard of all git worktrees + active lanes (path, branch, epic, story, owner, live/dead)
+          tyrion worker launch <slug> --worktree PATH --task-file PATH --name NAME --lane TOKEN --attempt ID
+                                                    Start the claimed Claude worker in a fresh Herdr tab
           tyrion attention [--json] [--stale-days N] [--project <slug>]
                                                     Cross-project: epics stalled (gone quiet mid-flight) or waiting (paused/blocked)
                                                     — a stalled lane may include a best-effort `claude -r <id>` resume hint
