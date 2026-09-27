@@ -33,3 +33,6 @@
 
 * Learnings
 # Append only via: tyrion epic-context append --story <slug> "<what you learned> (file:line)"
+** 2026-09-27 The first main-root wiki read without the assigned lane resolved an unrelated active epic; set TYRION_LANE and activate worker-session-launch sequentially before story-sliced reads in a worktree. Epic resolution uses the caller lane token (lib/tyrion/commands.rb:4839). :launch_herdr_worker_from_any_caller:
+** 2026-09-27 On this macOS checkout, stream_weaver's path gemspec runs git ls-files and hangs with core.fsmonitor=true; C.UTF-8 also leaves Ruby US-ASCII. Process-only core.fsmonitor=false plus LANG/LC_ALL/LC_CTYPE=en_US.UTF-8 and unset test lane/thread vars gave pinned a9a56ca baseline 1685/0 and patched Tyrion 1694/0. No repo config or source change was needed (/Users/fkchang/work/tyrion/.worktrees/rstreamlit/stream_weaver/stream_weaver.gemspec:31-32). :launch_herdr_worker_from_any_caller:
+** 2026-09-27 Herdr agent wait returns status nested at result.agent.agent_status with a pane_id; require that pane_id to equal the new pane before calling startup observed. A working process is still not proof of task receipt. The launcher now parses this exact shape (external lib/worker_session_launcher.rb:277-280). :launch_herdr_worker_from_any_caller:
