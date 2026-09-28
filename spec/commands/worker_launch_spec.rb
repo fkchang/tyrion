@@ -7,6 +7,19 @@ RSpec.describe 'tyrion worker launch' do
   let(:store) { ctx.store }
   let(:worktree) { ctx.tmpdir }
   let(:task_file) { File.join(worktree, 'task.md') }
+  let(:handoff) { { text: 'Canonical scenario and task', sha256: 'payload-hash', scenario_revision: 'revision-hash', scenario_source: '/tmp/story.feature' } }
+  let(:handle) do
+    { worker_id: 'worker-1', attempt: 'attempt-1', lane: 'worker-1', provider: 'claude',
+      runtime: { kind: 'herdr', scope: 'default', identity: 'socket-birth' },
+      terminal: { tab_id: 'w1:t1', pane_id: 'w1:p1', terminal_id: 'term-1' },
+      process: { pid: 123, birth: 'Sun Sep 27 10:00:00 2026', observed_at: '2026-09-27T10:00:01Z' },
+      native_conversation: { value: nil, source: nil, freshness: 'unknown', observed_at: '2026-09-27T10:00:01Z' },
+      actions: { focus: true, follow_up: false, complete_story: false } }
+  end
+  let(:started_result) do
+    { success: true, status: 'started', attempt: 'attempt-1', lane: 'worker-1', via: 'herdr',
+      runtime_scope: 'default', tab_id: 'w1:t1', pane_id: 'w1:p1', handle: handle }
+  end
   let(:argv) do
     ['launch', 'build-it', '--worktree', worktree, '--task-file', task_file,
      '--name', 'build it', '--lane', 'worker-1', '--attempt', 'attempt-1']
@@ -17,13 +30,14 @@ RSpec.describe 'tyrion worker launch' do
     store.start_story(story['id'], claimed_by: 'dispatched:worker-1')
     File.write(task_file, 'Implement the approved story')
     allow(Tyrion::Repo).to receive(:worktrees).and_return([{ path: worktree }])
+    allow(Tyrion::WorkerSession).to receive(:handoff).and_return(handoff)
   end
 
   it 'delegates to the one shared launcher with exact story worktree and lane' do
-    response = ['{"success":true,"status":"started","attempt":"attempt-1","lane":"worker-1","via":"herdr","runtime_scope":"default","tab_id":"w1:t1"}', '',
+    response = [started_result.to_json, '',
                 instance_double(Process::Status, exitstatus: 0, success?: true)]
     expect(Tyrion::WorkerSession).to receive(:run).with(
-      '--dir', File.realpath(worktree), '--task-file', File.realpath(task_file), '--name', 'build it',
+      '--dir', File.realpath(worktree), '--task', handoff[:text], '--name', 'build it',
       '--provider', 'claude', '--runtime', 'herdr', '--lane', 'worker-1', '--attempt', 'attempt-1', '--json'
     ).and_return(response)
 
@@ -54,10 +68,11 @@ RSpec.describe 'tyrion worker launch' do
 
   it 'forwards a named Herdr session for isolated launches' do
     expect(Tyrion::WorkerSession).to receive(:run).with(
-      '--dir', File.realpath(worktree), '--task-file', File.realpath(task_file), '--name', 'build it',
+      '--dir', File.realpath(worktree), '--task', handoff[:text], '--name', 'build it',
       '--provider', 'claude', '--runtime', 'herdr', '--lane', 'worker-1', '--attempt', 'attempt-1',
       '--json', '--herdr-session', 'worker-launch-uat'
-    ).and_return(['{"success":true,"status":"started","attempt":"attempt-1","lane":"worker-1","via":"herdr","runtime_scope":"worker-launch-uat"}', '',
+    ).and_return([started_result.merge(runtime_scope: 'worker-launch-uat',
+                                       handle: handle.merge(runtime: handle[:runtime].merge(scope: 'worker-launch-uat'))).to_json, '',
                   instance_double(Process::Status, exitstatus: 0, success?: true)])
     expect { Tyrion::Commands.cmd_worker(argv.dup + ['--herdr-session', 'worker-launch-uat'], store) }
       .to output(/"status":"started"/).to_stdout
@@ -71,6 +86,23 @@ RSpec.describe 'tyrion worker launch' do
       .to raise_error(SystemExit).and output(/invalid structured result/).to_stderr
   end
 
+  it 'rejects a native reference that lacks exact UUID, argv provenance, or process birth' do
+    base = JSON.parse(started_result.to_json)
+    uuid = 'e10456d2-20db-4aa7-b68c-64340252f995'
+    native = { 'value' => uuid, 'kind' => 'id', 'source' => 'launcher_cli_arg+process_argv',
+               'freshness' => 'current', 'observed_at' => '2026-09-27T10:00:01Z',
+               'process_birth' => base.dig('handle', 'process', 'birth') }
+    base['handle']['native_conversation'] = native
+    expect(Tyrion::WorkerSession.valid_handle?(base, lane: 'worker-1', scope: 'default', attempt: 'attempt-1')).to be true
+
+    [{ 'value' => 'neighbor' }, { 'kind' => 'path' }, { 'source' => 'herdr-candidate' },
+     { 'process_birth' => 'another-process' }].each do |change|
+      wrong = Marshal.load(Marshal.dump(base))
+      wrong['handle']['native_conversation'].merge!(change)
+      expect(Tyrion::WorkerSession.valid_handle?(wrong, lane: 'worker-1', scope: 'default', attempt: 'attempt-1')).to be false
+    end
+  end
+
   it 'rejects an unknown status paired with a success exit code' do
     allow(Tyrion::WorkerSession).to receive(:run).and_return(
       ['{"success":false,"status":"unknown"}', '',
@@ -82,7 +114,7 @@ RSpec.describe 'tyrion worker launch' do
 
   it 'accepts a scoped dry-run result without creating a worker' do
     expect(Tyrion::WorkerSession).to receive(:run).with(
-      '--dir', File.realpath(worktree), '--task-file', File.realpath(task_file), '--name', 'build it',
+      '--dir', File.realpath(worktree), '--task', handoff[:text], '--name', 'build it',
       '--provider', 'claude', '--runtime', 'herdr', '--lane', 'worker-1', '--attempt', 'attempt-1',
       '--json', '--dry-run'
     ).and_return(['{"success":true,"status":"dry_run","attempt":"attempt-1","lane":"worker-1","via":"herdr","runtime_scope":"default"}', '',

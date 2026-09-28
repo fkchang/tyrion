@@ -1548,7 +1548,9 @@ module Tyrion
       end
       die "#{worktree} is not a registered git worktree for this project" unless registered
 
-      argv = ['--dir', real_worktree, '--task-file', File.realpath(task_file), '--name', name,
+      task = File.read(File.realpath(task_file), encoding: 'UTF-8')
+      handoff = WorkerSession.handoff(store: store, epic: epic, story: story, worktree: real_worktree, task: task)
+      argv = ['--dir', real_worktree, '--task', handoff[:text], '--name', name,
               '--provider', 'claude', '--runtime', 'herdr', '--lane', lane, '--attempt', attempt, '--json']
       argv += ['--model', model] if model
       argv += ['--mode', mode] if mode
@@ -1579,7 +1581,15 @@ module Tyrion
         end
       end
 
-      puts stdout
+      if result['status'] == 'started' &&
+         !WorkerSession.valid_handle?(result, lane: lane, scope: herdr_session || 'default', attempt: attempt)
+        die 'worker-session returned a started result without a verified matching handle'
+      end
+
+      result['handoff'] = { 'sha256' => handoff[:sha256], 'scenario_revision' => handoff[:scenario_revision],
+                            'scenario_source' => handoff[:scenario_source] }
+
+      puts JSON.generate(result)
       exit(process_status.exitstatus) unless process_status.success?
     rescue Errno::ENOENT => e
       die "worktree or task file disappeared during launch: #{e.message}"

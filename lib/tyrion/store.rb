@@ -843,6 +843,17 @@ module Tyrion
       end
     end
 
+    # Handoff constraints cannot be selected from a newest-N feed: later test
+    # and progress notes must never evict an earlier approved plan or decision.
+    def constraint_notes_for_story(story_id)
+      with_db do |db|
+        db.execute(
+          "SELECT * FROM story_notes WHERE story_id = ? AND kind IN ('plan','decision') ORDER BY created_at ASC, rowid ASC",
+          [story_id]
+        )
+      end
+    end
+
     # Gate/commit notes for a story, oldest first — the traceability trail rendered
     # by the Gates: section in tyrion show / tyrion resume.
     def gate_notes_for_story(story_id)

@@ -258,6 +258,27 @@ launch returns JSON with `started`,
 the original tab and never creates another for that attempt. `started`
 confirms a working process; task receipt and story completion require
 separate evidence. Omit `--herdr-session` to use the default Herdr server.
+Tyrion verifies the imported feature's SHA-256 revision before launch and
+adds the complete selected scenario with its Feature/Rule Background and
+leading tags/comments, its recorded plan/decision constraints,
+and root `AGENTS.md`/`CLAUDE.md` guidance to the worker's actual first task.
+The result includes `handoff.sha256` and `handoff.scenario_revision`. If the
+feature changed after import, re-import before launching; Tyrion refuses to
+fabricate a revision. A `started` response must contain a matching verified
+handle with exact lane, named Herdr scope, tab/pane, process PID/birth, native
+reference provenance/freshness, and action flags. A native ID may be unknown;
+`follow_up` stays false until delivery is implemented and verified.
+
+For a claimed story in a registered worktree, this command saves the complete
+JSON result for inspection and can be rerun with the same attempt after an
+unknown startup result:
+
+```bash
+tyrion worker launch my-story --worktree "$WORKTREE" \
+  --task-file "$TASK_FILE" --name 'my worker' --lane "$WORKER_LANE" \
+  --attempt "$ATTEMPT_ID" --herdr-session "$HERDR_SESSION" > launch.json
+ruby -rjson -e 'j=JSON.parse(File.read("launch.json")); puts({status:j["status"], worker_id:j.dig("handle","worker_id"), scenario_revision:j.dig("handoff","scenario_revision"), handoff_sha256:j.dig("handoff","sha256")}.to_json)'
+```
 
 ---
 
