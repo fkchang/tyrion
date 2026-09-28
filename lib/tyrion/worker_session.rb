@@ -58,12 +58,8 @@ module Tyrion
       raise ArgumentError, 'Canonical scenario revision changed; import the feature first' \
         unless Digest::SHA256.hexdigest(feature) == revision
 
-      parsed = Importer.parse_feature(feature)
-      matching = parsed[:scenarios].select { |scenario| scenario[:slug] == story['slug'] }
-      raise ArgumentError, 'Canonical scenario is missing or ambiguous; import the feature first' unless matching.size == 1
-
       lines = feature.lines
-      headings = lines.each_index.select { |index| lines[index].strip.match?(/\AScenario(?: Outline)?:/) }
+      headings, rule_headings = structural_headings(lines)
       matching_index = headings.select do |index|
         title = lines[index].strip.sub(/\AScenario(?: Outline)?:\s*/, '')
         title.downcase.gsub(/[^a-z0-9]+/, '-').gsub(/^-|-$/, '') == story['slug']
@@ -71,26 +67,25 @@ module Tyrion
       raise ArgumentError, 'Canonical scenario is missing or ambiguous; import the feature first' unless matching_index.size == 1
 
       first = matching_index.first
-      rule_headings = lines.each_index.select { |index| lines[index].strip.start_with?('Rule:') }
+      blocks = (headings + rule_headings).sort
       preceding_rule = rule_headings.select { |index| index < first }.last
-      first_block = (headings + rule_headings).min || lines.length
-      feature_context = lines[0...first_block].join.rstrip
+      first_block = blocks.first || lines.length
+      feature_context = lines[0...leading_metadata_start(lines, first_block, -1)].join.rstrip
       rule_context = if preceding_rule
-        first_rule_scenario = headings.find { |index| index > preceding_rule }
-        lines[preceding_rule...first_rule_scenario].join.rstrip
+        prior_block = blocks.select { |index| index < preceding_rule }.last || -1
+        next_rule = rule_headings.find { |index| index > preceding_rule } || lines.length
+        first_rule_scenario = headings.find { |index| index > preceding_rule && index < next_rule }
+        rule_start = leading_metadata_start(lines, preceding_rule, prior_block)
+        rule_end = leading_metadata_start(lines, first_rule_scenario, preceding_rule)
+        lines[rule_start...rule_end].join.rstrip
       end
-      previous_scenario = headings.select { |index| index < first }.last
-      metadata_floor = [previous_scenario, preceding_rule, first_block - 1].compact.max
-      metadata_start = first
-      while metadata_start > metadata_floor + 1 &&
-            (lines[metadata_start - 1].strip.empty? || lines[metadata_start - 1].strip.start_with?('#', '@'))
-        metadata_start -= 1
-      end
-      following = (headings + rule_headings).select { |index| index > first }.min || lines.length
+      prior_block = blocks.select { |index| index < first }.last || -1
+      metadata_start = leading_metadata_start(lines, first, prior_block)
+      following = blocks.find { |index| index > first } || lines.length
       scenario_lines = lines[first...following]
       scenario_lines.pop while scenario_lines.any? &&
-                               (scenario_lines.last.strip.empty? || scenario_lines.last.strip.start_with?('#'))
-      leading_metadata = first == first_block ? '' : lines[metadata_start...first].join.rstrip
+                               (scenario_lines.last.strip.empty? || scenario_lines.last.strip.start_with?('#', '@'))
+      leading_metadata = lines[metadata_start...first].join.rstrip
       scenario_text = [feature_context, rule_context, leading_metadata, scenario_lines.join.rstrip]
                       .compact.reject(&:empty?).join("\n\n")
       notes = store.constraint_notes_for_story(story['id'])
@@ -116,6 +111,42 @@ module Tyrion
       { text: body, sha256: Digest::SHA256.hexdigest(body), scenario_revision: revision,
         scenario_source: feature_path }
     end
+
+    def self.leading_metadata_start(lines, heading, floor)
+      index = heading
+      while index > floor + 1 &&
+            (lines[index - 1].strip.empty? || lines[index - 1].strip.start_with?('#', '@'))
+        index -= 1
+      end
+      index
+    end
+    private_class_method :leading_metadata_start
+
+    # Derive every handoff boundary from the same source scan. A Doc String's
+    # contents are task data, even when a line looks like a Scenario or Rule.
+    def self.structural_headings(lines)
+      scenarios = []
+      rules = []
+      fence = nil
+      lines.each_with_index do |line, index|
+        stripped = line.strip
+        if fence
+          fence = nil if stripped == fence
+          next
+        end
+
+        delimiter = ['"""', 96.chr * 3].find { |candidate| stripped.start_with?(candidate) }
+        if delimiter
+          fence = delimiter
+          next
+        end
+
+        scenarios << index if stripped.match?(/\AScenario(?: Outline)?:/)
+        rules << index if stripped.start_with?('Rule:')
+      end
+      [scenarios, rules]
+    end
+    private_class_method :structural_headings
 
     def self.run(*argv)
       binary = ENV['TYRION_WORKER_SESSION_BIN'] || 'worker-session'
